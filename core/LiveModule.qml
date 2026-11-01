@@ -31,6 +31,9 @@ NotchModule {
   property string appName: ""
   // The mark: an image, or the agent's initial in a tile without one.
   property url logoSource: ""
+  // The voice runs on this machine (core/live/local-live.py) and joins the
+  // agent's text session, instead of Codex's realtime voice.
+  property bool localVoice: false
 
   // ----------------------------------------------------------------- state
   // The conversation (Live.initialState): its status, transcript, voice.
@@ -65,10 +68,16 @@ NotchModule {
     if (m.bridge || !m.notch) return
     m.conv = Live.starting(m.conv)
     m.bridge = bridgeProcess.createObject(m, {
-      command: Live.bridgeArgs(m.notch.liveBridge, {
-        codex: m.setting("command"), cwd: m.setting("directory"),
-        voice: m.setting("voice"), access: m.setting("access")
-      }, Quickshell.env("HOME")),
+      command: m.localVoice
+        ? Live.localBridgeArgs(m.notch.localLiveBridge, {
+            agent: m.setting("agent"), command: m.setting("command"), session: m.setting("session"),
+            cwd: m.setting("directory"), access: m.setting("access"), lang: m.setting("language"),
+            whisperModel: m.setting("whisperModel"), voice: m.setting("voice")
+          }, Quickshell.env("HOME"))
+        : Live.bridgeArgs(m.notch.liveBridge, {
+            codex: m.setting("command"), cwd: m.setting("directory"),
+            voice: m.setting("voice"), access: m.setting("access")
+          }, Quickshell.env("HOME")),
       running: true
     })
   }

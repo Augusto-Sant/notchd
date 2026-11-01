@@ -128,7 +128,8 @@ ShellRoot {
       { name: "live: a click opens the notch and starts talking, a hover doesn't; closing ends it", run: root.liveTalks },
       { name: "live: stop holds until the notch closes; mute goes to the bridge; IPC words and errors", run: root.liveStopAndCommands },
       { name: "live: without its packages it says what to install, and the config stays as it was", run: root.liveMissingPackages },
-      { name: "live: a new session ends the one running, clears the transcript and starts another", run: root.liveNewSession }
+      { name: "live: a new session ends the one running, clears the transcript and starts another", run: root.liveNewSession },
+      { name: "live: the local voice starts its own bridge with its settings", run: root.localLiveArgs }
     ]
     Qt.callLater(root.next)
   }
@@ -1818,6 +1819,52 @@ ShellRoot {
     printErrors: false
   }
   function liveCopy() { return liveSvc.notches[0].copies[0] }
+
+  // The local voice (modules/local-live.qml): its own bridge and arguments.
+  NotchService {
+    id: localLiveSvc
+    ipcTarget: "notchd-qmltest-local-live"
+    configPath: root.dir + "/local-live.json"
+    compositor: workspace4
+    defaultModules: ["local-live"]
+  }
+  FloatingWindow {
+    implicitWidth: 700
+    implicitHeight: 600
+    NotchCard { notch: localLiveSvc.notches.length > 0 ? localLiveSvc.notches[0].copies[0] : null }
+  }
+  FileView {
+    id: localLiveArgsFile
+    path: Quickshell.env("NOTCHD_FAKE_LOCAL_LIVE_ARGS")
+    blockLoading: true
+    printErrors: false
+  }
+  function localLiveArgs() {
+    var m = localLiveSvc.moduleById("local-live")
+    localLiveSvc.replaceConfig({ "local-live": { agent: "claude", session: "new", directory: "~/talk", language: "en",
+                                                 voice: "~/v.onnx" } })
+    localLiveSvc.open()
+    root.steps([
+      [800, function() {
+        root.check(!!m.bridge && m.live, "no conversation: " + JSON.stringify(m.conv))
+        root.check(m.appName === "Claude", "app name: " + m.appName)
+        localLiveArgsFile.reload()
+        var args = localLiveArgsFile.text().split("\n")
+        var home = Quickshell.env("HOME")
+        root.check(args[args.indexOf("--agent") + 1] === "claude", "the agent: " + args)
+        root.check(args[args.indexOf("--session") + 1] === "new", "the session: " + args)
+        root.check(args[args.indexOf("--cwd") + 1] === home + "/talk", "the folder: " + args)
+        root.check(args[args.indexOf("--lang") + 1] === "en", "the language: " + args)
+        root.check(args[args.indexOf("--voice") + 1] === home + "/v.onnx", "the voice: " + args)
+        root.check(args.indexOf("--codex") === -1, "a codex-live argument: " + args)
+        localLiveSvc.close()
+      }],
+      [2000, function() { root.check(m.bridge === null, "closed, it went on") }]
+    ], function() {
+      localLiveSvc.replaceConfig({})
+      root.done()
+    })
+  }
 
   function liveTalks() {
     var m = liveSvc.moduleById("codex-live")

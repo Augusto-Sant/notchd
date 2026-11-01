@@ -119,7 +119,7 @@ function parseModuleInfo(text) {
   }
   var live = data.live
   if (live !== undefined) {
-    if (live && typeof live === "object" && !Array.isArray(live) && typeof live.command === "string" && live.command.trim() !== "") {
+    if (live && typeof live === "object" && !Array.isArray(live) && (live.local === true || typeof live.command === "string" && live.command.trim() !== "")) {
       info.live = true
       inherited = liveSettings(live, info.title)
     } else {
@@ -161,10 +161,12 @@ var LIVE_VOICES = ["juniper", "maple", "spruce", "ember", "vale", "breeze", "arb
 
 // The fields of a spoken conversation (LiveModule), from its file's
 // `live`: the agent's command (`live.command` its default), its folder,
-// the voice and what it may do there. `title` names it.
+// the voice and what it may do there. `title` names it. With `live.local`
+// it is the local one (localLiveSettings).
 function liveSettings(live, title) {
   var name = title || "the agent"
   var next = "Applies to the next conversation."
+  if (live.local === true) return localLiveSettings(name, next)
   return [
     { key: "command", type: "string", label: "Command", "default": live.command.trim(),
       help: "The command that runs Codex; notchd starts its server (app-server) with it. " + next },
@@ -178,6 +180,31 @@ function liveSettings(live, title) {
     { key: "access", type: "choice", label: "May", "default": "read-only",
       options: [{ value: "read-only", label: "Only read" }, { value: "workspace-write", label: "Change files in its folder" }],
       help: "What " + name + " may do in its folder when you ask it to. It never asks for approval (no one would answer): what it may not do, it doesn't. " + next }
+  ]
+}
+
+// The fields of a local spoken conversation (modules/local-live.json): which
+// agent's session it joins, speech recognition and the voice on this machine.
+function localLiveSettings(name, next) {
+  return [
+    { key: "agent", type: "choice", label: "Agent", "default": "codex",
+      options: [{ value: "codex", label: "Codex" }, { value: "claude", label: "Claude Code" }],
+      help: "Whose text session your words go into, the one you also type in. " + next },
+    { key: "command", type: "string", label: "Command", "default": "",
+      help: "The command line that runs the agent; empty is codex or claude. " + next },
+    { key: "session", type: "string", label: "Session", "default": "last",
+      help: "last: the agent's most recent session in the folder. new: one of its own. Or a session id. " + next },
+    { key: "directory", type: "string", label: "Folder", "default": "",
+      help: "Where the agent works, and whose sessions \"last\" looks in; ~ is your home. Empty is notchd's own folder, notchd in your Documents folder. " + next },
+    { key: "access", type: "choice", label: "May", "default": "read-only",
+      options: [{ value: "read-only", label: "Only read" }, { value: "workspace-write", label: "Change files in its folder" }],
+      help: "What the agent may do in its folder when you ask it to (Claude: plan mode, or accept edits). It never asks for approval (no one would answer). " + next },
+    { key: "language", type: "string", label: "Language", "default": "pt",
+      help: "The language you speak, for speech recognition: a whisper code such as pt, en or es. " + next },
+    { key: "whisperModel", type: "string", label: "Speech model", "default": "",
+      help: "A whisper.cpp model file (ggml-*.bin); empty is ggml-small.bin in ~/.local/share/notchd/models (make live-models). " + next },
+    { key: "voice", type: "string", label: "Voice", "default": "",
+      help: "A Piper voice file (*.onnx, with its .onnx.json next to it); empty is pt_BR-faber-medium.onnx in ~/.local/share/notchd/models (make live-models). " + next }
   ]
 }
 

@@ -233,6 +233,17 @@ test('a live module\'s file brings the conversation\'s fields', () => {
   assert.deepEqual(plain(Settings.catalogPart([{ moduleId: 'codex-live', live: true }, { moduleId: 'media' }], 'agent').map((m) => m.moduleId)), ['codex-live']);
 });
 
+test('a local live module needs no command: its fields are the agent\'s, the models\'', () => {
+  const info = plain(Settings.parseModuleInfo(JSON.stringify({ title: 'Voice', live: { local: true } })));
+  assert.equal(info.live, true);
+  assert.equal(info.error, undefined);
+  assert.deepEqual(info.settings.map((f) => f.key), ['agent', 'command', 'session', 'directory', 'access', 'language', 'whisperModel', 'voice']);
+  assert.equal(Settings.settingDefault(info.settings, 'agent'), 'codex');
+  assert.equal(Settings.settingDefault(info.settings, 'session'), 'last');
+  assert.equal(Settings.settingDefault(info.settings, 'language'), 'pt');
+  assert.equal(Settings.settingDefault(info.settings, 'command'), '');
+});
+
 test('a live module without a command is an error', () => {
   for (const live of [{}, { command: ' ' }, true, []]) {
     const info = plain(Settings.parseModuleInfo(JSON.stringify({ title: 'X', live })));

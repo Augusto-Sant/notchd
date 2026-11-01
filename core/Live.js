@@ -26,6 +26,33 @@ function bridgeArgs(bridge, opts, home) {
   return run
 }
 
+// The same for the local bridge (core/live/local-live.py: whisper.cpp, an
+// agent's text session, Piper). `opts`: { agent, command, session, cwd,
+// access, whisperModel, voice, lang }; what is empty is the bridge's own
+// default (the models in notchd's data folder, the language pt, the
+// agent's most recent session in its folder); "~" is your `home`.
+function localBridgeArgs(bridge, opts, home) {
+  var b = String(bridge || "")
+  var run = /\.py$/.test(b) ? ["python3", b] : [b]
+  opts = opts || {}
+  function path(v) {
+    var p = String(v || "").trim()
+    if (p === "~" || p.indexOf("~/") === 0) p = String(home || "") + p.slice(1)
+    return p
+  }
+  run = run.concat(["--agent", opts.agent === "claude" ? "claude" : "codex"])
+  var command = String(opts.command || "").trim()
+  if (command !== "") run = run.concat(["--command", command])
+  run = run.concat(["--session", String(opts.session || "").trim() || "last"])
+  if (path(opts.cwd) !== "") run = run.concat(["--cwd", path(opts.cwd)])
+  run = run.concat(["--access", opts.access === "workspace-write" ? "workspace-write" : "read-only"])
+  if (path(opts.whisperModel) !== "") run = run.concat(["--whisper-model", path(opts.whisperModel)])
+  if (path(opts.voice) !== "") run = run.concat(["--voice", path(opts.voice)])
+  var lang = String(opts.lang || "").trim()
+  if (lang !== "") run = run.concat(["--lang", lang])
+  return run
+}
+
 // A line of the bridge -> its event, or null for anything else.
 function parseLine(line) {
   var e
@@ -124,7 +151,8 @@ function statusText(state) {
 // What went wrong, with what to install when that's why.
 function errorText(state) {
   if (!state || !state.error) return ""
-  if (state.packages && state.packages.length > 0)
+  // The local bridge's says what to install and how, itself.
+  if (state.packages && state.packages.length > 0 && state.error.indexOf("(make ") === -1)
     return state.error + " Install " + state.packages.join(", ") + " (make live-deps)."
   return state.error
 }

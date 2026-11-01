@@ -14,6 +14,7 @@ Working on notchd itself. For using it, see the [README](README.md); for the rul
 | `rsvg-convert` | `librsvg` | `make icons` |
 | Omarchy 4 | | the Omarchy host, `make validate`, `make restart` |
 | `qmltermwidget` (optional) | `qmltermwidget` | the `claude` and `codex` modules' terminal (`make deps`); without it their QML tests only check the message that asks for it |
+| libpulse, whisper.cpp, Piper (optional) | `libpulse`, `whisper-cpp`, `piper-tts` (PyPI, by `uv tool` or `pipx`) | the local voice (`make local-live-deps`, models: `make live-models`). `tests/local_live_test.py` runs the bridge with fakes on PATH, so none are needed for `make check` |
 | GStreamer's WebRTC, python-gobject, libpulse (optional) | `gst-plugins-bad`, `gst-plugins-good`, `libnice`, `python-gobject`, `libpulse` | Codex Live (`make live-deps`). The QML tests use a fake bridge; `tests/codex_live_test.py` checks the echo canceller's branch where they are |
 
 ## Layout
@@ -103,8 +104,8 @@ Run `make check` before every commit. It is everything below:
 
 | Target | What it does |
 |---|---|
-| `make test` | Node tests of `core/*.js` and `core/settings/*.js`; `tests/codex_live_test.py`, the live bridge without Codex |
-| `make lint` | `qmllint` over `shell.qml` and the core; fails on any warning. Also checks that `codex-live.py` parses |
+| `make test` | Node tests of `core/*.js` and `core/settings/*.js`; `tests/codex_live_test.py`, the live bridge without Codex; `tests/local_live_test.py`, the local voice with fake whisper-cli, piper, pacat, codex and claude |
+| `make lint` | `qmllint` over `shell.qml` and the core; fails on any warning. Also checks that `codex-live.py` and `local-live.py` parse |
 | `make validate` | `omarchy plugin validate .` |
 | `make visual` | renders the settings window and the notch on each edge (the real modules, the media one playing the demo player's track) offscreen into `build/visual/`; fails on any QML warning, so it also proves the core loads |
 
@@ -143,6 +144,10 @@ Objects and arrays built inside the vm have their own prototypes; compare them t
 ### README image
 
 `make hero` renders `docs/images/hero.webp` from `tests/visual/hero.qml`: the real `NotchCard` in four states, each with its own `NotchService` and demo data, offscreen. It runs on a private D-Bus where the only media player is `tests/visual/demo-player.py`, so whatever you are playing never ends up in the image, and with `tests/visual/bin` first on PATH, so the agents are demo scripts that print a finished conversation, never your own `claude` or `codex`, and their usage is set by hand (offscreen nothing asks the network). The tiles use Omarchy's Gruvbox colors and its "The Backwater" wallpaper (`WALLPAPER=<image> make hero` for another; a gradient without one). The wallpaper stays out of the repo; only the rendered image is committed. Rerun it after a visual change to the notch and commit the result.
+
+### Local voice
+
+`core/live/local-live.py` speaks the same stdout protocol as `codex-live.py`, so `LiveModule` runs it unchanged (`localVoice: true` in `modules/local-live.qml` picks the bridge and `Live.localBridgeArgs`). The QML tests use `tests/qml/fixtures/bin/local-live` (`NOTCHD_LOCAL_LIVE_BRIDGE`); `tests/local_live_test.py` tests the voice activity detector, sentence splitter, markdown stripper, the agents' command lines and streams as functions, and runs the whole bridge on fake `whisper-cli`, `piper`, `pacat`, `codex` and `claude` with `--mic <wav>` (`NOTCHD_LIVE_MIC_SPEED=10` plays it faster), including that stop, end of stdin and SIGTERM leave no child behind. By hand: `python3 core/live/local-live.py --agent codex --session new --cwd <scratch folder>` (never `last` in a folder with sessions you care about: it writes into them), speak, Ctrl+C; `NOTCHD_LIVE_DEBUG=1` copies the log. Bound every run with `timeout -k` and check `ps` for `parec`, `pacat`, `piper`, `whisper` after.
 
 ### Codex Live
 

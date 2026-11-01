@@ -21,6 +21,27 @@ test('bridgeArgs: an empty folder is left to the bridge; an unknown access is re
   assert.deepEqual(args.slice(-2), ['--access', 'read-only']);
 });
 
+test('localBridgeArgs: defaults are the bridge\'s own; options in order, ~ expanded', () => {
+  assert.deepEqual(plain(Live.localBridgeArgs('/c/live/local-live.py', {}, '/home/u')),
+    ['python3', '/c/live/local-live.py', '--agent', 'codex', '--session', 'last', '--access', 'read-only']);
+  assert.deepEqual(plain(Live.localBridgeArgs('/t/bin/local-live', {
+    agent: 'claude', command: ' claude --model x ', session: ' abc ', cwd: '~/code', access: 'workspace-write',
+    whisperModel: '~/m/ggml.bin', voice: '/v/pt.onnx', lang: ' en '
+  }, '/home/u')), ['/t/bin/local-live', '--agent', 'claude', '--command', 'claude --model x', '--session', 'abc',
+    '--cwd', '/home/u/code', '--access', 'workspace-write', '--whisper-model', '/home/u/m/ggml.bin',
+    '--voice', '/v/pt.onnx', '--lang', 'en']);
+});
+
+test('localBridgeArgs: an unknown agent is codex, an unknown access read-only', () => {
+  const args = plain(Live.localBridgeArgs('b', { agent: 'gpt', access: 'all', session: '  ' }, '/h'));
+  assert.deepEqual(args, ['b', '--agent', 'codex', '--session', 'last', '--access', 'read-only']);
+});
+
+test('errorText: the local bridge says how to install itself, once', () => {
+  const state = { error: 'Voice needs packages. Install whisper-cpp (make local-live-deps).', packages: ['whisper-cpp'] };
+  assert.equal(Live.errorText(state), state.error);
+});
+
 test('parseLine: an object, else null', () => {
   assert.deepEqual(plain(Live.parseLine('{"status": "live"}')), { status: 'live' });
   assert.equal(Live.parseLine('not json'), null);

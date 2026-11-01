@@ -128,7 +128,7 @@ It answers `ok`, `no notch shows <id>`, `the terminal needs the qmltermwidget pa
 
 ## Live
 
-A spoken conversation (`codex-live`, [modules.md](modules.md#live)), by its module's id. It talks while its notch is open by a click or a shortcut; these drive it from a key or a script:
+A spoken conversation (`codex-live` or `local-live`, [modules.md](modules.md#live)), by its module's id. It talks while its notch is open by a click or a shortcut; these drive it from a key or a script:
 
 ```sh
 bind = SUPER ALT, V, exec, omarchy-shell eryk.notchd live codex-live toggle

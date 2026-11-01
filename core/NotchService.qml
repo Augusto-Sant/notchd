@@ -62,7 +62,8 @@ Item {
     timer: Qt.resolvedUrl("modules/timer.qml"),
     claude: Qt.resolvedUrl("modules/claude.qml"),
     codex: Qt.resolvedUrl("modules/codex.qml"),
-    "codex-live": Qt.resolvedUrl("modules/codex-live.qml")
+    "codex-live": Qt.resolvedUrl("modules/codex-live.qml"),
+    "local-live": Qt.resolvedUrl("modules/local-live.qml")
   })
 
   function moduleUrl(id) {
@@ -170,6 +171,9 @@ Item {
   // fake in its place) and the `live` IPC.
   readonly property string liveBridge: Quickshell.env("NOTCHD_LIVE_BRIDGE")
     || Live.localPath(Qt.resolvedUrl("live/codex-live.py"), Quickshell.shellDir)
+  // The local one (core/live/local-live.py: whisper.cpp and Piper).
+  readonly property string localLiveBridge: Quickshell.env("NOTCHD_LOCAL_LIVE_BRIDGE")
+    || Live.localPath(Qt.resolvedUrl("live/local-live.py"), Quickshell.shellDir)
   function isLive(id) { return !!svc.moduleInfo[id] && !!svc.moduleInfo[id].live }
   // A live module's IPC command (LiveModule.command): "ok", or what was
   // wrong.

@@ -1,0 +1,12 @@
+#!/bin/sh
+# A fake core/live/local-live.py for the QML tests ($NOTCHD_LOCAL_LIVE_BRIDGE):
+# writes its arguments, one a line, to $NOTCHD_FAKE_LOCAL_LIVE_ARGS, says it is
+# live and waits for {"stop": true} or the end of stdin.
+[ -n "$NOTCHD_FAKE_LOCAL_LIVE_ARGS" ] && printf '%s\n' "$@" > "$NOTCHD_FAKE_LOCAL_LIVE_ARGS"
+echo '{"status": "starting"}'
+echo '{"status": "live"}'
+echo '{"transcript": {"role": "user", "text": "Oi.", "done": true}}'
+while read -r line; do
+  case "$line" in *'"stop"'*) break ;; esac
+done
+echo '{"status": "closed", "reason": "requested"}'
