@@ -142,6 +142,9 @@ class Shell:
     def move(self, x, y):
         self.call("PointerMove", (float(x), float(y)), "(dd)")
 
+    def button(self, pressed):
+        self.call("PointerButton", (pressed,), "(b)")
+
     def click(self):
         self.call("PointerClick")
 
@@ -281,10 +284,10 @@ class NotchOnGnome(ShellCase):
     def test_reserve_keeps_windows_below_the_compact_notch(self):
         s = self.shell.until(lambda x: x["struts"], 3, "a strut")
         c = main_copy(s)
-        self.assertGreaterEqual(s["workArea"][0]["y"], s["panel"] + c["card"]["h"])
+        self.assertGreaterEqual(s["workArea"][0]["y"], s["panel"] + c["card"]["depth"])
         # A notch that follows focus may hang on either monitor: the daemon
         # reserves on both, the second one has no panel.
-        self.assertGreaterEqual(s["workArea"][1]["y"], s["monitors"][1]["y"] + c["card"]["h"])
+        self.assertGreaterEqual(s["workArea"][1]["y"], s["monitors"][1]["y"] + c["card"]["depth"])
 
     def test_hover_opens_within_the_delay_and_leaving_closes(self):
         sh = self.shell
@@ -376,6 +379,92 @@ class NotchOnGnome(ShellCase):
         finally:
             sh.ipc("set", "position", "")
             sh.until(lambda x: main_copy(x)["monitor"] == 0, 3)
+
+class OtherEdges(ShellCase):
+    """A notch the daemon puts on another edge hangs from it: the card
+    against that edge, centered along it, and the strut on that side."""
+
+    def place(self, edge):
+        sh = self.shell
+        sh.ipc("set", "position", json.dumps({"edge": edge, "offset": 0.5}))
+        s = sh.until(lambda x: main_copy(x)["edge"] == edge and main_copy(x)["mode"] == "compact"
+                     and x["struts"] and main_copy(x)["card"]["depth"] > 0, 3, "the notch on the %s edge" % edge)
+        time.sleep(0.6)  # past the card's spring
+        return sh.snapshot()
+
+    def tearDown(self):
+        self.shell.ipc("set", "position", "")
+        self.shell.until(lambda x: main_copy(x)["edge"] == "top", 3)
+
+    def test_each_edge_holds_the_card_and_its_strut(self):
+        for edge in ("left", "bottom", "right"):
+            with self.subTest(edge=edge):
+                s = self.place(edge)
+                c, m, work = main_copy(s), s["monitors"][c_monitor(s)], s["workArea"][c_monitor(s)]
+                depth = c["card"]["depth"]
+                if edge == "left":
+                    self.assertEqual(c["x"], m["x"])
+                    self.assertGreater(c["h"], c["w"], "the card runs down the edge")
+                    self.assertGreaterEqual(work["x"], m["x"] + depth)
+                elif edge == "right":
+                    self.assertEqual(c["x"] + c["w"], m["x"] + m["w"])
+                    self.assertGreater(c["h"], c["w"])
+                    self.assertLessEqual(work["x"] + work["w"], m["x"] + m["w"] - depth)
+                else:
+                    self.assertEqual(c["y"] + c["h"], m["y"] + m["h"])
+                    self.assertAlmostEqual(c["x"] + c["w"] / 2, m["x"] + m["w"] / 2, delta=1)
+                    self.assertLessEqual(work["y"] + work["h"], m["y"] + m["h"] - depth)
+                if edge != "bottom":
+                    # Along a side edge, centered in what the panel leaves.
+                    top = m["y"] + (s["panel"] if c_monitor(s) == 0 else 0)
+                    self.assertAlmostEqual(c["y"] + c["h"] / 2, (top + m["y"] + m["h"]) / 2, delta=1)
+                self.shell.screenshot("edge-" + edge)
+
+
+def c_monitor(s):
+    return main_copy(s)["monitor"]
+
+
+class Drag(ShellCase):
+    def tearDown(self):
+        self.shell.button(False)
+        self.shell.ipc("set", "position", "")
+        self.shell.until(lambda x: main_copy(x)["edge"] == "top", 3)
+
+    def test_a_held_press_drags_the_notch_to_the_edge_it_is_dropped_on(self):
+        sh = self.shell
+        s = sh.snapshot()
+        m = s["monitors"][c_monitor(s)]
+        x, y = center(main_copy(s))
+        sh.move(x, y)
+        time.sleep(0.3)
+        sh.button(True)
+        time.sleep(0.5)  # past the hold
+        sh.until(lambda s: main_copy(s)["dragging"], 2, "the press to pick the notch up")
+        # Near the left edge, a quarter of the way down: the preview jumps
+        # there before the drop.
+        sh.move(m["x"] + 5, m["y"] + m["h"] * 0.25)
+        sh.until(lambda s: main_copy(s)["edge"] == "left", 2, "the preview on the left edge")
+        sh.button(False)
+        sh.until(lambda s: not main_copy(s)["dragging"], 2, "the release to drop it")
+        # Past the second the drop's preview is held at most: what shows now
+        # is the daemon's state.
+        time.sleep(1.3)
+        c = main_copy(sh.snapshot())
+        self.assertEqual(c["edge"], "left")
+        self.assertEqual(c["x"], m["x"])
+        self.assertLess(c["y"] + c["h"] / 2, m["y"] + m["h"] / 2, "dropped in the upper half")
+
+    def test_a_quick_click_does_not_drag(self):
+        sh = self.shell
+        x, y = center(main_copy(sh.snapshot()))
+        sh.move(x, y)
+        sh.until(lambda s: main_copy(s)["mode"] == "expanded", 2)
+        sh.click()
+        sh.until(lambda s: grabs(s) > 0, 2, "the click to pin it")
+        self.assertFalse(main_copy(sh.snapshot())["dragging"])
+        self.assertEqual(main_copy(sh.snapshot())["edge"], "top")
+
 
 class EnableDisable(ShellCase):
     def test_disable_takes_away_everything_enable_added(self):

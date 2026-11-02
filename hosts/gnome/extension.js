@@ -198,8 +198,9 @@ export default class NotchdExtension extends Extension {
     }
 
     // `state.reserve`: the space windows keep clear of a closed notch. A
-    // strut is an invisible chrome actor touching the monitor's edge, so it
-    // reaches from the top of the monitor down past the panel.
+    // strut is an invisible chrome actor along the whole of the monitor's
+    // edge (GNOME reads a strut's side from the edges it spans), so on the
+    // top it reaches from the top of the monitor down past the panel.
     _reserve(reserve) {
         // Not before the monitors have names: a daemon that is already
         // running sends its reserve at once, when this enable has not yet
@@ -213,14 +214,22 @@ export default class NotchdExtension extends Extension {
         this._lastReserve = text;
         this._clearStruts();
         for (const r of reserve) {
-            if (r.edge !== 'top' || !(r.depth > 0))
+            if (!(r.depth > 0))
                 continue;
             const index = this._screens.names?.indexOf(r.screen) ?? -1;
-            const monitor = Main.layoutManager.monitors[index];
-            if (!monitor)
+            const m = Main.layoutManager.monitors[index];
+            if (!m)
                 continue;
             const panel = index === Main.layoutManager.primaryIndex ? Main.panel.height : 0;
-            const strut = new St.Widget({name: 'notchd-strut', x: monitor.x, y: monitor.y, width: monitor.width, height: panel + r.depth, reactive: false, opacity: 0});
+            const box = {
+                top: {x: m.x, y: m.y, width: m.width, height: panel + r.depth},
+                bottom: {x: m.x, y: m.y + m.height - r.depth, width: m.width, height: r.depth},
+                left: {x: m.x, y: m.y, width: r.depth, height: m.height},
+                right: {x: m.x + m.width - r.depth, y: m.y, width: r.depth, height: m.height},
+            }[r.edge];
+            if (!box)
+                continue;
+            const strut = new St.Widget({name: 'notchd-strut', ...box, reactive: false, opacity: 0});
             Main.layoutManager.addTopChrome(strut, {affectsStruts: true});
             this._struts.push(strut);
         }

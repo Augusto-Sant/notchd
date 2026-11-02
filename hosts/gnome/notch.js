@@ -5,12 +5,14 @@
 // decides nothing.
 
 import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import * as Outline from './lib/Outline.js';
+import * as Position from './lib/Position.js';
 import * as Protocol from './lib/Protocol.js';
 import {render} from './view.js';
 
@@ -22,6 +24,10 @@ const ALONG_MS = 460;
 const DEPTH_MS = 380;
 const FADE_OUT_MS = 70;
 const FADE_IN_MS = 180;
+// Held this long, a press picks the card up (NotchCard.qml's holdToDrag);
+// moving farther than DRAG_SLOP first makes it a click.
+const HOLD_MS = 250;
+const DRAG_SLOP = 8;
 
 function outBack(t, overshoot = 1.1) {
     const u = t - 1;
@@ -59,6 +65,10 @@ const CARD = {
     expandedPadNear: 14, expandedPadFar: 18, expandedPadSide: 20, expandedRadius: 26,
     expandedWidth: 360, hitDepth: 8,
 };
+
+// What a side edge's compact view is for a module without a
+// `verticalCompact`: a dot (NotchCard.qml's dotView).
+const DOT = 'dot';
 
 // Traces SVG path data of the subset Outline.js emits (M, L, Q, Z) on a
 // Cairo context.
@@ -98,32 +108,48 @@ class NotchCopy extends St.Widget {
         this._shown = 'rest';
         this._wireScreen = '';
         this._monitorIndex = 0;
+        // The edge the card hangs from (the daemon's, or a drag's preview),
+        // and whether the content on screen was laid out for a side edge.
+        this._edge = 'top';
+        this._shownVertical = false;
+        this._shownVerticalPeek = false;
+        // While dragged: where the card would land ({edge, offset, monitor,
+        // screen}); after the drop, until the daemon's state has it.
+        this._drag = null;
         this._modal = null;
         this._viewKey = '';
-        this._cardW = 0;
-        this._cardH = 0;
+        this._cardAlong = 0;
+        this._cardDepth = 0;
         this._lastMeasure = '';
 
         this._bg = new St.DrawingArea({x: 0, y: 0});
         this._bg.connect('repaint', area => this._paint(area));
         this.add_child(this._bg);
         this._content = new St.Bin({x: 0, y: 0, opacity: 0});
-        // Centered along the card as it springs, as the QML content is.
-        this._content.add_constraint(new Clutter.AlignConstraint({source: this, align_axis: Clutter.AlignAxis.X_AXIS, factor: 0.5}));
         this.add_child(this._content);
-        this.connect('notify::width', () => this._bg.set_size(this.width, this.height));
-        this.connect('notify::height', () => this._bg.set_size(this.width, this.height));
+        // The content stays against the edge and centered along it as the
+        // card springs, as the QML content does.
+        const resized = () => {
+            this._bg.set_size(this.width, this.height);
+            this._placeContent();
+        };
+        this.connect('notify::width', resized);
+        this.connect('notify::height', resized);
 
-        this.connect('notify::hover', () => this._send(Protocol.pointer(this.notchId, this._pointerScreen(this.hover ? 'enter' : 'leave'), this.hover ? 'enter' : 'leave')));
+        // Not while dragged: the card jumps under the pointer and away from
+        // it, and each enter and leave made the daemon send a new state.
+        this.connect('notify::hover', () => !this._dragging && this._send(Protocol.pointer(this.notchId, this._pointerScreen(this.hover ? 'enter' : 'leave'), this.hover ? 'enter' : 'leave')));
         this.connect('button-press-event', (actor, event) => {
             // A press on a button inside is the button's: from GNOME 49 an
             // St.Button lets it bubble here, and pinning would take a grab
             // that cancels the button's click.
             if (this._onButton(event))
                 return Clutter.EVENT_PROPAGATE;
-            this._send(Protocol.pointer(this.notchId, this._pointerScreen('press'), 'press'));
+            this._pressed(event);
             return Clutter.EVENT_STOP;
         });
+        this.connect('motion-event', (actor, event) => this._moved(event));
+        this.connect('button-release-event', (actor, event) => this._released(event));
         this.connect('key-press-event', (actor, event) => this._key(event));
 
         Main.layoutManager.addTopChrome(this, {trackFullscreen: true});
@@ -165,26 +191,11 @@ class NotchCopy extends St.Widget {
     // ({number, selected, mode, count, screens}), else null.
     update(notch, copy, highlight = null) {
         this._wireScreen = notch.screen ?? '';
-        this._monitorIndex = this._host.monitorFor(copy.screen);
         this._notch = notch;
         this._copy = copy;
-        const mode = copy.mode;
-        const parts = this._parts(copy);
-        const tabs = this._tabs(copy);
-        const key = JSON.stringify([mode, parts, tabs]);
-        if (key !== this._viewKey) {
-            this._viewKey = key;
-            // The same parts, tabs and theme as last time: the parts' actors
-            // are updated in place; otherwise drawn again.
-            const shape = JSON.stringify([mode, parts.map(([module, slot]) => [module, slot]), tabs, this.theme.generation]);
-            if (this._pending || shape !== this._shape || !this._updateParts(parts))
-                this._replace(mode, parts, tabs);
-            this._shape = shape;
-        }
-        this._mode = mode;
-        if (!this._pending)
-            this._layout(true);
-        this._keyboard(copy.keyboard ?? 'none', mode);
+        this._settleDrop(notch);
+        this._sync();
+        this._keyboard(copy.keyboard ?? 'none', copy.mode);
         const nav = highlight ? {...highlight, tabs: (copy.tabs?.length ?? 0) > 1} : null;
         const navKey = JSON.stringify([nav, this.theme.generation]);
         if (navKey !== this._navKey) {
@@ -193,6 +204,186 @@ class NotchCopy extends St.Widget {
             this._drawNavLabel();
             this._bg.queue_repaint();
         }
+    }
+
+    // The view and the place for the copy's state, or for a drag's preview.
+    _sync() {
+        const copy = this._copy;
+        if (!copy)
+            return;
+        this._monitorIndex = this._drag?.monitor ?? this._host.monitorFor(copy.screen);
+        this._edge = this._drag?.edge ?? this._notch?.edge ?? 'top';
+        const vertical = Position.isVertical(this._edge);
+        const mode = copy.mode;
+        const parts = this._parts(copy, vertical);
+        const tabs = this._tabs(copy);
+        const key = JSON.stringify([mode, vertical, parts, tabs]);
+        if (key !== this._viewKey) {
+            this._viewKey = key;
+            // The same parts, tabs and theme as last time: the parts' actors
+            // are updated in place; otherwise drawn again.
+            const shape = JSON.stringify([mode, vertical, parts.map(([module, slot]) => [module, slot]), tabs, this.theme.generation]);
+            if (this._pending || shape !== this._shape || !this._updateParts(parts))
+                this._replace(mode, parts, tabs, vertical);
+            this._shape = shape;
+        }
+        this._mode = mode;
+        // Dragged, the card follows the pointer at once (only its size
+        // springs in NotchCard.qml): a spring restarted at every motion
+        // lagged behind it.
+        if (!this._pending)
+            this._layout(!this._dragging);
+    }
+
+    // ------------------------------------------------------------------ drag
+    // As NotchCard.qml's pressArea: a click toggles the pin (sent on the
+    // release, as a click is); held for HOLD_MS without moving, a press of
+    // a draggable notch picks it up. Dragged, the card jumps to the edge
+    // nearest the pointer, its middle under it, on the monitor the pointer
+    // is on (Position.dragTarget, screenAt), and the release drops it
+    // there: the daemon stores the place. The motion is this copy's own.
+    _pressed(event) {
+        this._cancelHold();
+        const [x, y] = event.get_coords();
+        this._press = {x, y};
+        if (this._notch?.draggable) {
+            this._holdId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, HOLD_MS, () => {
+                this._holdId = 0;
+                this._startDrag();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+    }
+
+    _moved(event) {
+        const [x, y] = event.get_coords();
+        if (this._dragging) {
+            this._dragTo(x, y);
+            return Clutter.EVENT_STOP;
+        }
+        if (this._press && Math.hypot(x - this._press.x, y - this._press.y) > DRAG_SLOP)
+            this._cancelHold();
+        return Clutter.EVENT_PROPAGATE;
+    }
+
+    _released(event) {
+        this._cancelHold();
+        if (this._dragging) {
+            this._endDrag(true);
+            return Clutter.EVENT_STOP;
+        }
+        if (!this._press)
+            return Clutter.EVENT_PROPAGATE;
+        this._press = null;
+        if (event.get_button() === Clutter.BUTTON_PRIMARY)
+            this._send(Protocol.pointer(this.notchId, this._pointerScreen('press'), 'press'));
+        return Clutter.EVENT_STOP;
+    }
+
+    _cancelHold() {
+        if (this._holdId)
+            GLib.source_remove(this._holdId);
+        this._holdId = 0;
+    }
+
+    _startDrag() {
+        if (this._destroyed || !this._press)
+            return;
+        this._press = null;
+        this._dragging = true;
+        this._dropped = null;
+        // The pointer stays with the card while the button is down, over
+        // any monitor.
+        this._dragGrab = global.stage.grab(this);
+        this._send(Protocol.drag(this.notchId, this._wireScreen, 'start'));
+        const [x, y] = global.get_pointer();
+        this._dragTo(x, y);
+    }
+
+    // The monitors as Position.js's screens: name and rectangle.
+    _screenRects() {
+        const names = this._host.names();
+        return Main.layoutManager.monitors.map((m, i) => ({
+            name: names[i] ?? `monitor-${i}`, index: i, x: m.x, y: m.y, width: m.width, height: m.height,
+        }));
+    }
+
+    _dragTo(x, y) {
+        const screens = this._screenRects();
+        const name = Position.screenAt(screens, x, y);
+        const screen = screens.find(r => r.name === name);
+        if (!screen)
+            return;
+        const monitor = Main.layoutManager.monitors[screen.index];
+        const place = Position.dragTarget({
+            x: x - screen.x, y: y - screen.y, width: screen.width, height: screen.height,
+            insets: this._insets(monitor), magnet: this.theme.space(24),
+        });
+        const drag = {edge: place.edge, offset: place.offset, monitor: screen.index, screen: name};
+        const was = this._drag;
+        if (was && was.edge === drag.edge && was.offset === drag.offset && was.monitor === drag.monitor)
+            return;
+        this._drag = drag;
+        // Along the same edge of the same monitor only the place changes:
+        // moved there, with no new view (a view key per motion stringified
+        // every tree).
+        if (was && was.edge === drag.edge && was.monitor === drag.monitor && !this._pending)
+            this._layout(false);
+        else
+            this._sync();
+    }
+
+    // Dropped (`drop`) or let go of: the grab goes, and the daemon is told
+    // where it landed, or that it did not move. A notch on every screen
+    // takes only the edge and offset; with one screen there is no screen to
+    // pin it to.
+    _endDrag(drop) {
+        this._dragging = false;
+        this._dragGrab?.dismiss();
+        this._dragGrab = null;
+        // The hover it kept quiet about while dragged.
+        const ev = this.hover ? 'enter' : 'leave';
+        this._send(Protocol.pointer(this.notchId, this._pointerScreen(ev), ev));
+        const drag = this._drag;
+        if (!drop || !drag) {
+            this._drag = null;
+            this._send(Protocol.drag(this.notchId, this._wireScreen, 'cancel'));
+            this._sync();
+            return;
+        }
+        const screen = this._notch?.screen === Position.ALL_SCREENS ? Position.ALL_SCREENS
+            : Main.layoutManager.monitors.length > 1 ? drag.screen : '';
+        this._dropped = {edge: drag.edge, offset: drag.offset};
+        this._send(Protocol.drag(this.notchId, this._wireScreen, 'drop', {edge: drag.edge, offset: drag.offset, screen}));
+        // Held where it was dropped until the daemon's state has it there,
+        // so it does not spring back first; never longer than a second.
+        this._dropTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            this._dropTimeout = 0;
+            this._dropped = null;
+            this._drag = null;
+            this._sync();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // The daemon's state has the notch where it was dropped: the preview
+    // is no longer needed.
+    _settleDrop(notch) {
+        const d = this._dropped;
+        if (!d || notch.edge !== d.edge || Math.abs((notch.offset ?? 0.5) - d.offset) > 1e-6)
+            return;
+        this._dropped = null;
+        this._drag = null;
+        if (this._dropTimeout)
+            GLib.source_remove(this._dropTimeout);
+        this._dropTimeout = 0;
+    }
+
+    // What GNOME's top panel takes of a monitor: the notch hangs below it
+    // and runs beside it (Position.place's `insets`).
+    _insets(monitor) {
+        const panel = monitor && monitor.index === Main.layoutManager.primaryIndex ? Main.panel.height : 0;
+        return {top: panel, bottom: 0, left: 0, right: 0};
     }
 
     // ------------------------------------------------------------ navigation
@@ -235,7 +426,8 @@ class NotchCopy extends St.Widget {
     }
 
     // Right of the card past its shoulder, at its top, or left of it where
-    // the right has no room; kept on the monitor.
+    // the right has no room; on the right edge, left of it, the open side.
+    // Kept on the monitor.
     _placeNavLabel() {
         const label = this._navLabel;
         const t = this._target;
@@ -246,19 +438,20 @@ class NotchCopy extends St.Widget {
         const [, w] = label.get_preferred_width(-1);
         const [, h] = label.get_preferred_height(w);
         let x = t.x + t.w + gap;
-        if (x + w > monitor.x + monitor.width)
+        if (this._edge === 'right' || (this._edge !== 'left' && x + w > monitor.x + monitor.width))
             x = t.x - gap - w;
         x = Math.max(monitor.x, Math.min(x, monitor.x + monitor.width - w));
-        const y = Math.max(monitor.y, Math.min(t.y + gap, monitor.y + monitor.height - h));
+        const wishY = this._edge === 'top' ? t.y + gap : t.y;
+        const y = Math.max(monitor.y, Math.min(wishY, monitor.y + monitor.height - h));
         label.set_position(Math.round(x), Math.round(y));
         Main.layoutManager.uiGroup.set_child_above_sibling(label, null);
     }
 
     // New content: the old fades out, then the new is drawn, the card
     // springs to it and it fades in. Without animations, at once.
-    _replace(mode, parts, tabs) {
+    _replace(mode, parts, tabs, vertical) {
         const fading = !!this._pending;
-        this._pending = {mode, parts, tabs};
+        this._pending = {mode, parts, tabs, vertical};
         if (fading)
             return;
         if (animations() && this._content.child && this._content.opacity > 0) {
@@ -279,9 +472,11 @@ class NotchCopy extends St.Widget {
         // Destroyed, not only unparented: a primitive's timers end with its
         // actor.
         const old = this._content.child;
-        this._content.child = this._renderParts(pending.mode, pending.parts, pending.tabs);
+        this._content.child = this._renderParts(pending.mode, pending.parts, pending.tabs, pending.vertical);
         old?.destroy();
         this._shown = pending.mode;
+        this._shownVertical = pending.vertical;
+        this._shownVerticalPeek = pending.mode === 'peek' && pending.parts.some(([, slot]) => slot === 'verticalPeek');
         this._layout(true);
         const shown = this._shown !== 'rest' && !!this._content.child;
         if (fade && shown) {
@@ -293,9 +488,11 @@ class NotchCopy extends St.Widget {
     }
 
     // What this copy shows, as [module, slot, tree] parts: the compact views
-    // side by side, the peek's view, or the open notch's expanded views
-    // stacked (every module, or with tabs the picked one: `shown`).
-    _parts(copy) {
+    // side by side (down a side edge, each its `verticalCompact` or a dot),
+    // the peek's view (the daemon names `verticalPeek` on a side edge; a
+    // module without one shows its `peek`), or the open notch's expanded
+    // views stacked (every module, or with tabs the picked one: `shown`).
+    _parts(copy, vertical) {
         const views = this._host.store().views;
         const part = (module, slot) => {
             const tree = views[`${module}/${slot}`]?.tree ?? null;
@@ -304,10 +501,13 @@ class NotchCopy extends St.Widget {
         let parts = [];
         switch (copy.mode) {
         case 'compact':
-            parts = (copy.compact ?? []).map(m => part(m, 'compact'));
+            parts = (copy.compact ?? []).map(m => {
+                const flat = part(m, 'compact');
+                return flat && vertical ? part(m, 'verticalCompact') ?? [m, DOT, DOT] : flat;
+            });
             break;
         case 'peek':
-            parts = copy.peek ? [part(copy.peek.module, copy.peek.view)] : [];
+            parts = copy.peek ? [part(copy.peek.module, copy.peek.view) ?? part(copy.peek.module, 'peek')] : [];
             break;
         case 'expanded':
             parts = (copy.shown ?? []).map(m => part(m, 'expanded'));
@@ -366,16 +566,16 @@ class NotchCopy extends St.Widget {
 
     // Each part drawn with its own module and slot, so a button fires the
     // event of the module it belongs to; with tabs, below their row.
-    _renderParts(mode, parts, tabs = []) {
+    _renderParts(mode, parts, tabs = [], vertical = false) {
         this._partCtx = parts.map(([module, slot]) => ({
             theme: this.theme,
             onAction: (action, value) => this._send(Protocol.event(module, slot, action, value)),
         }));
-        this._partActors = parts.map(([, , tree], i) => render(tree, this._partCtx[i]));
+        this._partActors = parts.map(([, slot, tree], i) => (slot === DOT ? this._dot() : render(tree, this._partCtx[i])));
         this._partBox = null;
         this._partHolder = null;
         this._tabButtons = [];
-        const area = this._partsArea(mode, this._partActors.filter(a => a));
+        const area = this._partsArea(mode, this._partActors.filter(a => a), vertical);
         if (tabs.length === 0)
             return area;
         const column = new St.BoxLayout({style: 'spacing: 10px;'});
@@ -391,26 +591,41 @@ class NotchCopy extends St.Widget {
         return column;
     }
 
-    // The parts' actors side by side (closed) or stacked (open): one alone
-    // as it is, several in a box.
-    _partsArea(mode, actors) {
+    // The parts' actors side by side (closed) or stacked (open, or closed
+    // down a side edge): one alone as it is, several in a box.
+    _partsArea(mode, actors, sideEdge) {
         if (actors.length === 0)
             return null;
         if (actors.length === 1)
             return actors[0];
-        const vertical = mode === 'expanded';
-        const box = new St.BoxLayout({style: `spacing: ${vertical ? 14 : 12}px;`});
+        const stacked = mode === 'expanded' || (mode === 'compact' && sideEdge);
+        const box = new St.BoxLayout({style: `spacing: ${stacked ? 14 : 12}px;`});
         if ('orientation' in box)
-            box.orientation = vertical ? Clutter.Orientation.VERTICAL : Clutter.Orientation.HORIZONTAL;
+            box.orientation = stacked ? Clutter.Orientation.VERTICAL : Clutter.Orientation.HORIZONTAL;
         else
-            box.vertical = vertical;
+            box.vertical = stacked;
         for (const a of actors) {
-            if (!vertical)
+            if (!stacked)
                 a.y_align = Clutter.ActorAlign.CENTER;
+            else if (mode === 'compact')
+                a.x_align = Clutter.ActorAlign.CENTER;
             box.add_child(a);
         }
         this._partBox = box;
         return box;
+    }
+
+    // A side edge's compact view for a module without a `verticalCompact`:
+    // an accent dot (NotchCard.qml's dotView).
+    _dot() {
+        const s = v => this.theme.space(v);
+        const holder = new St.Widget({layout_manager: new Clutter.BinLayout(), width: s(6), height: s(24)});
+        holder.add_child(new St.Widget({
+            width: s(6), height: s(6),
+            style: `background-color: ${this.theme.css('accent')}; border-radius: ${s(3)}px;`,
+            x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER,
+        }));
+        return holder;
     }
 
     // New trees for the parts drawn last time: each actor updated in place
@@ -419,6 +634,8 @@ class NotchCopy extends St.Widget {
     _updateParts(parts) {
         for (let i = 0; i < parts.length; i++) {
             const prev = this._partActors[i];
+            if (parts[i][1] === DOT)
+                continue;
             const actor = render(parts[i][2], this._partCtx[i], 0, prev);
             if (actor === prev)
                 continue;
@@ -427,6 +644,7 @@ class NotchCopy extends St.Widget {
             this._partActors[i] = actor;
             const parent = this._partBox ?? this._partHolder;
             if (parent) {
+                actor.x_align = prev.x_align;
                 actor.y_align = prev.y_align;
                 parent.replace_child(prev, actor);
             } else {
@@ -457,44 +675,81 @@ class NotchCopy extends St.Widget {
         return {near: 0, far: 0, side: 0, radius: 0};
     }
 
+    // The card in two axes, as NotchCard.qml: `along` the edge and `depth`
+    // away from it. Rest, compact and a vertical peek run along the edge,
+    // so on a side edge their padding turns with it; other peeks and the
+    // open notch stay wide on every edge and keep their padding by screen
+    // axis. The shoulders flare out at both ends along the edge.
     _layout(animate) {
         const monitor = Main.layoutManager.monitors[this._monitorIndex] ?? Main.layoutManager.primaryMonitor;
         if (!monitor)
             return;
         const s = v => this.theme.space(v);
+        const edge = this._edge;
+        const vertical = Position.isVertical(edge);
         const shoulder = s(CARD.shoulder);
         const pads = this._pads();
-        let w, h;
+        const shown = this._shown;
+        const turned = !vertical || shown === 'rest' || shown === 'compact' || (shown === 'peek' && this._shownVerticalPeek);
+        const alongPad = turned ? pads.side : pads.far;
+        const nearPad = turned ? pads.near : pads.side;
+        const farPad = turned ? pads.far : pads.side;
+        let along, depth, cw = 0, ch = 0;
         const child = this._content.child;
-        if (this._shown === 'rest' || !child) {
-            w = s(CARD.restLength);
-            h = s(CARD.restDepth);
+        if (shown === 'rest' || !child) {
+            along = s(CARD.restLength);
+            depth = s(CARD.restDepth);
         } else {
             const [, natW] = child.get_preferred_width(-1);
-            const maxW = this._shown === 'expanded' ? s(this._expandedWidth()) : monitor.width / 2;
-            const innerW = this._shown === 'expanded' ? maxW : Math.min(natW, maxW);
-            const [, natH] = child.get_preferred_height(innerW);
-            w = innerW + 2 * pads.side;
-            h = natH + pads.near + pads.far;
-            child.set_size(innerW, natH);
+            const maxW = shown === 'expanded' ? s(this._expandedWidth()) : monitor.width / 2;
+            cw = shown === 'expanded' ? maxW : Math.min(natW, maxW);
+            [, ch] = child.get_preferred_height(cw);
+            ch = Math.min(ch, monitor.height - s(64));
+            child.set_size(cw, ch);
+            along = (vertical ? ch : cw) + 2 * alongPad;
+            depth = (vertical ? cw : ch) + nearPad + farPad;
         }
-        this._cardW = w;
-        this._cardH = h;
+        this._cardAlong = along;
+        this._cardDepth = depth;
         this._radius = pads.radius;
-        // Below the top panel on the monitor it is on (the panel's own
-        // strut keeps windows under it; the notch hangs from it).
-        const panel = monitor.index === Main.layoutManager.primaryIndex ? Main.panel.height : 0;
-        const offset = this._notch?.offset ?? 0.5;
-        const total = w + 2 * shoulder;
-        const x = Math.round(Math.min(Math.max(monitor.x + monitor.width * offset - total / 2, monitor.x), monitor.x + monitor.width - total));
-        const y = monitor.y + panel;
+        this._contentBox = {w: cw, h: ch, near: nearPad};
         // The rest lip is thin: its hit area reaches a little deeper.
-        const height = Math.max(h, this._shown === 'rest' ? s(CARD.hitDepth) : h);
-        this._content.y = pads.near;
-        this._moveTo({x, y, w: total, h: height}, animate);
+        const hit = shown === 'rest' ? Math.max(depth, s(CARD.hitDepth)) : depth;
+        const total = along + 2 * shoulder;
+        const w = vertical ? hit : total;
+        const h = vertical ? total : hit;
+        // Below the top panel on the monitor it is on (the panel's own
+        // strut keeps windows under it; the notch hangs from it), and down
+        // a side edge from there.
+        const spot = Position.place({
+            edge, offset: this._drag?.offset ?? this._notch?.offset ?? 0.5,
+            width: monitor.width, height: monitor.height, cardWidth: w, cardHeight: h,
+            insets: this._insets(monitor), snap: 0,
+        });
+        this._moveTo({x: Math.round(monitor.x + spot.x), y: Math.round(monitor.y + spot.y), w, h}, animate);
+        this._placeContent();
         this._bg.queue_repaint();
         this._placeNavLabel();
         this._measure();
+    }
+
+    // Against the edge past its near padding, centered along it, on whole
+    // pixels, at the card's current (springing) size.
+    _placeContent() {
+        const b = this._contentBox;
+        if (!b)
+            return;
+        const W = this.width, H = this.height;
+        let x = (W - b.w) / 2, y = (H - b.h) / 2;
+        if (this._edge === 'top')
+            y = b.near;
+        else if (this._edge === 'bottom')
+            y = H - b.near - b.h;
+        else if (this._edge === 'left')
+            x = b.near;
+        else
+            x = W - b.near - b.w;
+        this._content.set_position(Math.round(x), Math.round(y));
     }
 
     // The card to `to` ({x, y, w, h}): sprung as NotchCard.qml does, or at
@@ -533,7 +788,7 @@ class NotchCopy extends St.Widget {
     // What this copy measures of itself, for the daemon's reserve.
     _measure() {
         const s = v => this.theme.space(v);
-        const compact = this._shown === 'compact' ? this._cardH : 0;
+        const compact = this._shown === 'compact' ? this._cardDepth : 0;
         const baseline = s(18) + s(CARD.compactPadNear) + s(CARD.compactPadFar);
         const msg = Protocol.measure(this.notchId, this._wireScreen, s(CARD.restDepth), compact, baseline);
         const text = JSON.stringify(msg);
@@ -552,13 +807,30 @@ class NotchCopy extends St.Widget {
         const cr = area.get_context();
         const [aw, ah] = area.get_surface_size();
         const shoulder = this.theme.space(CARD.shoulder);
+        const vertical = Position.isVertical(this._edge);
         // The card grows with the actor while it eases: draw at the
         // actor's current size, not the target.
-        const w = Math.max(0, aw - 2 * shoulder);
-        const h = this._shown === 'rest' ? Math.min(ah, this._cardH) : ah;
+        const w = Math.max(0, (vertical ? ah : aw) - 2 * shoulder);
+        const depth = vertical ? aw : ah;
+        const h = this._shown === 'rest' ? Math.min(depth, this._cardDepth) : depth;
         const paths = Outline.path({w, h, shoulder, radius: this._radius ?? 0, start: {kind: 'shoulder'}, end: {kind: 'shoulder'}});
         const c = this.theme.colors;
-        cr.translate(shoulder, 0);
+        // Outline.js draws for the top edge (x along, y depth); turned onto
+        // the card's edge as NotchCard.qml's transform does: bottom (x, H -
+        // y), left (y, x), right (W - y, x), past the start's shoulder.
+        if (this._edge === 'bottom') {
+            cr.translate(shoulder, ah);
+            cr.scale(1, -1);
+        } else if (this._edge === 'left') {
+            cr.translate(0, shoulder);
+            cr.rotate(Math.PI / 2);
+            cr.scale(1, -1);
+        } else if (this._edge === 'right') {
+            cr.translate(aw, shoulder);
+            cr.rotate(Math.PI / 2);
+        } else {
+            cr.translate(shoulder, 0);
+        }
         trace(cr, paths.fill);
         cr.setSourceRGBA(c.background.r, c.background.g, c.background.b, 1);
         cr.fill();
@@ -607,8 +879,9 @@ class NotchCopy extends St.Widget {
             // The mode drawn, which the geometry below belongs to; `wanted`,
             // the daemon's, leads it by a fade.
             mode: this._shown, wanted: this._mode, screen: this._copy?.screen ?? '', monitor: this._monitorIndex,
+            edge: this._edge, dragging: !!this._dragging,
             ...(this._target ?? {x: this.x, y: this.y, w: this.width, h: this.height}),
-            card: {w: this._cardW, h: this._cardH}, modal: !!this._modal,
+            card: {along: this._cardAlong ?? 0, depth: this._cardDepth ?? 0}, modal: !!this._modal,
             hasContent: !!this._content.child, shown: this._copy?.shown ?? [],
             navLabel: this._navLabel ? this._navLabel.get_children().flatMap(c => (c instanceof St.Label ? [c.text] : c.get_children().map(l => l.text))) : null,
             // The view's progress bars and pictures (a test presses a bar
@@ -697,6 +970,12 @@ class NotchCopy extends St.Widget {
     }
 
     destroy() {
+        this._cancelHold();
+        if (this._dropTimeout)
+            GLib.source_remove(this._dropTimeout);
+        this._dropTimeout = 0;
+        this._dragGrab?.dismiss();
+        this._dragGrab = null;
         this._pending = null;
         this._motion?.timeline.stop();
         this._motion = null;

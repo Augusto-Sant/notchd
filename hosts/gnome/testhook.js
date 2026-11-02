@@ -17,6 +17,7 @@ const IFACE = `
     <method name="Snapshot"><arg type="s" direction="out" name="json"/></method>
     <method name="PointerMove"><arg type="d" direction="in" name="x"/><arg type="d" direction="in" name="y"/></method>
     <method name="PointerClick"/>
+    <method name="PointerButton"><arg type="b" direction="in" name="pressed"/></method>
     <method name="Key"><arg type="u" direction="in" name="keyval"/></method>
     <method name="RunAction"><arg type="s" direction="in" name="name"/></method>
     <method name="KeybindingAction"><arg type="u" direction="in" name="keycode"/><arg type="u" direction="in" name="mask"/><arg type="u" direction="out" name="action"/></method>
@@ -75,6 +76,12 @@ export class TestHook {
         const t = this._now();
         this._pointer.notify_button(t, Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
         this._pointer.notify_button(t + 1000, Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+    }
+
+    // The primary button down or up alone: a test holds it to drag.
+    PointerButton(pressed) {
+        this._pointer.notify_button(this._now(), Clutter.BUTTON_PRIMARY,
+            pressed ? Clutter.ButtonState.PRESSED : Clutter.ButtonState.RELEASED);
     }
 
     Key(keyval) {
