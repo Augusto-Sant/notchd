@@ -158,7 +158,7 @@ make gnome-dev-46             # GNOME 46 (Ubuntu 24.04) from a podman image, in 
 make gnome-test-46            # the headless tests on GNOME 46, in that image
 ```
 
-`make gnome-dev` prints the session's socket: `NOTCHD_SOCKET=<it> native/target/release/notchd ipc push '{...}'` drives its daemon. Extensions do not hot-reload: close the window and run it again. `scripts/gnome-build.sh` assembles the extension, copying the UI-side `core/` files into `lib/` as ES modules.
+`make gnome-dev` prints the session's socket: `NOTCHD_SOCKET=<it> native/target/release/notchd ipc push '{...}'` drives its daemon. The dev sessions force animations on and show a demo user module, `tests/gnome/modules/primitives`, with the primitives the built-in modules only draw with a player or a microphone (image, equalizer, meter, list); its logs stay in the session's scratch dir. Extensions do not hot-reload: close the window and run it again. `scripts/gnome-build.sh` assembles the extension, copying the UI-side `core/` files into `lib/` as ES modules.
 
 ## The gate
 

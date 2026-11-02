@@ -71,6 +71,11 @@ export class Theme {
         // (CSS lengths are), so design pixels go through space().
         this.scale = this._themeContext.scale_factor;
         this.fonts = {caption: 10, bodySmall: 11, body: 12, heading: 16, display: 24};
+        // core/Theme.qml's radii, in design pixels (CSS lengths).
+        this.radiusSmall = 6;
+        this.radius = 10;
+        // A new look: what was drawn with the last one is drawn again.
+        this.generation = (this.generation ?? 0) + 1;
         onChanged?.();
     }
 

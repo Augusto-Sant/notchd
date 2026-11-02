@@ -64,11 +64,15 @@ if [ -n "${NOTCHD_GNOME_CONFIG:-}" ]; then
   cp -- "$NOTCHD_GNOME_CONFIG" "$scratch/notchd.json"
 else
   cat > "$scratch/notchd.json" <<'EOF'
-{"modules": ["activities", "timer", "resources"]}
+{"modules": ["activities", "timer", "resources", "primitives"]}
 EOF
+  # A demo user module that draws the primitives the others do not use.
+  cp -r -- "$root/tests/gnome/modules" "$scratch/modules"
 fi
 socket="$scratch/notchd.sock"
-XDG_RUNTIME_DIR="$scratch/run" NOTCHD_OFFLINE=1 \
+# XDG_STATE_HOME: user module logs stay in the scratch dir.
+XDG_RUNTIME_DIR="$scratch/run" XDG_STATE_HOME="$scratch/state" NOTCHD_OFFLINE=1 \
+  NOTCHD_DEMO_COVER="$root/assets/icons/hicolor/256x256/apps/notchd.png" \
   "$bin" --socket "$socket" --config "$scratch/notchd.json" daemon > "$scratch/daemon.log" 2>&1 &
 daemon_pid=$!
 
@@ -88,12 +92,14 @@ fi
 echo "scratch: $scratch (daemon log: $scratch/daemon.log)"
 echo "try: NOTCHD_SOCKET=$socket $bin ipc push '{\"id\":\"demo\",\"title\":\"Deploying api\",\"progress\":40,\"sticky\":true}'"
 
-mode=(--devkit)
+# The windows you look at animate even where GNOME would turn animations
+# off (the 46 container renders in software); the headless tests do not.
+mode=(--devkit --force-animations)
 [ $headless -eq 1 ] && mode=(--headless --virtual-monitor 1920x1080)
 keep_display=()
 if [ $nested -eq 1 ]; then
   [ -n "${DISPLAY:-}" ] || { echo "--nested needs DISPLAY (Xwayland)" >&2; exit 1; }
-  mode=(--nested)
+  mode=(--nested --force-animations)
   keep_display=(DISPLAY="$DISPLAY")
 fi
 

@@ -301,6 +301,22 @@ class NotchOnGnome(ShellCase):
         sh.click()
         sh.until(lambda s: main_copy(s)["mode"] == "compact" and grabs(s) == 0, 2, "a click away to close it")
 
+    def test_a_click_on_a_tab_shows_its_module(self):
+        # GNOME 49+ St.Button: the press also reached the card, which pinned
+        # it and took a grab that cancelled the tab's click.
+        sh = self.shell
+        x, y = center(main_copy(sh.snapshot()))
+        sh.move(x, y)
+        s = sh.until(lambda s: main_copy(s)["mode"] == "expanded" and len(main_copy(s)["tabs"]) == 2, 3,
+                     "the open notch with a tab per module")
+        other = next(t for t in main_copy(s)["tabs"] if not t["picked"])
+        sh.move(*center(other))
+        # The virtual pointer's motion lands before the press, or the press
+        # goes where the pointer was.
+        time.sleep(0.3)
+        sh.click()
+        sh.until(lambda s: main_copy(s)["shown"] == [other["id"]], 2, "the tab's module shown")
+
     def test_navigation_holds_the_keyboard_until_escape(self):
         sh = self.shell
         self.assertEqual(sh.ipc("navigate"), "ok")

@@ -14,7 +14,27 @@ import * as Outline from './lib/Outline.js';
 import * as Protocol from './lib/Protocol.js';
 import {render} from './view.js';
 
-const EASE_MS = 180;
+// The card's motion, as core/NotchCard.qml: the length (x and width) springs
+// past its target (460 ms, OutBack with an overshoot of 1.1), the depth (y
+// and height) settles without overshoot (380 ms, OutQuint). New content
+// fades: the old out in 70 ms, the new in over 180.
+const ALONG_MS = 460;
+const DEPTH_MS = 380;
+const FADE_OUT_MS = 70;
+const FADE_IN_MS = 180;
+
+function outBack(t, overshoot = 1.1) {
+    const u = t - 1;
+    return u * u * ((overshoot + 1) * u + overshoot) + 1;
+}
+
+function outQuint(t) {
+    return 1 - Math.pow(1 - t, 5);
+}
+
+function animations() {
+    return St.Settings.get().enable_animations;
+}
 
 // The card's paddings and sizes in design pixels, as core/NotchCard.qml has
 // them for a top edge.
@@ -54,10 +74,14 @@ export const NotchCopy = GObject.registerClass(
 class NotchCopy extends St.Widget {
     // `host`: { theme, send(msg), store(), monitorFor(name), names() }.
     _init(host, notchId) {
-        super._init({name: 'notchd-copy', reactive: true, track_hover: true, can_focus: true, x: 0, y: 0, clip_to_allocation: false});
+        // Clipped: while the card grows, its content never shows outside it.
+        super._init({name: 'notchd-copy', reactive: true, track_hover: true, can_focus: true, x: 0, y: 0, clip_to_allocation: true});
         this._host = host;
         this.notchId = notchId;
         this._mode = 'rest';
+        // The mode the content on screen belongs to: it trails `_mode` by
+        // the fade, and the card's shape follows it.
+        this._shown = 'rest';
         this._wireScreen = '';
         this._monitorIndex = 0;
         this._modal = null;
@@ -70,12 +94,19 @@ class NotchCopy extends St.Widget {
         this._bg.connect('repaint', area => this._paint(area));
         this.add_child(this._bg);
         this._content = new St.Bin({x: 0, y: 0, opacity: 0});
+        // Centered along the card as it springs, as the QML content is.
+        this._content.add_constraint(new Clutter.AlignConstraint({source: this, align_axis: Clutter.AlignAxis.X_AXIS, factor: 0.5}));
         this.add_child(this._content);
         this.connect('notify::width', () => this._bg.set_size(this.width, this.height));
         this.connect('notify::height', () => this._bg.set_size(this.width, this.height));
 
         this.connect('notify::hover', () => this._send(Protocol.pointer(this.notchId, this._pointerScreen(this.hover ? 'enter' : 'leave'), this.hover ? 'enter' : 'leave')));
-        this.connect('button-press-event', () => {
+        this.connect('button-press-event', (actor, event) => {
+            // A press on a button inside is the button's: from GNOME 49 an
+            // St.Button lets it bubble here, and pinning would take a grab
+            // that cancels the button's click.
+            if (this._onButton(event))
+                return Clutter.EVENT_PROPAGATE;
             this._send(Protocol.pointer(this.notchId, this._pointerScreen('press'), 'press'));
             return Clutter.EVENT_STOP;
         });
@@ -84,8 +115,22 @@ class NotchCopy extends St.Widget {
         Main.layoutManager.addTopChrome(this, {trackFullscreen: true});
     }
 
+    // A destroyed copy says nothing: a fade it had running stops with it
+    // and would lay out and measure again, over the new copy's facts.
     _send(msg) {
-        this._host.send(msg);
+        if (!this._destroyed)
+            this._host.send(msg);
+    }
+
+    // Whether `event` happened on an St.Button inside this card (a tab, a
+    // view's button or chip).
+    _onButton(event) {
+        let a = global.stage.get_event_actor?.(event) ?? event.get_source?.() ?? null;
+        for (; a && a !== this; a = a.get_parent()) {
+            if (a instanceof St.Button)
+                return true;
+        }
+        return false;
     }
 
     // A notch fixed on a screen is named by it; the one that follows focus
@@ -109,14 +154,59 @@ class NotchCopy extends St.Widget {
         this._copy = copy;
         const mode = copy.mode;
         const parts = this._parts(copy);
-        const key = JSON.stringify([mode, parts]);
+        const tabs = this._tabs(copy);
+        const key = JSON.stringify([mode, parts, tabs]);
         if (key !== this._viewKey) {
             this._viewKey = key;
-            this._content.child = this._renderParts(mode, parts);
+            // The same parts, tabs and theme as last time: the parts' actors
+            // are updated in place; otherwise drawn again.
+            const shape = JSON.stringify([mode, parts.map(([module, slot]) => [module, slot]), tabs, this.theme.generation]);
+            if (this._pending || shape !== this._shape || !this._updateParts(parts))
+                this._replace(mode, parts, tabs);
+            this._shape = shape;
         }
         this._mode = mode;
-        this._layout(true);
+        if (!this._pending)
+            this._layout(true);
         this._keyboard(copy.keyboard ?? 'none', mode);
+    }
+
+    // New content: the old fades out, then the new is drawn, the card
+    // springs to it and it fades in. Without animations, at once.
+    _replace(mode, parts, tabs) {
+        const fading = !!this._pending;
+        this._pending = {mode, parts, tabs};
+        if (fading)
+            return;
+        if (animations() && this._content.child && this._content.opacity > 0) {
+            this._content.ease({
+                opacity: 0, duration: FADE_OUT_MS, mode: Clutter.AnimationMode.LINEAR,
+                onStopped: () => this._swap(true),
+            });
+        } else {
+            this._swap(false);
+        }
+    }
+
+    _swap(fade) {
+        const pending = this._pending;
+        if (!pending || this._destroyed)
+            return;
+        this._pending = null;
+        // Destroyed, not only unparented: a primitive's timers end with its
+        // actor.
+        const old = this._content.child;
+        this._content.child = this._renderParts(pending.mode, pending.parts, pending.tabs);
+        old?.destroy();
+        this._shown = pending.mode;
+        this._layout(true);
+        const shown = this._shown !== 'rest' && !!this._content.child;
+        if (fade && shown) {
+            this._content.opacity = 0;
+            this._content.ease({opacity: 255, duration: FADE_IN_MS, mode: Clutter.AnimationMode.LINEAR});
+        } else {
+            this._content.opacity = shown ? 255 : 0;
+        }
     }
 
     // What this copy shows, as [module, slot, tree] parts: the compact views
@@ -143,15 +233,86 @@ class NotchCopy extends St.Widget {
         return parts.filter(p => p);
     }
 
+    // The open notch's tabs (`copy.tabs`, none for a notch without): each
+    // module's title, whether it is the one shown, its `attention`.
+    _tabs(copy) {
+        if (copy.mode !== 'expanded')
+            return [];
+        const modules = this._host.store().modules;
+        const shown = copy.shown ?? [];
+        return (copy.tabs ?? []).map(id => ({
+            id, title: modules[id]?.title || id, picked: shown.includes(id), attention: !!modules[id]?.attention,
+        }));
+    }
+
+    // A tab per module, as NotchCard.qml's tab row: the title, the picked
+    // one on the `selected` fill, the others muted with a hover fill, an
+    // accent dot for news not seen. A press sends `tab`; the daemon picks.
+    _tabRow(tabs) {
+        const theme = this.theme;
+        const row = new St.BoxLayout({style: 'spacing: 4px;', x_align: Clutter.ActorAlign.START});
+        this._tabButtons = [];
+        for (const tab of tabs) {
+            const look = hover => {
+                const fill = tab.picked ? theme.css('selected') : hover ? theme.css('hover') : 'transparent';
+                return `background-color: ${fill}; padding: 5px 12px; border-radius: ${theme.radiusSmall}px;`;
+            };
+            const button = new St.Button({reactive: true, can_focus: true, track_hover: true, style: look(false)});
+            button.connect('notify::hover', () => {
+                button.style = look(button.hover);
+            });
+            button.connect('clicked', () => this._send(Protocol.tab(this.notchId, this._wireScreen, tab.id)));
+            const inner = new St.Widget({layout_manager: new Clutter.BinLayout()});
+            inner.add_child(new St.Label({
+                text: tab.title,
+                style: `color: ${theme.css(tab.picked ? 'foreground' : 'muted')}; font-size: ${theme.fonts.body}px;`,
+                x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER,
+            }));
+            if (tab.attention) {
+                inner.add_child(new St.Widget({
+                    style: `background-color: ${theme.css('accent')}; width: 6px; height: 6px; border-radius: 3px; margin: -1px -8px 0 0;`,
+                    x_align: Clutter.ActorAlign.END, y_align: Clutter.ActorAlign.START,
+                }));
+            }
+            button.set_child(inner);
+            row.add_child(button);
+            this._tabButtons.push({tab, button});
+        }
+        return row;
+    }
+
     // Each part drawn with its own module and slot, so a button fires the
-    // event of the module it belongs to.
-    _renderParts(mode, parts) {
-        if (parts.length === 0)
-            return null;
-        const actors = parts.map(([module, slot, tree]) => render(tree, {
+    // event of the module it belongs to; with tabs, below their row.
+    _renderParts(mode, parts, tabs = []) {
+        this._partCtx = parts.map(([module, slot]) => ({
             theme: this.theme,
             onAction: (action, value) => this._send(Protocol.event(module, slot, action, value)),
-        })).filter(a => a);
+        }));
+        this._partActors = parts.map(([, , tree], i) => render(tree, this._partCtx[i]));
+        this._partBox = null;
+        this._partHolder = null;
+        this._tabButtons = [];
+        const area = this._partsArea(mode, this._partActors.filter(a => a));
+        if (tabs.length === 0)
+            return area;
+        const column = new St.BoxLayout({style: 'spacing: 10px;'});
+        if ('orientation' in column)
+            column.orientation = Clutter.Orientation.VERTICAL;
+        else
+            column.vertical = true;
+        column.add_child(this._tabRow(tabs));
+        if (area)
+            column.add_child(area);
+        if (!this._partBox)
+            this._partHolder = column;
+        return column;
+    }
+
+    // The parts' actors side by side (closed) or stacked (open): one alone
+    // as it is, several in a box.
+    _partsArea(mode, actors) {
+        if (actors.length === 0)
+            return null;
         if (actors.length === 1)
             return actors[0];
         const vertical = mode === 'expanded';
@@ -165,7 +326,32 @@ class NotchCopy extends St.Widget {
                 a.y_align = Clutter.ActorAlign.CENTER;
             box.add_child(a);
         }
+        this._partBox = box;
         return box;
+    }
+
+    // New trees for the parts drawn last time: each actor updated in place
+    // where it can, else replaced where it was. False when a part appears
+    // or goes (a tree now invisible, or visible again): drawn again then.
+    _updateParts(parts) {
+        for (let i = 0; i < parts.length; i++) {
+            const prev = this._partActors[i];
+            const actor = render(parts[i][2], this._partCtx[i], 0, prev);
+            if (actor === prev)
+                continue;
+            if (!prev || !actor)
+                return false;
+            this._partActors[i] = actor;
+            const parent = this._partBox ?? this._partHolder;
+            if (parent) {
+                actor.y_align = prev.y_align;
+                parent.replace_child(prev, actor);
+            } else {
+                this._content.child = actor;
+            }
+            prev.destroy();
+        }
+        return true;
     }
 
     // The open notch is as wide as the widest module it shows asks for
@@ -177,7 +363,7 @@ class NotchCopy extends St.Widget {
     }
 
     _pads() {
-        const m = this._mode;
+        const m = this._shown;
         const s = v => this.theme.space(v);
         if (m === 'compact')
             return {near: s(CARD.compactPadNear), far: s(CARD.compactPadFar), side: s(CARD.compactPadSide), radius: s(CARD.compactRadius)};
@@ -197,13 +383,13 @@ class NotchCopy extends St.Widget {
         const pads = this._pads();
         let w, h;
         const child = this._content.child;
-        if (this._mode === 'rest' || !child) {
+        if (this._shown === 'rest' || !child) {
             w = s(CARD.restLength);
             h = s(CARD.restDepth);
         } else {
             const [, natW] = child.get_preferred_width(-1);
-            const maxW = this._mode === 'expanded' ? s(this._expandedWidth()) : monitor.width / 2;
-            const innerW = this._mode === 'expanded' ? maxW : Math.min(natW, maxW);
+            const maxW = this._shown === 'expanded' ? s(this._expandedWidth()) : monitor.width / 2;
+            const innerW = this._shown === 'expanded' ? maxW : Math.min(natW, maxW);
             const [, natH] = child.get_preferred_height(innerW);
             w = innerW + 2 * pads.side;
             h = natH + pads.near + pads.far;
@@ -220,27 +406,50 @@ class NotchCopy extends St.Widget {
         const x = Math.round(Math.min(Math.max(monitor.x + monitor.width * offset - total / 2, monitor.x), monitor.x + monitor.width - total));
         const y = monitor.y + panel;
         // The rest lip is thin: its hit area reaches a little deeper.
-        const height = Math.max(h, this._mode === 'rest' ? s(CARD.hitDepth) : h);
-        this._content.set_position(shoulder + pads.side, pads.near);
-        const shown = this._mode !== 'rest';
-        if (animate) {
-            this._target = {x, y, w: total, h: height};
-            this.ease({x, y, width: total, height, duration: EASE_MS, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
-            this._content.ease({opacity: shown ? 255 : 0, duration: EASE_MS, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
-        } else {
-            this._target = {x, y, w: total, h: height};
-            this.set_position(x, y);
-            this.set_size(total, height);
-            this._content.opacity = shown ? 255 : 0;
-        }
+        const height = Math.max(h, this._shown === 'rest' ? s(CARD.hitDepth) : h);
+        this._content.y = pads.near;
+        this._moveTo({x, y, w: total, h: height}, animate);
         this._bg.queue_repaint();
         this._measure();
+    }
+
+    // The card to `to` ({x, y, w, h}): sprung as NotchCard.qml does, or at
+    // once. A motion toward the same target goes on undisturbed.
+    _moveTo(to, animate) {
+        this._target = to;
+        const same = m => m && m.x === to.x && m.y === to.y && m.w === to.w && m.h === to.h;
+        if (this._motion && same(this._motion.to))
+            return;
+        this._motion?.timeline.stop();
+        this._motion = null;
+        if (!animate || !animations() || !this.mapped) {
+            this.set_position(to.x, to.y);
+            this.set_size(to.w, to.h);
+            return;
+        }
+        const from = {x: this.x, y: this.y, w: this.width, h: this.height};
+        const lerp = (a, b, t) => a + (b - a) * t;
+        const timeline = new Clutter.Timeline({actor: this, duration: ALONG_MS});
+        timeline.connect('new-frame', () => {
+            const ms = timeline.get_elapsed_time();
+            const along = outBack(Math.min(1, ms / ALONG_MS));
+            const depth = outQuint(Math.min(1, ms / DEPTH_MS));
+            this.set_position(Math.round(lerp(from.x, to.x, along)), Math.round(lerp(from.y, to.y, depth)));
+            this.set_size(Math.max(0, Math.round(lerp(from.w, to.w, along))), Math.max(0, Math.round(lerp(from.h, to.h, depth))));
+        });
+        timeline.connect('completed', () => {
+            this.set_position(to.x, to.y);
+            this.set_size(to.w, to.h);
+            this._motion = null;
+        });
+        this._motion = {to, timeline};
+        timeline.start();
     }
 
     // What this copy measures of itself, for the daemon's reserve.
     _measure() {
         const s = v => this.theme.space(v);
-        const compact = this._mode === 'compact' ? this._cardH : 0;
+        const compact = this._shown === 'compact' ? this._cardH : 0;
         const baseline = s(18) + s(CARD.compactPadNear) + s(CARD.compactPadFar);
         const msg = Protocol.measure(this.notchId, this._wireScreen, s(CARD.restDepth), compact, baseline);
         const text = JSON.stringify(msg);
@@ -262,7 +471,7 @@ class NotchCopy extends St.Widget {
         // The card grows with the actor while it eases: draw at the
         // actor's current size, not the target.
         const w = Math.max(0, aw - 2 * shoulder);
-        const h = this._mode === 'rest' ? Math.min(ah, this._cardH) : ah;
+        const h = this._shown === 'rest' ? Math.min(ah, this._cardH) : ah;
         const paths = Outline.path({w, h, shoulder, radius: this._radius ?? 0, start: {kind: 'shoulder'}, end: {kind: 'shoulder'}});
         const c = this.theme.colors;
         cr.translate(shoulder, 0);
@@ -310,10 +519,23 @@ class NotchCopy extends St.Widget {
     // size (not the eased one).
     describe() {
         return {
-            mode: this._mode, screen: this._copy?.screen ?? '', monitor: this._monitorIndex,
+            // The mode drawn, which the geometry below belongs to; `wanted`,
+            // the daemon's, leads it by a fade.
+            mode: this._shown, wanted: this._mode, screen: this._copy?.screen ?? '', monitor: this._monitorIndex,
             ...(this._target ?? {x: this.x, y: this.y, w: this.width, h: this.height}),
             card: {w: this._cardW, h: this._cardH}, modal: !!this._modal,
-            hasContent: !!this._content.child,
+            hasContent: !!this._content.child, shown: this._copy?.shown ?? [],
+            tabs: (this._tabButtons ?? []).filter(({button}) => button.mapped).map(({tab, button}) => {
+                // Allocations summed up to the card: the transformed extents
+                // are NaN in GNOME 46's headless shell.
+                let x = this.x, y = this.y;
+                for (let a = button; a && a !== this; a = a.get_parent()) {
+                    const box = a.get_allocation_box();
+                    x += box.x1;
+                    y += box.y1;
+                }
+                return {id: tab.id, picked: tab.picked, x, y, w: button.width, h: button.height};
+            }),
         };
     }
 
@@ -358,7 +580,12 @@ class NotchCopy extends St.Widget {
     }
 
     destroy() {
+        this._pending = null;
+        this._motion?.timeline.stop();
+        this._motion = null;
+        // Its last word: the keyboard it held is let go.
         this._release();
+        this._destroyed = true;
         Main.layoutManager.removeChrome(this);
         super.destroy();
     }
