@@ -12,3 +12,5 @@ pub mod settings;
 pub mod state;
 pub mod terminal;
 pub mod usage;
+
+pub(crate) mod js;

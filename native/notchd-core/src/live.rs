@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 
+use crate::js;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -24,56 +25,6 @@ pub const SPEAKING_DB: f64 = -60.0;
 const SILENCE_DB: f64 = -100.0;
 
 // ---- JS semantics the wire format leans on --------------------------------
-
-/// JS `String.prototype.trim`: Unicode white space plus the BOM.
-fn js_trim(s: &str) -> &str {
-    s.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
-}
-
-/// JS truthiness of a JSON value.
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0 && !f.is_nan()),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(_) | Value::Object(_) => true,
-    }
-}
-
-/// JS `String(value)` of a JSON value.
-fn js_string(v: &Value) -> String {
-    match v {
-        Value::Null => "null".to_owned(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => match n.as_f64() {
-            Some(f) if f.fract() == 0.0 && f.abs() < 1e21 => format!("{f:.0}"),
-            _ => n.to_string(),
-        },
-        Value::String(s) => s.clone(),
-        Value::Array(a) => a
-            .iter()
-            .map(|x| {
-                if x.is_null() {
-                    String::new()
-                } else {
-                    js_string(x)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(","),
-        Value::Object(_) => "[object Object]".to_owned(),
-    }
-}
-
-/// `String(v || "")`.
-fn string_or_empty(v: &Value) -> String {
-    if truthy(v) {
-        js_string(v)
-    } else {
-        String::new()
-    }
-}
 
 /// A field of the type asked for, else `None` (the JS `typeof` guards).
 fn lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
@@ -87,17 +38,17 @@ where
 /// `Array.isArray(x) ? x.map(String) : none`.
 fn string_list<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
     Ok(match Value::deserialize(d)? {
-        Value::Array(a) => Some(a.iter().map(js_string).collect()),
+        Value::Array(a) => Some(a.iter().map(js::string).collect()),
         _ => None,
     })
 }
 
 fn de_truthy<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
-    Ok(truthy(&Value::deserialize(d)?))
+    Ok(js::truthy(&Value::deserialize(d)?))
 }
 
 fn de_string_or_empty<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    Ok(string_or_empty(&Value::deserialize(d)?))
+    Ok(js::string_or_empty(&Value::deserialize(d)?))
 }
 
 // ---- the bridge's command line --------------------------------------------
@@ -143,12 +94,12 @@ pub struct BridgeOpts {
 /// test's fake), `home` expands a leading `~` of the folder.
 pub fn bridge_args(bridge: &str, opts: &BridgeOpts, home: &str) -> Vec<String> {
     let mut run = runner(bridge);
-    let codex = js_trim(opts.codex.as_deref().unwrap_or(""));
+    let codex = js::trim(opts.codex.as_deref().unwrap_or(""));
     run.extend([
         "--codex".to_owned(),
         if codex.is_empty() { "codex" } else { codex }.to_owned(),
     ]);
-    let cwd = expand_tilde(js_trim(opts.cwd.as_deref().unwrap_or("")), home);
+    let cwd = expand_tilde(js::trim(opts.cwd.as_deref().unwrap_or("")), home);
     if !cwd.is_empty() {
         run.extend(["--cwd".to_owned(), cwd]);
     }
@@ -175,7 +126,7 @@ pub const LEGACY_VOICE_MODELS: [(&str, &str); 2] = [
 /// `"pocket"`, or the engine of a legacy model name; `None` (JS `""`) for any
 /// other, which is a model by its name.
 pub fn voice_engine(value: &str) -> Option<&'static str> {
-    match js_trim(value) {
+    match js::trim(value) {
         "piper" => Some("piper"),
         "pocket" => Some("pocket"),
         v => LEGACY_VOICE_MODELS
@@ -220,7 +171,7 @@ pub struct LocalBridgeOpts {
 
 /// The same for the local bridge (`localBridgeArgs`).
 pub fn local_bridge_args(bridge: &str, opts: &LocalBridgeOpts, home: &str) -> Vec<String> {
-    let text = |v: &Option<String>| js_trim(v.as_deref().unwrap_or("")).to_owned();
+    let text = |v: &Option<String>| js::trim(v.as_deref().unwrap_or("")).to_owned();
     let mut run = runner(bridge);
     let mut flag = |name: &str, value: String| run.extend([name.to_owned(), value]);
     flag(
@@ -315,7 +266,7 @@ pub struct TranscriptPiece {
     /// `user`; anything else is the assistant.
     #[serde(default, deserialize_with = "de_role")]
     pub role: Option<Role>,
-    /// Any truthy value closes the line.
+    /// Any js::truthy value closes the line.
     #[serde(default, deserialize_with = "de_truthy")]
     pub done: bool,
     /// The whole text (`String(text || "")`).
@@ -505,7 +456,7 @@ pub fn add_transcript(lines: &[Line], t: &TranscriptPiece) -> Vec<Line> {
     let mut out = lines.to_vec();
     let open = out.iter().rposition(|l| l.role == role && !l.done);
     if t.done {
-        let text = js_trim(&t.text).to_owned();
+        let text = js::trim(&t.text).to_owned();
         match open {
             Some(i) => {
                 out[i] = Line {
@@ -641,7 +592,7 @@ pub struct Command {
 
 /// An IPC command (`parseCommand`): one of the words, the rest is `Usage`.
 pub fn parse_command(raw: &str) -> Command {
-    let action = match js_trim(raw) {
+    let action = match js::trim(raw) {
         "start" => Action::Start,
         "stop" => Action::Stop,
         "toggle" => Action::Toggle,
@@ -654,28 +605,6 @@ pub fn parse_command(raw: &str) -> Command {
         action,
         text: String::new(),
     }
-}
-
-/// `decodeURIComponent`; `None` where JS throws (a bad `%` escape, or bytes
-/// that are not UTF-8).
-fn decode_uri_component(s: &str) -> Option<String> {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' {
-            let hex = s.get(i + 1..i + 3)?;
-            if !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
-                return None;
-            }
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
 }
 
 /// The bridge's file as a path (`localPath`): `Qt.resolvedUrl` gives `file://`
@@ -694,7 +623,7 @@ pub fn local_path(url: &str, shell_dir: &str) -> String {
     } else {
         return String::new();
     };
-    decode_uri_component(&path).unwrap_or_default()
+    js::decode_uri_component(&path).unwrap_or_default()
 }
 
 #[cfg(test)]

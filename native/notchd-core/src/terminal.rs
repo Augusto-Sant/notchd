@@ -9,6 +9,8 @@
 //! [`SCHEME`] (a qmltermwidget color scheme name) are presentation for the QML
 //! widget; they are ported so the strings live in one place.
 
+use crate::js;
+
 /// QML that imports only `QMLTermWidget`, from the optional `qmltermwidget`
 /// package; `Qt.createQmlObject` throws on it quietly when it is missing
 /// (`PROBE`). Probably UI-side.
@@ -36,16 +38,11 @@ pub const MOD_CONTROL: u32 = 0x0400_0000;
 /// Qt's `Qt.KeypadModifier`, which doesn't count.
 pub const MOD_KEYPAD: u32 = 0x2000_0000;
 
-/// JS `String.prototype.trim`: Unicode white space plus the BOM.
-fn js_trim(s: &str) -> &str {
-    s.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
-}
-
 /// `"~"` and `"~/x"` under `home`; empty is the home itself; anything else as
 /// given (`expandHome`). A home with trailing slashes loses them; no home at
 /// all is `/`. `path` of `None` (JS `undefined`/`null`) is empty.
 pub fn expand_home(path: Option<&str>, home: &str) -> String {
-    let p = js_trim(path.unwrap_or(""));
+    let p = js::trim(path.unwrap_or(""));
     let h = home.trim_end_matches('/');
     if p.is_empty() || p == "~" {
         return if h.is_empty() {
@@ -69,7 +66,7 @@ pub fn expand_home(path: Option<&str>, home: &str) -> String {
 /// (`cd ~/app && npm run dev`, `a; b`), run as is with `extra` as its `"$@"`:
 /// `exec` in front of it would run its first command alone.
 pub fn shell_args(command: &str, extra: &[String], own_dir: bool, script: bool) -> Vec<String> {
-    let cmd = js_trim(command);
+    let cmd = js::trim(command);
     let run = if script {
         cmd.to_owned()
     } else {
@@ -108,7 +105,7 @@ pub struct PlainTitle {
 pub fn plain_title(raw: Option<&str>) -> PlainTitle {
     PlainTitle {
         working: false,
-        title: js_trim(raw.unwrap_or("")).to_owned(),
+        title: js::trim(raw.unwrap_or("")).to_owned(),
     }
 }
 

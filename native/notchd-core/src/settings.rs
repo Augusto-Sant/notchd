@@ -6,64 +6,12 @@
 //! and `Value::Null` is JS `null`. The shape that is fixed (what
 //! `parseModuleInfo` returns) is the typed [`ModuleInfo`].
 
+use crate::js;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 // ---------------------------------------------------------------------------
 // JS semantics the rules rely on
-
-/// JS truthiness of an optional value (`undefined` is falsy).
-fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_none_or(|f| f != 0.0 && !f.is_nan()),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(_) => true,
-    }
-}
-
-/// JS `String(value)` for a JSON value.
-fn js_string(v: &Value) -> String {
-    match v {
-        Value::Null => "null".into(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => match n.as_f64() {
-            Some(f) if n.is_f64() && f.fract() == 0.0 && f.abs() < 1e21 => format!("{}", f as i128),
-            _ => n.to_string(),
-        },
-        Value::String(s) => s.clone(),
-        Value::Array(a) => a
-            .iter()
-            .map(|x| {
-                if x.is_null() {
-                    String::new()
-                } else {
-                    js_string(x)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(","),
-        Value::Object(_) => "[object Object]".into(),
-    }
-}
-
-/// JS `===` between two values (numbers compare as numbers, so 1 equals 1.0).
-fn js_eq(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
-        _ => a == b,
-    }
-}
-
-/// JS `===` between two possibly-`undefined` values.
-fn js_eq_opt(a: Option<&Value>, b: Option<&Value>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(x), Some(y)) => js_eq(x, y),
-        _ => false,
-    }
-}
 
 fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str)
@@ -81,7 +29,7 @@ fn capitalize(s: &str) -> String {
 /// A value's `title` if truthy as a string, else `fallback` (`m.title || id`).
 fn title_or(m: &Value, fallback: &str) -> String {
     match m.get("title") {
-        Some(t) if truthy(Some(t)) => js_string(t),
+        Some(t) if js::truthy(t) => js::string(t),
         _ => fallback.to_string(),
     }
 }
@@ -97,7 +45,7 @@ pub fn merge_pages(core: &[Value], host: &[Value]) -> Vec<Value> {
         // Like the JS loop, the last page with a matching id wins.
         match out
             .iter()
-            .rposition(|p| js_eq_opt(p.get("id"), h.get("id")))
+            .rposition(|p| js::eq_opt(p.get("id"), h.get("id")))
         {
             None => out.push(h.clone()),
             Some(i) => {
@@ -117,7 +65,7 @@ pub fn merge_pages(core: &[Value], host: &[Value]) -> Vec<Value> {
 fn page_of(field: &Value) -> Option<&str> {
     match field.get("page") {
         Some(Value::String(s)) if !s.is_empty() => Some(s),
-        p if truthy(p) => None,
+        p if js::truthy_opt(p) => None,
         _ => Some("general"),
     }
 }
@@ -216,15 +164,15 @@ pub fn shown_fields(schema: &[Value], value_of: impl Fn(&str) -> Option<Value>) 
     schema
         .iter()
         .filter(|f| {
-            let Some(when) = f.get("when").filter(|w| truthy(Some(w))) else {
+            let Some(when) = f.get("when").filter(|w| js::truthy(w)) else {
                 return true;
             };
             let v = effective_value(schema, str_of(when, "key").unwrap_or(""), &value_of);
             match when.get("is") {
-                Some(Value::Array(list)) => {
-                    v.as_ref().is_some_and(|v| list.iter().any(|x| js_eq(x, v)))
-                }
-                is => js_eq_opt(v.as_ref(), is),
+                Some(Value::Array(list)) => v
+                    .as_ref()
+                    .is_some_and(|v| list.iter().any(|x| js::eq(x, v))),
+                is => js::eq_opt(v.as_ref(), is),
             }
         })
         .cloned()
@@ -248,7 +196,7 @@ pub fn sections(schema: &[Value], page: &str) -> Vec<Section> {
             continue;
         }
         let name = match f.get("section") {
-            Some(s) if truthy(Some(s)) => js_string(s),
+            Some(s) if js::truthy(s) => js::string(s),
             _ => String::new(),
         };
         match out.iter_mut().find(|s| s.name == name) {
@@ -358,7 +306,7 @@ pub fn parse_module_info(text: &str) -> ModuleInfo {
     let own_keys: Vec<Option<&Value>> = own.iter().map(|f| f.get("key")).collect();
     info.settings = inherited
         .into_iter()
-        .filter(|f| !own_keys.iter().any(|k| js_eq_opt(*k, f.get("key"))))
+        .filter(|f| !own_keys.iter().any(|k| js::eq_opt(*k, f.get("key"))))
         .chain(own.iter().cloned())
         .collect();
     info
@@ -389,7 +337,7 @@ pub fn agent_settings(agent: &Value, title: &str) -> Vec<Value> {
             let add = str_of(extra, str_of(f, "key").unwrap_or("")).filter(|s| !s.is_empty());
             if let (Some(add), Some(obj)) = (add, f.as_object_mut()) {
                 let help = match obj.get("help") {
-                    Some(h) if truthy(Some(h)) => format!("{} {add}", js_string(h)),
+                    Some(h) if js::truthy(h) => format!("{} {add}", js::string(h)),
                     _ => add.to_string(),
                 };
                 obj.insert("help".into(), Value::String(help));
@@ -531,7 +479,7 @@ fn terminal_fields(command: &str, name: &str, empty_dir: &str, idle: &str) -> Ve
 /// config's `terminals`: `{ id, title, command }`). Its title and command are
 /// its entry's, edited there (`absolute` keys; the command is `required`).
 pub fn terminal_info(t: &Value) -> ModuleInfo {
-    let id = t.get("id").map(js_string).unwrap_or_default();
+    let id = t.get("id").map(js::string).unwrap_or_default();
     let title = str_of(t, "title").unwrap_or("");
     let name = if title.is_empty() { id.as_str() } else { title };
     let entry = format!("terminals.{id}.");
@@ -565,24 +513,6 @@ pub fn terminal_info(t: &Value) -> ModuleInfo {
     }
 }
 
-/// `decodeURIComponent`, or `None` where JS throws (bad escape or UTF-8).
-fn decode_uri_component(s: &str) -> Option<String> {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' {
-            let hex = s.get(i + 1..i + 3)?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
-}
-
 /// `moduleInfoPath`: the JSON file of the module at `url` (its .qml): the same
 /// path, .json. Quickshell names files under the shell's folder
 /// `qs:@/qs/<path>` (resolved against `shell_dir`) and others
@@ -601,7 +531,7 @@ pub fn module_info_path(url: &str, shell_dir: &str) -> String {
     } else {
         return String::new();
     };
-    match decode_uri_component(&path) {
+    match js::decode_uri_component(&path) {
         Some(p) => p
             .strip_suffix(".qml")
             .map(|s| format!("{s}.json"))
@@ -652,9 +582,9 @@ fn module_refs(field: &Value, module_id: &str) -> Value {
         return out;
     };
     for name in ["when", "by"] {
-        if let Some(r) = field.get(name).filter(|r| truthy(r.get("key"))) {
+        if let Some(r) = field.get(name).filter(|r| js::truthy_opt(r.get("key"))) {
             let mut r = r.clone();
-            let key = js_string(&r["key"]);
+            let key = js::string(&r["key"]);
             r["key"] = Value::String(format!("{module_id}.{key}"));
             obj.insert(name.into(), r);
         }
@@ -705,11 +635,11 @@ fn module_option_refs(option: &Value, module_id: &str) -> Value {
 pub fn module_fields(modules: &[Value], edge_preview: &str) -> Vec<Value> {
     let mut out = Vec::new();
     for m in modules {
-        if !truthy(m.get("moduleId")) {
+        if !js::truthy_opt(m.get("moduleId")) {
             continue;
         }
-        let id = js_string(&m["moduleId"]);
-        if truthy(m.get("standalone")) {
+        let id = js::string(&m["moduleId"]);
+        if js::truthy_opt(m.get("standalone")) {
             out.extend(standalone_fields(&id, edge_preview));
         }
         let Some(Value::Array(settings)) = m.get("settings") else {
@@ -717,16 +647,16 @@ pub fn module_fields(modules: &[Value], edge_preview: &str) -> Vec<Value> {
         };
         for f in settings {
             let mut field = f.clone();
-            let absolute = truthy(f.get("absolute"));
-            if truthy(f.get("key")) && !absolute {
-                field["key"] = Value::String(format!("{id}.{}", js_string(&f["key"])));
+            let absolute = js::truthy_opt(f.get("absolute"));
+            if js::truthy_opt(f.get("key")) && !absolute {
+                field["key"] = Value::String(format!("{id}.{}", js::string(&f["key"])));
             }
             if !absolute {
                 field = module_refs(&field, &id);
             }
-            if !truthy(field.get("page")) {
+            if !js::truthy_opt(field.get("page")) {
                 field["page"] = Value::String(module_page_id(&id));
-            } else if !truthy(field.get("section")) {
+            } else if !js::truthy_opt(field.get("section")) {
                 field["section"] = Value::String(title_or(m, &id));
             }
             out.push(field);
@@ -739,9 +669,9 @@ pub fn module_fields(modules: &[Value], edge_preview: &str) -> Vec<Value> {
 pub fn module_pages(modules: &[Value]) -> Vec<Value> {
     modules
         .iter()
-        .filter(|m| truthy(m.get("moduleId")))
+        .filter(|m| js::truthy_opt(m.get("moduleId")))
         .map(|m| {
-            let id = js_string(&m["moduleId"]);
+            let id = js::string(&m["moduleId"]);
             json!({ "id": module_page_id(&id), "label": title_or(m, &id) })
         })
         .collect()
@@ -751,7 +681,7 @@ pub fn module_pages(modules: &[Value]) -> Vec<Value> {
 /// file's), else its id capitalized.
 pub fn module_title(id: &str, module: Option<&Value>) -> String {
     match module {
-        Some(m) if truthy(m.get("title")) => title_or(m, ""),
+        Some(m) if js::truthy_opt(m.get("title")) => title_or(m, ""),
         _ => capitalize(id),
     }
 }
@@ -760,11 +690,11 @@ pub fn module_title(id: &str, module: Option<&Value>) -> String {
 /// "agent" (a coding agent, or a conversation with one: `live`), "terminal",
 /// else "notch".
 pub fn module_kind(m: &Value) -> &'static str {
-    if truthy(m.get("standalone")) {
+    if js::truthy_opt(m.get("standalone")) {
         "standalone"
-    } else if truthy(m.get("agent")) || truthy(m.get("live")) {
+    } else if js::truthy_opt(m.get("agent")) || js::truthy_opt(m.get("live")) {
         "agent"
-    } else if truthy(m.get("terminal")) {
+    } else if js::truthy_opt(m.get("terminal")) {
         "terminal"
     } else {
         "notch"
@@ -777,7 +707,7 @@ pub fn catalog_part(catalog: &[Value], part: Option<&str>) -> Vec<Value> {
     let part = part.filter(|p| !p.is_empty()).unwrap_or("notch");
     catalog
         .iter()
-        .filter(|m| truthy(Some(m)) && module_kind(m) == part)
+        .filter(|m| js::truthy(m) && module_kind(m) == part)
         .cloned()
         .collect()
 }
@@ -804,7 +734,7 @@ pub fn module_status(id: &str, specs: &[Value], standalone: bool, enabled: Optio
         .map(|s| {
             s.get("id")
                 .filter(|v| !v.is_null())
-                .map(js_string)
+                .map(js::string)
                 .unwrap_or_default()
         })
         .collect();
@@ -838,11 +768,11 @@ pub fn notch_index_of_page(id: &str) -> i64 {
 /// and what it shows. `notch`: `{ edge, moduleIds }` (null gives ""); `titles`:
 /// id -> title.
 pub fn notch_summary(notch: &Value, titles: &Value) -> String {
-    if !truthy(Some(notch)) {
+    if !js::truthy(notch) {
         return String::new();
     }
     let edge = match notch.get("edge") {
-        Some(e) if truthy(Some(e)) => js_string(e),
+        Some(e) if js::truthy(e) => js::string(e),
         _ => "top".into(),
     };
     let ids = to_list(notch.get("moduleIds").unwrap_or(&Value::Null));
@@ -851,7 +781,7 @@ pub fn notch_summary(notch: &Value, titles: &Value) -> String {
     } else {
         ids.iter()
             .map(|id| match titles.get(id) {
-                Some(t) if truthy(Some(t)) => js_string(t),
+                Some(t) if js::truthy(t) => js::string(t),
                 _ => module_title(id, None),
             })
             .collect::<Vec<_>>()
@@ -868,12 +798,12 @@ pub fn notch_summary(notch: &Value, titles: &Value) -> String {
 /// accepted; anything else, strings included, is empty.
 pub fn to_list(value: &Value) -> Vec<String> {
     match value {
-        Value::Array(a) => a.iter().map(js_string).collect(),
+        Value::Array(a) => a.iter().map(js::string).collect(),
         Value::Object(o) => match o.get("length").and_then(Value::as_f64) {
             Some(n) => (0..n.max(0.0) as usize)
                 .map(|i| {
                     o.get(&i.to_string())
-                        .map_or_else(|| "undefined".to_string(), js_string)
+                        .map_or_else(|| "undefined".to_string(), js::string)
                 })
                 .collect(),
             None => Vec::new(),
@@ -924,7 +854,7 @@ pub fn all_ids(enabled: &[String], available: &[String]) -> Vec<String> {
 /// `workspaceValue`: a workspace as the config stores it: a number for a
 /// numbered one, else its name.
 pub fn workspace_value(w: &Value) -> Value {
-    workspace_from_str(&js_string(w))
+    workspace_from_str(&js::string(w))
 }
 
 fn workspace_from_str(s: &str) -> Value {
@@ -948,7 +878,9 @@ pub fn sort_workspaces(list: &mut [Value]) {
             .unwrap_or(std::cmp::Ordering::Equal),
         (Value::Number(_), _) => std::cmp::Ordering::Less,
         (_, Value::Number(_)) => std::cmp::Ordering::Greater,
-        _ => js_string(a).encode_utf16().cmp(js_string(b).encode_utf16()),
+        _ => js::string(a)
+            .encode_utf16()
+            .cmp(js::string(b).encode_utf16()),
     });
 }
 
@@ -962,7 +894,7 @@ pub fn workspace_choices(known: &Value, picked: &Value) -> Vec<Value> {
             return;
         }
         let v = workspace_from_str(&s);
-        if !out.iter().any(|x| js_eq(x, &v)) {
+        if !out.iter().any(|x| js::eq(x, &v)) {
             out.push(v);
         }
     };
@@ -983,7 +915,7 @@ pub fn toggle_workspace(picked: &Value, w: &Value) -> Option<Vec<Value>> {
         .map(|s| workspace_from_str(s))
         .collect();
     let v = workspace_value(w);
-    match list.iter().position(|x| js_eq(x, &v)) {
+    match list.iter().position(|x| js::eq(x, &v)) {
         None => list.push(v),
         Some(at) => {
             list.remove(at);
@@ -1017,13 +949,13 @@ pub fn snap_to_step(v: f64, min: f64, max: f64, step: f64) -> f64 {
 /// `storedValue`: what a control's edit writes: `None` (remove the key) when
 /// it equals the field's default, so the config never stores defaults.
 pub fn stored_value(field: &Value, value: Option<&Value>) -> Option<Value> {
-    let default = if truthy(Some(field)) {
+    let default = if js::truthy(field) {
         field.get("default")
     } else {
         None
     };
     match (default, value) {
-        (Some(d), Some(v)) if js_eq(v, d) => None,
+        (Some(d), Some(v)) if js::eq(v, d) => None,
         _ => value.cloned(),
     }
 }
@@ -1726,7 +1658,7 @@ mod tests {
                 for f in &info.settings {
                     let head = f
                         .get("key")
-                        .map(js_string)
+                        .map(js::string)
                         .unwrap_or_else(|| "undefined".into());
                     let head = head.split('.').next().unwrap().to_string();
                     assert!(
@@ -1755,19 +1687,22 @@ mod tests {
                     Some("note") => continue,
                     Some("component") => {
                         assert!(
-                            truthy(f.get("component")),
+                            js::truthy_opt(f.get("component")),
                             "{file}: a component row without a component"
                         );
                         continue;
                     }
                     Some("components") => {
-                        assert!(truthy(f.get("match")), "{file}: components without a match");
+                        assert!(
+                            js::truthy_opt(f.get("match")),
+                            "{file}: components without a match"
+                        );
                         continue;
                     }
                     _ => {}
                 }
                 assert!(
-                    truthy(f.get("key")) && f.get("default").is_some(),
+                    js::truthy_opt(f.get("key")) && f.get("default").is_some(),
                     "{file}: {f}"
                 );
                 if let Some(min) = f.get("min").and_then(Value::as_f64) {
@@ -1782,7 +1717,7 @@ mod tests {
                     assert!(
                         options
                             .iter()
-                            .any(|o| js_eq_opt(o.get("value"), f.get("default"))),
+                            .any(|o| js::eq_opt(o.get("value"), f.get("default"))),
                         "{file}: {} default not an option",
                         f["key"]
                     );

@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::countdown::js_ws;
+use crate::js;
 
 /// What an agent's terminal title says (`{ working, title }`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,7 +17,7 @@ pub struct AgentTitle {
 }
 
 fn trim(raw: &str) -> &str {
-    raw.trim_matches(js_ws)
+    raw.trim_matches(js::is_ws)
 }
 
 /// The `ID` regexp: a lowercase or uppercase hex UUID, hyphenated.
@@ -136,7 +136,7 @@ fn one_line(s: &str) -> String {
         run.clear();
     };
     for c in s.chars() {
-        if js_ws(c) {
+        if js::is_ws(c) {
             run.push(c);
         } else {
             flush(&mut run, &mut out);

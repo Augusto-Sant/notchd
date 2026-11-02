@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::countdown::{js_str_to_number, js_ws};
+use crate::js;
 
 /// CPU time counters, in jiffies (`cpuTimes`'s `{ idle, total }`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -22,14 +22,14 @@ pub struct CpuTimes {
 pub fn cpu_times(text: &str) -> Option<CpuTimes> {
     for line in text.split('\n') {
         let mut parts = line
-            .trim_matches(js_ws)
-            .split(js_ws)
+            .trim_matches(js::is_ws)
+            .split(js::is_ws)
             .filter(|p| !p.is_empty());
         // `"".split(/\s+/)` is `[""]`: a blank line never matches "cpu".
         if parts.next() != Some("cpu") {
             continue;
         }
-        let n: Vec<f64> = parts.take(8).map(js_str_to_number).collect();
+        let n: Vec<f64> = parts.take(8).map(js::str_to_number).collect();
         if n.len() < 4 || n.iter().any(|x| !x.is_finite()) {
             return None;
         }
@@ -49,7 +49,7 @@ pub fn cpu_count(text: &str) -> usize {
         .filter(|l| {
             l.strip_prefix("cpu").is_some_and(|rest| {
                 let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
-                digits > 0 && rest[digits..].chars().next().is_some_and(js_ws)
+                digits > 0 && rest[digits..].chars().next().is_some_and(js::is_ws)
             })
         })
         .count()
@@ -87,7 +87,7 @@ pub fn memory(text: &str) -> Option<Usage> {
         if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
             continue;
         }
-        let value = rest.trim_start_matches(js_ws);
+        let value = rest.trim_start_matches(js::is_ws);
         if value.len() == rest.len() {
             continue;
         }
@@ -118,20 +118,20 @@ pub fn memory(text: &str) -> Option<Usage> {
 /// space reserved for root doesn't count as free. `None` when the output has
 /// no data line.
 pub fn disk(text: &str) -> Option<Usage> {
-    let lines: Vec<&str> = text.trim_matches(js_ws).split('\n').collect();
+    let lines: Vec<&str> = text.trim_matches(js::is_ws).split('\n').collect();
     for line in lines.iter().skip(1).rev() {
         let parts: Vec<&str> = line
-            .trim_matches(js_ws)
-            .split(js_ws)
+            .trim_matches(js::is_ws)
+            .split(js::is_ws)
             .filter(|p| !p.is_empty())
             .collect();
         if parts.len() < 6 {
             continue;
         }
         let (total, used, avail) = (
-            js_str_to_number(parts[1]),
-            js_str_to_number(parts[2]),
-            js_str_to_number(parts[3]),
+            js::str_to_number(parts[1]),
+            js::str_to_number(parts[2]),
+            js::str_to_number(parts[3]),
         );
         if !total.is_finite() || !used.is_finite() || !avail.is_finite() || used + avail <= 0.0 {
             continue;
@@ -147,31 +147,6 @@ pub fn disk(text: &str) -> Option<Usage> {
 
 const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
 
-/// JS `Number.prototype.toFixed` for a non-negative number: rounds half up
-/// on the exact decimal value (Rust's formatting rounds ties to even).
-fn to_fixed(v: f64, digits: usize) -> String {
-    if v.is_nan() {
-        return "NaN".to_string();
-    }
-    if v.is_infinite() {
-        return "Infinity".to_string();
-    }
-    // The exact expansion of a double, long enough to decide any tie.
-    let exact = format!("{v:.80}");
-    let (int, frac) = exact.split_once('.').unwrap_or((&exact, ""));
-    let round_up = frac.as_bytes().get(digits).is_some_and(|d| *d >= b'5');
-    let kept = format!("{int}{}", &frac[..digits]);
-    let Ok(n) = kept.parse::<u128>() else {
-        return format!("{v:.digits$}");
-    };
-    let s = (n + u128::from(round_up)).to_string();
-    if digits == 0 {
-        return s;
-    }
-    let s = format!("{s:0>width$}", width = digits + 1);
-    format!("{}.{}", &s[..s.len() - digits], &s[s.len() - digits..])
-}
-
 /// `formatBytes`: bytes as a short binary size: "512 MiB", "7.8 GiB",
 /// "1.2 TiB".
 pub fn format_bytes(bytes: f64) -> String {
@@ -182,7 +157,7 @@ pub fn format_bytes(bytes: f64) -> String {
         u += 1;
     }
     let digits = usize::from(u >= 3 && v < 100.0);
-    format!("{} {}", to_fixed(v, digits), UNITS[u])
+    format!("{} {}", js::to_fixed(v, digits), UNITS[u])
 }
 
 /// `formatUsage`: "7.8 of 31.2 GiB": both in the total's unit, so they read
@@ -194,7 +169,7 @@ pub fn format_usage(used: f64, total: f64) -> String {
     let used = if used.is_nan() { 0.0 } else { used.max(0.0) };
     let v = used / 1024f64.powi(idx as i32);
     let digits = usize::from(matches!(unit, "GiB" | "TiB" | "PiB") && v < 100.0);
-    format!("{} of {t}", to_fixed(v, digits))
+    format!("{} of {t}", js::to_fixed(v, digits))
 }
 
 /// One resource's pressure state (`{ hot, streak }`).
@@ -338,12 +313,12 @@ mod tests {
     // Not in the Node tests: toFixed rounds half up on the exact value.
     #[test]
     fn to_fixed_rounds_like_js() {
-        assert_eq!(to_fixed(2.5, 0), "3");
-        assert_eq!(to_fixed(0.25, 1), "0.3");
-        assert_eq!(to_fixed(0.15, 1), "0.1");
-        assert_eq!(to_fixed(0.04, 1), "0.0");
-        assert_eq!(to_fixed(99.96, 1), "100.0");
-        assert_eq!(to_fixed(1.005, 2), "1.00");
+        assert_eq!(js::to_fixed(2.5, 0), "3");
+        assert_eq!(js::to_fixed(0.25, 1), "0.3");
+        assert_eq!(js::to_fixed(0.15, 1), "0.1");
+        assert_eq!(js::to_fixed(0.04, 1), "0.0");
+        assert_eq!(js::to_fixed(99.96, 1), "100.0");
+        assert_eq!(js::to_fixed(1.005, 2), "1.00");
     }
 
     // nextPressure: hot after holding at the line, cools below it with a margin

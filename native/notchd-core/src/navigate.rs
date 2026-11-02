@@ -4,6 +4,7 @@
 //! Keys also act on the selected notch: settings, removing it (asked twice)
 //! and moving it (arrows for the edge, Shift to slide, Tab for the monitor).
 
+use crate::js;
 use serde::{Deserialize, Serialize};
 
 /// Qt key codes (`Qt.Key_*`), so the rules don't need the QML runtime.
@@ -408,11 +409,6 @@ pub struct Position {
     pub screen: String,
 }
 
-/// JS `Math.round`: halves round toward +infinity.
-fn js_round(x: f64) -> f64 {
-    (x + 0.5).floor()
-}
-
 /// `moveTarget`: where a move puts a notch at `position`: onto an edge at the
 /// same offset; along it by [`SLIDE`], kept within 0 to 1; to the screen before
 /// or after in `screens`, counting from the one it names, else the one it is on
@@ -430,7 +426,7 @@ pub fn move_target(
     }
     if let Some(slide) = mv.slide.filter(|s| *s != 0) {
         p.offset =
-            (js_round((p.offset + f64::from(slide) * SLIDE) * 100.0) / 100.0).clamp(0.0, 1.0);
+            (js::round((p.offset + f64::from(slide) * SLIDE) * 100.0) / 100.0).clamp(0.0, 1.0);
     }
     if let Some(by) = mv.screen.filter(|s| *s != 0) {
         if screens.len() < 2 {

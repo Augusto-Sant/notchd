@@ -11,6 +11,7 @@
 
 use std::sync::LazyLock;
 
+use crate::js;
 use serde_json::{Map, Number, Value, json};
 
 /// A JSON object, as the config uses them.
@@ -88,56 +89,6 @@ fn put(node: &mut Value, key: &str, value: Value) {
 
 fn is_object_like(v: Option<&Value>) -> bool {
     matches!(v, Some(Value::Object(_) | Value::Array(_)))
-}
-
-/// JS `String(value)`.
-fn js_string(v: &Value) -> String {
-    match v {
-        Value::Null => "null".into(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => match (n.as_i64(), n.as_u64()) {
-            (Some(i), _) => i.to_string(),
-            (_, Some(u)) => u.to_string(),
-            _ => n.as_f64().map_or_else(String::new, |f| f.to_string()),
-        },
-        Value::String(s) => s.clone(),
-        Value::Array(list) => list
-            .iter()
-            .map(|e| {
-                if e.is_null() {
-                    String::new()
-                } else {
-                    js_string(e)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(","),
-        Value::Object(_) => "[object Object]".into(),
-    }
-}
-
-/// JS `Number(value)` (NaN as NaN); objects and arrays simplified to NaN.
-fn js_number(v: &Value) -> f64 {
-    match v {
-        Value::Null => 0.0,
-        Value::Bool(b) => f64::from(u8::from(*b)),
-        Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
-        Value::String(s) => {
-            let s = s.trim();
-            if s.is_empty() {
-                0.0
-            } else if s == "Infinity" || s == "+Infinity" {
-                f64::INFINITY
-            } else if s == "-Infinity" {
-                f64::NEG_INFINITY
-            } else if s.chars().all(|c| c.is_ascii_digit() || "+-.eE".contains(c)) {
-                s.parse().unwrap_or(f64::NAN)
-            } else {
-                f64::NAN
-            }
-        }
-        _ => f64::NAN,
-    }
 }
 
 /// The JS `x || {}` then a deep copy: a falsy config is an empty object.
@@ -257,7 +208,7 @@ fn set_path(node: &mut Value, parts: &[&str], value: Option<&Value>) -> bool {
 /// fallback, anything that is no number is 0.
 fn delay(value: Option<&Value>, fallback: f64) -> f64 {
     let Some(v) = value else { return fallback };
-    let n = js_number(v);
+    let n = js::number(v);
     if n.is_nan() { 0.0 } else { n.max(0.0) }
 }
 
@@ -289,7 +240,7 @@ pub struct Resolved {
 /// `resolve(cfg)`: the keys that apply to the whole service. A missing key
 /// falls back to its default.
 pub fn resolve(cfg: &Value) -> Resolved {
-    let default = |key: &str| DEFAULTS.get(key).map_or(0.0, js_number);
+    let default = |key: &str| DEFAULTS.get(key).map_or(0.0, js::number);
     Resolved {
         hover_open_delay: delay(get(cfg, "hoverOpenDelay"), default("hoverOpenDelay")),
         hover_close_delay: delay(get(cfg, "hoverCloseDelay"), default("hoverCloseDelay")),
@@ -378,7 +329,7 @@ pub fn notches(cfg: &Value, default_modules: &[&str]) -> Vec<NotchSpec> {
                 String::new()
             },
             module_ids: match pick("modules") {
-                Some(Value::Array(l)) => l.iter().map(js_string).collect(),
+                Some(Value::Array(l)) => l.iter().map(js::string).collect(),
                 _ => default_modules.iter().map(|s| (*s).to_owned()).collect(),
             },
             reserve_space: pick("reserveSpace") == Some(&Value::Bool(true)),
@@ -506,16 +457,16 @@ pub fn with_workspace(list: Option<&[Value]>, ws: Option<&Value>) -> Option<Vec<
     };
     let id = get(ws, "id");
     let name = get(ws, "name");
-    let text = |v: Option<&Value>| v.map_or_else(|| "undefined".to_owned(), js_string);
+    let text = |v: Option<&Value>| v.map_or_else(|| "undefined".to_owned(), js::string);
     if list.iter().any(|e| {
-        let e = js_string(e);
+        let e = js::string(e);
         e == text(id) || e == text(name)
     }) {
         return Some(list.to_vec());
     }
     let name = name
         .filter(|n| !n.is_null())
-        .map(js_string)
+        .map(js::string)
         .unwrap_or_default();
     let value = if is_digits(&name) {
         number_value(name.parse().unwrap_or(f64::NAN))
@@ -534,7 +485,7 @@ pub fn with_workspace(list: Option<&[Value]>, ws: Option<&Value>) -> Option<Vec<
             (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => js_string(a).cmp(&js_string(b)),
+            (None, None) => js::string(a).cmp(&js::string(b)),
         }
     });
     Some(out)

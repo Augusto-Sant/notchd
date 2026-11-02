@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::countdown::js_number;
+use crate::js;
 
 /// `WINDOW_SESSION`: 5 hours, in seconds.
 pub const WINDOW_SESSION: f64 = 18000.0;
@@ -48,7 +48,7 @@ fn num(v: &Value) -> f64 {
     if v.is_null() || v.as_str() == Some("") {
         return f64::NAN;
     }
-    let n = js_number(v);
+    let n = js::number(v);
     if n.is_finite() { n } else { f64::NAN }
 }
 
@@ -61,18 +61,9 @@ fn clamp_percent(p: f64) -> f64 {
 fn text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
-        Value::Number(n) if n.as_f64() != Some(0.0) => num_str(n.as_f64().unwrap_or(f64::NAN)),
+        Value::Number(n) if n.as_f64() != Some(0.0) => js::num_str(n.as_f64().unwrap_or(f64::NAN)),
         Value::Bool(true) => "true".to_string(),
         _ => String::new(),
-    }
-}
-
-/// A number as JS prints it (integers without a fraction).
-fn num_str(n: f64) -> String {
-    if n.is_finite() && n.fract() == 0.0 && n.abs() < 1e21 {
-        format!("{n:.0}")
-    } else {
-        n.to_string()
     }
 }
 
@@ -220,9 +211,9 @@ pub fn window_label(secs: f64) -> String {
     } else if secs == WINDOW_WEEK {
         "Week".to_string()
     } else if secs > 0.0 && secs % 86400.0 == 0.0 {
-        format!("{}d", num_str(secs / 86400.0))
+        format!("{}d", js::num_str(secs / 86400.0))
     } else if secs > 0.0 && secs % 3600.0 == 0.0 {
-        format!("{}h", num_str(secs / 3600.0))
+        format!("{}h", js::num_str(secs / 3600.0))
     } else {
         "Limit".to_string()
     }
@@ -328,7 +319,7 @@ pub fn codex_limits(data: &Value, now: f64) -> Option<Vec<Limit>> {
             0.0
         };
         out.push(Limit {
-            id: format!("codex:{}", num_str(secs)),
+            id: format!("codex:{}", js::num_str(secs)),
             label: window_label(secs),
             percent: clamp_percent(p),
             resets_at,
@@ -511,7 +502,7 @@ pub fn alerts(limits: &[Limit], warned: Option<&BTreeMap<String, f64>>, threshol
     let mut next = BTreeMap::new();
     let mut out = Vec::new();
     for l in limits {
-        let key = format!("{}@{}", l.id, num_str(l.resets_at));
+        let key = format!("{}@{}", l.id, js::num_str(l.resets_at));
         let had = warned.map_or(0.0, |w| {
             w.get(&key).copied().filter(|v| !v.is_nan()).unwrap_or(0.0)
         });

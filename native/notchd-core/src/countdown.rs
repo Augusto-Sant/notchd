@@ -7,70 +7,9 @@
 //! The JS "no state" (`null`) maps to [`State::idle`]: every function that
 //! tolerated `null` there takes an idle state here and answers the same.
 
+use crate::js;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-/// JS `\s` / `String.prototype.trim` whitespace (differs from Rust's
-/// `char::is_whitespace`: U+FEFF counts, U+0085 does not).
-pub(crate) fn js_ws(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{feff}'
-    )
-}
-
-/// JS `Number(string)`: empty is 0, hex/octal/binary prefixes, decimal and
-/// exponent forms, `Infinity`; anything else is NaN.
-pub(crate) fn js_str_to_number(s: &str) -> f64 {
-    let t = s.trim_matches(js_ws);
-    if t.is_empty() {
-        return 0.0;
-    }
-    for (prefix, radix) in [
-        ("0x", 16),
-        ("0X", 16),
-        ("0o", 8),
-        ("0O", 8),
-        ("0b", 2),
-        ("0B", 2),
-    ] {
-        if let Some(rest) = t.strip_prefix(prefix) {
-            return u64::from_str_radix(rest, radix).map_or(f64::NAN, |n| n as f64);
-        }
-    }
-    match t {
-        "Infinity" | "+Infinity" => return f64::INFINITY,
-        "-Infinity" => return f64::NEG_INFINITY,
-        _ => {}
-    }
-    if t.chars().any(|c| c.is_alphabetic() && c != 'e' && c != 'E') {
-        return f64::NAN;
-    }
-    t.parse::<f64>().unwrap_or(f64::NAN)
-}
-
-/// JS `Number(value)` for a JSON value (arrays and objects are NaN here).
-pub(crate) fn js_number(v: &Value) -> f64 {
-    match v {
-        Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
-        Value::String(s) => js_str_to_number(s),
-        Value::Bool(b) => f64::from(u8::from(*b)),
-        Value::Null => 0.0,
-        _ => f64::NAN,
-    }
-}
-
-/// JS `Math.round` (halves go up).
-fn js_round(x: f64) -> f64 {
-    (x + 0.5).floor()
-}
 
 /// `status` of a [`State`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -181,22 +120,22 @@ pub struct PomodoroConfig {
 /// `pomodoroConfig`: the pomodoro settings with their defaults filled in.
 pub fn pomodoro_config(cfg: &PomodoroSettings) -> PomodoroConfig {
     fn minutes(v: &Option<Value>, d: f64) -> f64 {
-        let n = v.as_ref().map_or(f64::NAN, js_number);
+        let n = v.as_ref().map_or(f64::NAN, js::number);
         (if n.is_finite() && n > 0.0 { n } else { d }) * 60000.0
     }
-    let r = cfg.rounds.as_ref().map_or(f64::NAN, js_number);
+    let r = cfg.rounds.as_ref().map_or(f64::NAN, js::number);
     let r = if r.is_nan() || r == 0.0 { 4.0 } else { r };
     PomodoroConfig {
         focus: minutes(&cfg.focus, 25.0),
         short: minutes(&cfg.short_break, 5.0),
         long: minutes(&cfg.long_break, 15.0),
-        rounds: js_round(r).max(1.0) as i64,
+        rounds: js::round(r).max(1.0) as i64,
         auto_advance: cfg.auto_advance != Some(Value::Bool(false)),
     }
 }
 
 fn positive(ms: f64) -> Option<f64> {
-    (ms.is_finite() && ms >= 1000.0).then(|| js_round(ms))
+    (ms.is_finite() && ms >= 1000.0).then(|| js::round(ms))
 }
 
 fn all_digits(s: &str) -> bool {
@@ -228,7 +167,7 @@ fn number_len(s: &str) -> usize {
 /// `parseDuration`: a duration as ms, or `None`: "25" (minutes), "90s",
 /// "25m", "1h", "1h30m", "1h 30m", "1:30" (m:ss), "1:00:00" (h:mm:ss).
 pub fn parse_duration(text: &str) -> Option<f64> {
-    let s = text.trim_matches(js_ws).to_lowercase();
+    let s = text.trim_matches(js::is_ws).to_lowercase();
     if s.is_empty() {
         return None;
     }
@@ -262,7 +201,7 @@ pub fn parse_duration(text: &str) -> Option<f64> {
         let n = number_len(rest);
         if n > 0 {
             let after = &rest[n..];
-            let tail = after.trim_start_matches(js_ws);
+            let tail = after.trim_start_matches(js::is_ws);
             let factor = match tail.chars().next() {
                 Some('h') => Some(3_600_000.0),
                 Some('m') => Some(60_000.0),
@@ -276,7 +215,7 @@ pub fn parse_duration(text: &str) -> Option<f64> {
             }
         }
         let c = rest.chars().next()?;
-        if !js_ws(c) {
+        if !js::is_ws(c) {
             return None;
         }
         i += c.len_utf8();
@@ -310,8 +249,8 @@ const USAGE: &str = "usage: timer <duration> [label] | pomodoro | pause | resume
 
 /// `parseCommand`: the command, or the error text to show (`{ error }`).
 pub fn parse_command(text: &str) -> Result<Command, String> {
-    let s = text.trim_matches(js_ws);
-    let words: Vec<&str> = s.split(js_ws).filter(|w| !w.is_empty()).collect();
+    let s = text.trim_matches(js::is_ws);
+    let words: Vec<&str> = s.split(js::is_ws).filter(|w| !w.is_empty()).collect();
     let word = words.first().map_or(String::new(), |w| w.to_lowercase());
     if s.is_empty() || word == "toggle" {
         return Ok(Command::Toggle);

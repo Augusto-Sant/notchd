@@ -9,18 +9,12 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::js;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// JS truthiness of a JSON value, for members QML fills with objects or strings.
 fn truthy<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
-    use serde_json::Value;
-    Ok(match Value::deserialize(d)? {
-        Value::Null => false,
-        Value::Bool(b) => b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0 && !f.is_nan()),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(_) | Value::Object(_) => true,
-    })
+    Ok(js::truthy(&serde_json::Value::deserialize(d)?))
 }
 
 /// A module as the rules see it (`active`, `priority`, `compact`, `peek`,

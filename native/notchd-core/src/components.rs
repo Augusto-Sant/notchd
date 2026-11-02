@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::js;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -22,36 +23,6 @@ pub const PAGE: &str = "components";
 pub const WHERE: &str = "Settings › Components";
 
 // ---- JS semantics the files lean on ---------------------------------------
-
-/// JS truthiness of a JSON value.
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0 && !f.is_nan()),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(_) | Value::Object(_) => true,
-    }
-}
-
-/// JS `Number(v) || 0` of a JSON value.
-fn number_or_zero(v: &Value) -> f64 {
-    let n = match v {
-        Value::Null => 0.0,
-        Value::Bool(b) => f64::from(u8::from(*b)),
-        Value::Number(n) => n.as_f64().unwrap_or(0.0),
-        Value::String(s) => {
-            let t = s.trim();
-            if t.is_empty() {
-                0.0
-            } else {
-                t.parse().unwrap_or(f64::NAN)
-            }
-        }
-        Value::Array(_) | Value::Object(_) => f64::NAN,
-    };
-    if n.is_nan() { 0.0 } else { n }
-}
 
 /// A field of the type asked for, else `None`.
 fn lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
@@ -72,7 +43,7 @@ where
 }
 
 fn de_truthy<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
-    Ok(truthy(&Value::deserialize(d)?))
+    Ok(js::truthy(&Value::deserialize(d)?))
 }
 
 /// `x !== false`.
@@ -81,7 +52,7 @@ fn de_not_false<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
 }
 
 fn de_number<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
-    Ok(number_or_zero(&Value::deserialize(d)?))
+    Ok(js::number_or_zero(&Value::deserialize(d)?))
 }
 
 fn default_true() -> bool {
@@ -386,13 +357,13 @@ impl Default for ComponentState {
 
 /// The installer's `status` output as `{ id: state }` (`parseStatus`); empty
 /// for anything that is not an object. A falsy entry (`null`...) is as no
-/// entry, a truthy one that is not an object is an empty state.
+/// entry, a js::truthy one that is not an object is an empty state.
 pub fn parse_status(text: &str) -> BTreeMap<String, ComponentState> {
     let Ok(Value::Object(data)) = serde_json::from_str::<Value>(text) else {
         return BTreeMap::new();
     };
     data.into_iter()
-        .filter(|(_, v)| truthy(v))
+        .filter(|(_, v)| js::truthy(v))
         .map(|(id, v)| {
             let st = match v {
                 Value::Object(_) => ComponentState::deserialize(v).unwrap_or_default(),
@@ -531,15 +502,6 @@ pub struct View {
     pub actions: Vec<Action>,
 }
 
-/// A JS number as text: integers without a fraction.
-fn num_text(n: f64) -> String {
-    if n.fract() == 0.0 {
-        format!("{n:.0}")
-    } else {
-        n.to_string()
-    }
-}
-
 /// What a row shows of one component (`view`). `st` is the installer's state
 /// of it, `None` until read; `shared` is [`shares_backend`].
 pub fn view(component: &Component, st: Option<&ComponentState>, shared: bool) -> View {
@@ -560,7 +522,7 @@ pub fn view(component: &Component, st: Option<&ComponentState>, shared: bool) ->
         out.state = ViewState::Working;
         out.percent = st.percent.unwrap_or(-1.0);
         let pct = if out.percent >= 0.0 {
-            format!(" {} %", num_text(out.percent))
+            format!(" {} %", js::num_str(out.percent))
         } else {
             String::new()
         };
@@ -767,11 +729,11 @@ pub fn expand(f: &Value, catalog: &[Component]) -> Vec<Value> {
             row.insert("type".into(), json!("component"));
             row.insert("component".into(), json!(c.id));
             for key in ["section", "page"] {
-                if let Some(v) = f.get(key).filter(|v| truthy(v)) {
+                if let Some(v) = f.get(key).filter(|v| js::truthy(v)) {
                     row.insert(key.into(), v.clone());
                 }
             }
-            if let Some(by) = f.get("by").filter(|v| truthy(v)) {
+            if let Some(by) = f.get("by").filter(|v| js::truthy(v)) {
                 let mut when = Map::new();
                 when.insert("key".into(), by.get("key").cloned().unwrap_or(Value::Null));
                 if let Some(is) = by
@@ -935,7 +897,7 @@ pub fn decorate(
                     return f;
                 };
                 let mut out = f.clone();
-                let has = |k: &str| f.get(k).is_some_and(truthy);
+                let has = |k: &str| f.get(k).is_some_and(js::truthy);
                 if !has("label") {
                     out["label"] = json!(c.title);
                 }
@@ -945,7 +907,7 @@ pub fn decorate(
                 return out;
             }
             match installed {
-                Some(installed) if f.get("options").is_some_and(truthy) => {
+                Some(installed) if f.get("options").is_some_and(js::truthy) => {
                     lock(&f, catalog, installed, &|o| needed(o, catalog, None, true))
                 }
                 _ => f,
@@ -972,7 +934,7 @@ pub fn gate(
     schema
         .iter()
         .map(|f| {
-            if !f.get("options").is_some_and(truthy) {
+            if !f.get("options").is_some_and(js::truthy) {
                 return f.clone();
             }
             lock(f, catalog, installed, &|o| {
