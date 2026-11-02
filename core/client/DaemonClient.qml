@@ -88,9 +88,13 @@ QtObject {
 
   // Connects now, skipping the backoff. A no-op while connected to `socketPath`.
   function connectNow() {
-    retryTimer.stop()
     if (!client.enabled || client.socketPath === "" || client._status === "refused") return
-    if (socket.connected && socket.path === client.socketPath) return
+    // Up (or saying hello) on this path: nothing to do. Not `socket.connected`:
+    // that is the state asked for, true during an attempt that may yet fail,
+    // and returning on it (with the retry stopped) left the client with no
+    // attempt pending at all.
+    if (client._status !== "disconnected" && socket.path === client.socketPath) return
+    retryTimer.stop()
     client._restarting = true
     socket.connected = false
     client._restarting = false
@@ -152,6 +156,22 @@ QtObject {
     retryTimer.interval = Protocol.backoff(client._attempts, client.reconnectMin, client.reconnectMax)
     client._attempts++
     retryTimer.start()
+  }
+
+  // Asks for an attempt on the backoff unless one is pending; a no-op while up.
+  function ensureRetry() {
+    if (client._status === "disconnected") client._scheduleRetry()
+  }
+
+  // Drops a connection that said hello and never got a welcome, and tries
+  // again: the socket answered but no daemon behind it does.
+  function reconnect() {
+    if (client.ready || client._status === "refused") return
+    client._restarting = true
+    socket.connected = false
+    client._restarting = false
+    client._status = "disconnected"
+    client.connectNow()
   }
 
   function _closed() {

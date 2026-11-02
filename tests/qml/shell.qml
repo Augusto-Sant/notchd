@@ -165,6 +165,7 @@ ShellRoot {
       { name: "daemon: a settings edit goes to the daemon and comes back; defaults are never written; a slider drag is one write", run: root.daemonSettingsRoundTrip },
       { name: "daemon: ipc set answers as before, the daemon's own ipc set and a hand edit of the file reach the UI, a bad file is ignored", run: root.daemonIpcAndFile },
       { name: "daemon: killed, the notch says notchd is not running, the config stays, an edit waits, and it all comes back", run: root.daemonDownAndBack },
+      { name: "daemon: SIGKILLed with nothing else happening, it comes back by itself", run: root.daemonKilledComesBack },
       { name: "components: the settings rows show the installer's state, install, cancel and remove (twice) through it, and lock a voice until it is installed", run: root.componentRows }
     ]
     // scripts/qml-test.sh runs the cases in shards at once: NOTCHD_QMLTEST_CASES
@@ -2601,6 +2602,14 @@ ShellRoot {
     defaultModules: ["activities"]
   }
   TestService {
+    id: killedSvc
+    ipcTarget: "notchd-qmltest-killed"
+    configPath: root.dir + "/killed.json"
+    compositor: workspace4
+    defaultModules: ["activities"]
+    daemonDownDelay: 150
+  }
+  TestService {
     id: downSvc
     ipcTarget: "notchd-qmltest-down"
     configPath: root.dir + "/down.json"
@@ -2755,6 +2764,24 @@ ShellRoot {
           }, 8000)
         }, 5000)
       })
+    })
+  }
+
+  // Bug: the daemon killed (SIGKILL) while nothing else happened never came
+  // back into the notch: "notchd not running" stayed until a settings edit
+  // nudged the client. Only a graceful shutdown with an edit meanwhile was
+  // tested.
+  function daemonKilledComesBack() {
+    var s = killedSvc
+    root.until(function() { return s.daemonReady }, function() {
+      root.run(["pkill", "-KILL", "-f", "--socket " + s.daemonSocket])
+      root.until(function() { return s.daemonDown }, function() {
+        root.until(function() { return s.client.ready && !s.daemonDown }, function() {
+          root.check(s.client.ready && !s.daemonDown, "the daemon did not come back into the notch: client " + s.client.status
+                     + ", launcher " + s.launcher.state + " " + s.launcher.error)
+          root.done()
+        }, 10000)
+      }, 5000)
     })
   }
 }

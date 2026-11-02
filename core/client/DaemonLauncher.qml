@@ -140,5 +140,22 @@ QtObject {
     }
   }
 
+  // While the daemon is away there is always an attempt pending: whatever
+  // race left the client with none (a reconnect asked for while an attempt
+  // that then failed was in flight), it tries again within a few seconds.
+  readonly property Timer keepTrying: Timer {
+    interval: 2000
+    repeat: true
+    running: launcher.enabled && !connectionClient.ready && launcher._state === "ready"
+    property int helloTicks: 0
+    onRunningChanged: helloTicks = 0
+    onTriggered: {
+      // Hello sent two ticks ago and still no welcome: start over.
+      helloTicks = connectionClient.status === "connecting" ? helloTicks + 1 : 0
+      if (helloTicks >= 2) { helloTicks = 0; connectionClient.reconnect() }
+      else connectionClient.ensureRetry()
+    }
+  }
+
   Component.onCompleted: launcher.start()
 }

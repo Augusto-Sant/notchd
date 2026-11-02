@@ -137,6 +137,8 @@ ShellRoot {
       { name: "client: pointer, key, event, set, edit and ipc reach the daemon; requests get their replies", run: root.sendsAndReplies },
       { name: "client: the daemon restarting is survived: requests fail while it is down, then it reconnects and the revs start over", run: root.reconnects },
       { name: "client: a daemon that is not there yet is waited for, with backoff", run: root.daemonLate },
+      { name: "client: a refused connection (a dead daemon's socket file) is retried, not given up", run: root.refusedRetried },
+      { name: "launcher: with the daemon away and no attempt pending, it still reconnects when the daemon is back", run: root.launcherNeverGivesUp },
       { name: "client: a protocol refusal is an error state, with no retry", run: root.refusal },
       { name: "launcher: the socket path the start script prints is connected to", run: root.launcherStarts },
       { name: "launcher: a start script that fails leaves the client idle and the error readable", run: root.launcherFails }
@@ -368,6 +370,47 @@ ShellRoot {
       root.check(l.state === "failed" && l.error === "notchd not found", "state " + l.state + ", error " + l.error)
       root.check(l.client.status === "disconnected" && l.client.socketPath === "", "the client has a path: " + l.client.socketPath)
       root.done()
+    })
+  }
+
+  // Bug: a daemon killed with SIGKILL leaves its socket file; connecting to
+  // it is refused, and the client stopped retrying after that one refusal,
+  // so the daemon the launcher brought back was never reached ("notchd not
+  // running" stayed until a settings edit). It keeps retrying on its backoff.
+  Process { id: staleMaker }
+  function refusedRetried() {
+    var path = root.socketPath + ".stale"
+    staleMaker.command = ["python3", "-c", "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])", path]
+    staleMaker.running = true
+    root.later(400, function() {
+      var c = root.client(path)
+      root.until(function() { return c.attempts >= 4 }, function() {
+        root.check(c.attempts >= 4 && c.status === "disconnected", "gave up after " + c.attempts + " refused attempts, status " + c.status)
+        root.done()
+      }, 6000)
+    })
+  }
+
+  // Bug: after the daemon was killed, a race left the client with no attempt
+  // pending (a reconnect asked for during an attempt that then failed), and
+  // nothing ever tried again: "notchd not running" stayed with the daemon back
+  // and listening. Here that state is made by hand: every pending attempt
+  // stopped while the daemon is away. The launcher must still reconnect.
+  function launcherNeverGivesUp() {
+    var l = root.launcher('printf "%s\\n" "$NOTCHD_QMLTEST_SOCKET"')
+    root.until(function() { return l.client.ready }, function() {
+      root.control({ cmd: "restart", downMs: 2500 })
+      root.until(function() { return !l.client.ready }, function() {
+        root.later(900, function() {
+          // The lost-retry state: nothing pending in the client or the launcher.
+          l.client.retryTimer.stop()
+          l.restartTimer.stop()
+          root.until(function() { return l.client.ready }, function() {
+            root.check(l.client.ready, "never reconnected: " + l.client.status + " after " + l.client.attempts + " attempts")
+            root.done()
+          }, 9000)
+        })
+      })
     })
   }
 }
