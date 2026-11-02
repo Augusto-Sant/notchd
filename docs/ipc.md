@@ -61,7 +61,7 @@ o.bind("SUPER + N", "Navigate notches", "omarchy-shell eryk.notchd navigate")   
 bind = SUPER, N, exec, qs -p <checkout> ipc call notchd navigate   # standalone, hyprland.conf
 ```
 
-The rules are `core/Navigate.js`, tested in `tests/navigate.test.mjs`.
+The daemon decides it all (`native/notchd-core/src/navigate.rs`, driven by the `key` messages the navigation window sends); the QML only draws the highlight.
 
 ## Activities
 

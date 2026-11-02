@@ -46,7 +46,7 @@ The same idea for the decisions in `core/*.js` and `core/settings/Settings.js`,
 which have a Rust port in `native/notchd-core/`. While both exist they must
 agree: this is the differential check of `docs/architecture.md`, Phase 1.
 
-One file per JS file: `config`, `settings`, `state`, `navigate`, `position`
+One file per JS file: `config`, `settings`, `position`
 (the config half: `resolve`, `configValue`, `isEdge`, `isVertical`; the
 geometry half is `geometry/position.json`), `countdown`, `usage`,
 `resources`, `agent`, `live`, `components`, `terminal`. Each is
@@ -68,7 +68,7 @@ geometry half is `geometry/position.json`), `countdown`, `usage`,
   expected result (`valueAt` of a missing key, `toggleWorkspace` of the last
   workspace).
 
-`tests/vectors-rules.test.mjs` runs every case against the JS;
+`state.json` and `navigate.json` are Rust-only now (their JS, `State.js` and `Navigate.js`, went in 3.2). `tests/vectors-rules.test.mjs` runs every case against the JS;
 `native/notchd-core/tests/vectors.rs` runs them against the Rust. The `fn`
 dispatch and the argument and result adapters are `tests/vectors/rules/adapt.mjs`
 (JS) and `native/notchd-core/tests/vectors/<file>.rs` (Rust). A case never

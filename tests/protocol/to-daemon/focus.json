@@ -1,0 +1,11 @@
+{
+ "message": "focus",
+ "valid": [
+  {"t":"focus","notch":"main","screen":"DP-1","active":true},
+  {"t":"focus","notch":"main","screen":"","active":false}
+ ],
+ "invalid": [
+  {"why":"active is not a bool","json":{"t":"focus","notch":"main","screen":"DP-1","active":1}},
+  {"why":"screen missing","json":{"t":"focus","notch":"main","active":true}}
+ ]
+}

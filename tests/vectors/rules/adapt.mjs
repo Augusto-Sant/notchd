@@ -7,8 +7,6 @@ import { load, plain } from '../../load.mjs';
 export const SOURCES = {
   'config.json': 'core/Config.js',
   'settings.json': 'core/settings/Settings.js',
-  'state.json': 'core/State.js',
-  'navigate.json': 'core/Navigate.js',
   'position.json': 'core/Position.js',
   'countdown.json': 'core/Countdown.js',
   'usage.json': 'core/Usage.js',
@@ -29,10 +27,7 @@ export const encode = (v) => (v === undefined ? { $undefined: true } : plain(v))
 const FIXED = ['the config must be a JSON object', 'not an object', 'agent: needs a command', 'live: needs a command'];
 const message = (e) => (e === undefined || FIXED.includes(e) ? e : 'syntax');
 
-// State rules return the modules they were given; a case names them by `id`
-// and the result is the ids (a module is an object whose identity JSON lacks).
 const id = (x) => (x ? x.id : null);
-const ids = (l) => l.map(id);
 
 const before = {
   'components.json': {
@@ -44,18 +39,6 @@ const before = {
   },
   'live.json': {
     localPath: (m) => (url, dir) => { try { return m.localPath(url, dir); } catch (e) { if (e.name !== 'URIError') throw e; return ''; } }
-  },
-  'state.json': {
-    activeModules: (m) => (mods) => ids(m.activeModules(mods)),
-    compactModule: (m) => (active) => id(m.compactModule(active)),
-    compactModules: (m) => (active, tabs, icons) => ids(m.compactModules(active, tabs, icons)),
-    attentionPeek: (m) => (mods) => id(m.attentionPeek(mods)),
-    // `current` is the module peeking: the same object as `module` when ids match.
-    canPeek: (m) => (module, s) => m.canPeek(module, { ...s, current: s.current && module && s.current.id === module.id ? module : s.current }),
-    shownModules: (m) => (mods, tabs, picked) => {
-      const r = m.shownModules(mods, tabs, picked);
-      return { modules: ids(r.modules), tabs: ids(r.tabs) };
-    }
   },
   'config.json': {
     reservedKeys: (m) => () => m.RESERVED_KEYS

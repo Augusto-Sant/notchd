@@ -1,9 +1,8 @@
 import QtQuick
 import Quickshell
 import Quickshell.Wayland
-import "State.js" as State
 import "Position.js" as Position
-import "Navigate.js" as Navigate
+import "client/Protocol.js" as Protocol
 
 // Puts the notches on screen: a NotchWindow for every copy of every notch
 // (NotchService.copies), which places it and routes its pointer, plus the
@@ -15,8 +14,8 @@ import "Navigate.js" as Navigate
 // notches there, which hide until it goes.
 //
 // With reserveSpace on, an empty window per screen edge holds a layer-shell
-// exclusive zone as deep as the deepest closed notch there (ReservedSpace,
-// State.reserveZones), so windows tile clear of them and two notches on one
+// exclusive zone as deep as the deepest closed notch there (the daemon's
+// `state.reserve`), so windows tile clear of them and two notches on one
 // edge don't add up. The compositor stacks it inside the host bar's own
 // zone, where the notch hangs.
 Item {
@@ -104,8 +103,10 @@ Item {
   }
 
   // ------------------------------------------------------- reserved space
-  // { "<screen>|<edge>": px } over every copy's reserve.
-  readonly property var zones: State.reserveZones(root.windows.map(function(w) { return w.reserve }))
+  // { "<screen>|<edge>": px }: what the daemon says to keep clear, the
+  // deepest closed notch on each edge of each screen. Held as it was while
+  // the daemon is away.
+  readonly property var zones: root.svc ? root.svc.reserveZones : ({})
 
   // A mapped layer surface does not take new anchors (the strip stayed on
   // the old edge), so each window is one screen edge, and a notch moving to
@@ -155,7 +156,8 @@ Item {
   // ------------------------------------------------------------ navigation
   // While navigating (NotchService.navigating), a window on the focused
   // screen holds the keyboard, exclusively, and hands each key to the
-  // service (Navigate.keyName, NotchService.navKey). It draws nothing and
+  // service (Protocol.wireKey, NotchService.navKey), the daemon deciding what
+  // it does. It draws nothing and
   // takes no pointer: the notches show the highlight. A window taking the
   // keyboard from it ends navigation, as Escape does.
   LazyLoader {
@@ -191,13 +193,13 @@ Item {
           else if (navWindow.held && navLoader.owner) navLoader.owner.endNavigation(true)
         }
         Keys.onPressed: function(event) {
-          var key = Navigate.keyName(event.key, event.modifiers)
+          var key = Protocol.wireKey(event.key, event.modifiers)
           var service = navLoader.owner
-          if (key === "" || !service) return
+          if (key.key === "" || !service) return
           event.accepted = true
           // Later: Enter and Escape end navigation, which takes this window
           // away under its own key handler.
-          Qt.callLater(function() { service.navKey(key) })
+          Qt.callLater(function() { service.navKey(key.key, key.mods) })
         }
       }
     }

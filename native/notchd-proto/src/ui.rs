@@ -86,6 +86,18 @@ pub enum ToDaemon {
     Pointer(Pointer),
     #[serde(rename = "drag")]
     Drag(Drag),
+    #[serde(rename = "pin")]
+    Pin(Pin),
+    #[serde(rename = "focus")]
+    Focus(Focus),
+    #[serde(rename = "facts")]
+    Facts(Facts),
+    #[serde(rename = "peek")]
+    Peek(PeekRequest),
+    #[serde(rename = "peek-dismiss")]
+    PeekDismiss(PeekDismiss),
+    #[serde(rename = "module-notch")]
+    ModuleNotch(ModuleNotch),
     #[serde(rename = "key")]
     Key(Key),
     #[serde(rename = "event")]
@@ -119,6 +131,12 @@ impl ToDaemon {
         "screens",
         "pointer",
         "drag",
+        "pin",
+        "focus",
+        "facts",
+        "peek",
+        "peek-dismiss",
+        "module-notch",
         "key",
         "event",
         "tab",
@@ -134,7 +152,19 @@ impl ToDaemon {
     ];
 }
 
-impl Validate for ToDaemon {}
+impl Validate for ToDaemon {
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            ToDaemon::Drag(d) if d.ev == DragEv::Drop && d.position.is_none() => {
+                Err("drag drop needs a position".into())
+            }
+            ToDaemon::Drag(d) if d.ev != DragEv::Drop && d.position.is_some() => {
+                Err("only a drop has a position".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
 
 /// What the UI can draw. Names are strings so a UI may list primitives a
 /// daemon does not know yet.
@@ -279,10 +309,14 @@ pub struct Pointer {
     pub ev: PointerEv,
 }
 
+/// `start`: the card is picked up (it stays closed and nothing opens it);
+/// `drop`: it landed at `position`; `cancel`: it was let go where it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DragEv {
+    Start,
     Drop,
+    Cancel,
 }
 
 /// Where a notch was dropped.
@@ -298,7 +332,95 @@ pub struct Drag {
     pub notch: String,
     pub screen: String,
     pub ev: DragEv,
-    pub position: DropPosition,
+    /// Only for a `drop`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<DropPosition>,
+}
+
+/// A copy pinned open or closed by something other than a click on it: a
+/// click away from it, Escape, a module that wants the keyboard. `on: false`
+/// also ends its hover (`NotchCopy.close`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Pin {
+    pub notch: String,
+    pub screen: String,
+    pub on: bool,
+}
+
+/// A copy's window gained (`active`) or lost the keyboard. The core keeps
+/// whether it had it, and answers with `keyboard` and, when a window took the
+/// keyboard from an open notch, by closing it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Focus {
+    pub notch: String,
+    pub screen: String,
+    pub active: bool,
+}
+
+/// One module the UI loads itself, as the rules see it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleFacts {
+    pub id: String,
+    pub priority: i32,
+    pub active: bool,
+    /// Has a `compact` view.
+    pub compact: bool,
+    /// Has a `peek` view.
+    pub peek: bool,
+    /// Has an icon to show closed.
+    pub icon: bool,
+    /// Has an `expanded` view.
+    pub expanded: bool,
+    /// News not seen yet.
+    pub attention: bool,
+    pub urgent_peek: bool,
+    pub peek_on_focused_screen: bool,
+    /// Has a notch of its own.
+    pub standalone: bool,
+}
+
+/// The facts of every module the UI loads itself (a user module's come from
+/// its process): replaces the last list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Facts {
+    pub modules: Vec<ModuleFacts>,
+}
+
+/// `NotchModule.requestPeek`: the module asks to peek for `ms` (the default
+/// when absent).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PeekRequest {
+    pub module: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<Num>,
+}
+
+/// `NotchModule.dismissPeek`: the module's peek goes (every peek when
+/// absent).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PeekDismiss {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModuleOp {
+    /// `openNotch`: the first notch that shows the module opens on its tab.
+    Open,
+    /// `closeNotch`: every notch that shows it closes.
+    Close,
+    /// `requestKeyboard`: every copy open on the module pins, so its window
+    /// takes the keyboard.
+    Keyboard,
+}
+
+/// A module acts on the notches that show it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModuleNotch {
+    pub module: String,
+    pub op: ModuleOp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -354,8 +476,14 @@ pub struct SettingsOpen {
 /// page has, what a notch's module list says). It replaces the last list; a
 /// user module's own entry (from its `module.json`) is not in it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Catalog {
     pub modules: Vec<Value>,
+    /// What a notch lists when the config lists none: the host's
+    /// `defaultModules` (the daemon's own pair, `media` and `activities`,
+    /// when absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_modules: Option<Vec<String>>,
 }
 
 /// The reserve target the UI now has mapped.

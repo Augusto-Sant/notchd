@@ -1,6 +1,6 @@
 //! The `state` entity: notches and their copies, navigation and reserve targets.
 
-use crate::common::{Edge, Mode, Slot};
+use crate::common::{Edge, KeyboardFocus, Mode, Slot};
 use crate::num::Num;
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +11,10 @@ pub struct State {
     pub rev: u64,
     pub navigation: Option<Navigation>,
     pub settings_open: bool,
+    /// The settings window's page (`general`, `notch/1`, ...): what the
+    /// window shows while it is open, and what a UI opens it on when the core
+    /// opens it (navigation's `s`, `ipc settings`).
+    pub settings_page: String,
     pub notches: Vec<Notch>,
     pub reserve: Vec<Reserve>,
     pub standalone: Vec<Standalone>,
@@ -62,9 +66,15 @@ pub struct Copy {
     pub tab: String,
     pub peek: Option<Peek>,
     pub shown: Vec<String>,
+    /// The modules the closed notch shows side by side (`State.compactModules`).
+    pub compact: Vec<String>,
+    /// The modules to make tabs of; empty for none (`State.shownModules`).
+    pub tabs: Vec<String>,
+    /// Hung nowhere: a notch kept to a screen whose workspace is not shown.
     pub covered: bool,
     pub needs_window: bool,
-    pub keyboard: bool,
+    /// What the copy's window asks of the keyboard.
+    pub keyboard: KeyboardFocus,
 }
 
 /// While set, the UI shows the module's `view` slot; the core clears it.
@@ -96,7 +106,12 @@ pub struct Standalone {
 pub struct StandaloneCopy {
     pub screen: String,
     pub mode: Mode,
+    /// Pinned open by a press on it.
+    pub pinned: bool,
     pub peek: Option<Peek>,
+    /// What it shows while open: the expanded views of its modules.
+    pub shown: Vec<String>,
     /// `State.needsWindow` for a guest: only while open and for 5 s after.
     pub needs_window: bool,
+    pub keyboard: KeyboardFocus,
 }

@@ -22,8 +22,9 @@ NotchService {
   readonly property string daemonName: String(test.configPath).replace(/^.*\//, "").replace(/\.json$/, "")
   readonly property string daemonSocket: test.socketDir + "/" + test.daemonName + ".sock"
 
-  // The daemon up and its config in: what a case waits for before it starts.
-  readonly property bool daemonReady: test.client.ready && test.configResolved
+  // The daemon up, its config and its first `state` in (the notches exist
+  // once it has said so): what a case waits for before it starts.
+  readonly property bool daemonReady: test.client.ready && test.configResolved && test.notchState !== null
 
   daemonDownDelay: 400
   daemonCommand: [test.daemonBin, "--socket", test.daemonSocket, "--config", test.configPath, "daemon", "--ensure"]

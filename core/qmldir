@@ -5,9 +5,9 @@ NotchSurface 1.0 NotchSurface.qml
 HyprlandCompositor 1.0 HyprlandCompositor.qml
 GenericCompositor 1.0 GenericCompositor.qml
 NotchCard 1.0 NotchCard.qml
-ReservedSpace 1.0 ReservedSpace.qml
 Notch 1.0 Notch.qml
 NotchCopy 1.0 NotchCopy.qml
+DepthReport 1.0 DepthReport.qml
 NotchWindow 1.0 NotchWindow.qml
 TerminalModule 1.0 TerminalModule.qml
 AgentUsage 1.0 AgentUsage.qml

@@ -50,6 +50,65 @@ function key(notch, screen, name, mods, text) {
   return { t: "key", notch: notch, screen: screen, key: name, mods: mods || [], text: text || "" }
 }
 
+// A copy of a notch is named by its notch's id (a standalone module's by its
+// module id, the visitor's by "") and its screen ("" for the one that moves).
+// Input facts, no reply (docs/architecture.md, "UI to core").
+function pin(notch, screen, on) { return { t: "pin", notch: notch, screen: screen, on: !!on } }
+function focus(notch, screen, active) { return { t: "focus", notch: notch, screen: screen, active: !!active } }
+function tab(notch, screen, module) { return { t: "tab", notch: notch, screen: screen, module: module } }
+
+// `ev` is "start", "drop" (with `position`: { edge, offset, screen }) or "cancel".
+function drag(notch, screen, ev, position) {
+  var msg = { t: "drag", notch: notch, screen: screen, ev: ev }
+  if (position) msg.position = { edge: position.edge, offset: position.offset, screen: position.screen }
+  return msg
+}
+
+// The depths one copy measured (docs/architecture.md, `measure`).
+function measure(notch, screen, rest, compact, baseline) {
+  return { t: "measure", notch: notch, screen: screen, rest: rest, compact: compact, baseline: baseline }
+}
+
+// What the modules the UI loads say of themselves, `modules` a list of
+// { id, priority, active, compact, peek, icon, expanded, attention, urgentPeek,
+// peekOnFocusedScreen, standalone }.
+function facts(modules) { return { t: "facts", modules: modules } }
+
+// A module asks to peek (`ms` optional) or drops its peek (`module` optional: every peek).
+function peek(module, ms) {
+  var msg = { t: "peek", module: module }
+  if (ms !== undefined && ms !== null) msg.ms = Number(ms)
+  return msg
+}
+function peekDismiss(module) {
+  return module ? { t: "peek-dismiss", module: module } : { t: "peek-dismiss" }
+}
+
+// A module acts on the notches that show it: `op` is "open", "close" or "keyboard".
+function moduleNotch(module, op) { return { t: "module-notch", module: module, op: op } }
+
+// A key the way the daemon reads it (`key`'s `key` and `mods`) out of a Qt
+// key code and modifier flags (Qt.Key_*, Qt.*Modifier), so the notch's
+// navigation window needs no table of its own: the name ("Escape", "Tab",
+// "Backtab", "Return", "Enter", "Left", "Up", "Right", "Down", or one
+// printable ASCII character, lower case) and the modifiers held (["shift",
+// "ctrl", "alt", "meta"]). `key` is "" for a key the daemon has no name for.
+var QT_KEYS = {
+  0x01000000: "Escape", 0x01000001: "Tab", 0x01000002: "Backtab", 0x01000004: "Return", 0x01000005: "Enter",
+  0x01000012: "Left", 0x01000013: "Up", 0x01000014: "Right", 0x01000015: "Down"
+}
+function wireKey(code, modifiers) {
+  modifiers = Number(modifiers) || 0
+  var key = QT_KEYS[code] || ""
+  if (key === "" && code >= 0x20 && code <= 0x7e) key = String.fromCharCode(code).toLowerCase()
+  var mods = []
+  if (modifiers & 0x02000000) mods.push("shift")
+  if (modifiers & 0x04000000) mods.push("ctrl")
+  if (modifiers & 0x08000000) mods.push("alt")
+  if (modifiers & 0x10000000) mods.push("meta")
+  return { key: key, mods: mods }
+}
+
 // `value` is always present: a missing one goes as null.
 function event(module, slot, action, value) {
   return { t: "event", module: module, slot: slot, action: action, value: value === undefined ? null : value }

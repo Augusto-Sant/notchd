@@ -10,7 +10,7 @@ NOTCHD_CONFIG=~/notchd-test.json qs -p ~/.local/share/notchd   # another config 
 
 Start it with your session, e.g. Hyprland's `exec-once = qs -p ~/.local/share/notchd`.
 
-It also starts the notchd daemon (see [hosts.md](hosts.md#the-daemon)): `scripts/ensure-daemon.sh` needs the `notchd` binary on your `PATH`, in `$NOTCHD_BIN`, or in `~/.local/share/notchd/bin/` (`make daemon` builds it into `native/target/release/`). The daemon runs in shadow for now; without a binary the log says so once and nothing else changes. It stays running after the shell exits; `notchd ipc shutdown` stops it.
+It also starts the notchd daemon (see [hosts.md](hosts.md#the-daemon)): `scripts/ensure-daemon.sh` needs the `notchd` binary on your `PATH`, in `$NOTCHD_BIN`, or in `~/.local/share/notchd/bin/` (`make daemon` builds it into `native/target/release/`). The daemon decides the notches' state: without a binary the log says so once and the notch shows "notchd not running". It stays running after the shell exits; `notchd ipc shutdown` stops it.
 
 Differences from the Omarchy host:
 

@@ -1,0 +1,12 @@
+{
+ "message": "module-notch",
+ "valid": [
+  {"t":"module-notch","module":"timer","op":"open"},
+  {"t":"module-notch","module":"timer","op":"close"},
+  {"t":"module-notch","module":"claude","op":"keyboard"}
+ ],
+ "invalid": [
+  {"why":"op is not open, close or keyboard","json":{"t":"module-notch","module":"timer","op":"toggle"}},
+  {"why":"module missing","json":{"t":"module-notch","op":"open"}}
+ ]
+}

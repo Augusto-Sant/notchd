@@ -20,7 +20,7 @@
 use crate::modhost::{ModEvent, ModHost};
 use crate::modstate::Mods;
 use crate::router;
-use notchd_core::store::{Changes, DEFAULT_MODULES, Store};
+use notchd_core::store::{Changes, Store};
 use notchd_proto::module::ModuleEvent;
 use notchd_proto::ui::Welcome;
 use notchd_proto::version::PROTO;
@@ -396,7 +396,9 @@ impl Hub {
     fn sync_host(&self, g: &mut Inner) {
         let Some(host) = self.host() else { return };
         let cfg = g.store.config().clone();
-        let listed: Vec<String> = notchd_core::config::notches(&cfg, &DEFAULT_MODULES)
+        let listed: Vec<String> = g
+            .store
+            .notch_specs()
             .into_iter()
             .flat_map(|n| n.module_ids)
             .collect();

@@ -21,6 +21,17 @@ pub enum Mode {
     Expanded,
 }
 
+/// The keyboard interactivity a copy's window takes (`State.keyboardFocus`):
+/// `none`, `exclusive` (until its window has the keyboard) or `ondemand`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyboardFocus {
+    None,
+    Exclusive,
+    #[serde(rename = "ondemand")]
+    OnDemand,
+}
+
 /// A module's view slots (`NotchModule`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

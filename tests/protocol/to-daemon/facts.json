@@ -1,0 +1,12 @@
+{
+ "message": "facts",
+ "valid": [
+  {"t":"facts","modules":[{"id":"media","priority":50,"active":true,"compact":true,"peek":true,"icon":false,"expanded":true,"attention":false,"urgentPeek":false,"peekOnFocusedScreen":false,"standalone":false}]},
+  {"t":"facts","modules":[]}
+ ],
+ "invalid": [
+  {"why":"modules missing","json":{"t":"facts"}},
+  {"why":"a module without an id","json":{"t":"facts","modules":[{"priority":50,"active":true,"compact":true,"peek":true,"icon":false,"expanded":true,"attention":false,"urgentPeek":false,"peekOnFocusedScreen":false,"standalone":false}]}},
+  {"why":"active is not a bool","json":{"t":"facts","modules":[{"id":"media","priority":50,"active":"yes","compact":true,"peek":true,"icon":false,"expanded":true,"attention":false,"urgentPeek":false,"peekOnFocusedScreen":false,"standalone":false}]}}
+ ]
+}

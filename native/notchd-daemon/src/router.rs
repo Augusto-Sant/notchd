@@ -4,8 +4,10 @@
 
 use crate::testhooks;
 use notchd_core::navigate;
-use notchd_core::store::{EditOp, Store};
+use notchd_core::state::ModuleInfo;
+use notchd_core::store::{EditOp, ModuleFacts, Store};
 use notchd_proto::request::{EditOp as WireOp, ErrReply, OkReply};
+use notchd_proto::ui::DragEv;
 use notchd_proto::version::IPC_METHODS;
 use notchd_proto::{ToDaemon, ToUi};
 use serde_json::Value;
@@ -35,25 +37,57 @@ pub fn route(store: &mut Store, msg: &ToDaemon, now: u64) -> Vec<ToUi> {
         ToDaemon::Key(k) => store.key(&k.key, &k.mods, now),
         ToDaemon::Tab(t) => store.tab(&t.notch, &t.screen, &t.module, now),
         ToDaemon::Settings(s) => store.settings(s.open, s.page.clone()),
-        ToDaemon::Catalog(c) => store.set_ui_catalog(c.modules.clone()),
+        ToDaemon::Catalog(c) => store.set_ui_catalog(c.modules.clone(), c.default_modules.clone()),
         ToDaemon::Measure(m) => {
             store.measure(&m.notch, &m.screen, m.rest.0, m.compact.0, m.baseline.0)
         }
-        ToDaemon::Drag(d) => store.drop_notch(
-            &d.notch,
-            &d.screen,
-            navigate::Position {
-                edge: match d.position.edge {
-                    notchd_proto::common::Edge::Top => navigate::Edge::Top,
-                    notchd_proto::common::Edge::Bottom => navigate::Edge::Bottom,
-                    notchd_proto::common::Edge::Left => navigate::Edge::Left,
-                    notchd_proto::common::Edge::Right => navigate::Edge::Right,
+        ToDaemon::Drag(d) => match (d.ev, &d.position) {
+            (DragEv::Start, _) => store.drag_start(&d.notch, &d.screen, now),
+            (DragEv::Cancel, _) => store.drag_cancel(&d.notch, &d.screen, now),
+            (DragEv::Drop, Some(p)) => store.drop_notch(
+                &d.notch,
+                &d.screen,
+                navigate::Position {
+                    edge: match p.edge {
+                        notchd_proto::common::Edge::Top => navigate::Edge::Top,
+                        notchd_proto::common::Edge::Bottom => navigate::Edge::Bottom,
+                        notchd_proto::common::Edge::Left => navigate::Edge::Left,
+                        notchd_proto::common::Edge::Right => navigate::Edge::Right,
+                    },
+                    offset: p.offset.0,
+                    screen: p.screen.clone(),
                 },
-                offset: d.position.offset.0,
-                screen: d.position.screen.clone(),
-            },
-            now,
+                now,
+            ),
+            // A drop without a position fails validation before it gets here.
+            (DragEv::Drop, None) => {}
+        },
+        ToDaemon::Pin(p) => store.pin(&p.notch, &p.screen, p.on, now),
+        ToDaemon::Focus(f) => store.focus(&f.notch, &f.screen, f.active, now),
+        ToDaemon::Facts(f) => store.set_ui_facts(
+            f.modules
+                .iter()
+                .map(|m| ModuleFacts {
+                    info: ModuleInfo {
+                        id: m.id.clone(),
+                        module_id: Some(m.id.clone()),
+                        priority: f64::from(m.priority),
+                        active: m.active,
+                        compact: m.compact,
+                        icon: m.icon,
+                        peek: m.peek,
+                        attention: m.attention,
+                        urgent_peek: m.urgent_peek,
+                    },
+                    expanded: m.expanded,
+                    peek_on_focused_screen: m.peek_on_focused_screen,
+                    standalone: m.standalone,
+                })
+                .collect(),
         ),
+        ToDaemon::Peek(p) => store.request_peek(&p.module, p.ms.map(|n| n.0), now),
+        ToDaemon::PeekDismiss(p) => store.dismiss_peek(p.module.as_deref().unwrap_or("")),
+        ToDaemon::ModuleNotch(m) => store.module_op(&m.module, m.op, now),
         ToDaemon::Set(r) => {
             // A `null` on the wire is JS's `undefined`: the key goes.
             let value = (!r.value.is_null()).then_some(&r.value);
@@ -131,7 +165,7 @@ fn ipc(store: &mut Store, method: &str, args: &[String], now: u64) -> IpcResult 
         "set" => return Ok(ipc_set(store, args)),
         "state" => return Ok(store.ipc_state()),
         m if m.starts_with("test-") && testhooks::enabled() => {
-            return testhooks::apply(store, m, args, now)
+            return testhooks::apply(store, m, args)
                 .unwrap_or_else(|| Err(("method", format!("unknown method: {m}"))));
         }
         m if IPC_METHODS.contains(&m) => {

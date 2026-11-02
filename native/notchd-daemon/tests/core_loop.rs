@@ -314,3 +314,51 @@ fn two_uis_get_the_same_state_revs_and_a_late_one_starts_from_the_current() {
     let first = state_where(&mut late, |_| true).unwrap();
     assert_eq!(first.rev, last.0, "a late UI starts from the current rev");
 }
+
+fn facts_line(modules: &[(&str, i32)]) -> String {
+    let list: Vec<Value> = modules
+        .iter()
+        .map(|(id, priority)| {
+            json!({"id": id, "priority": priority, "active": true, "compact": true,
+                   "peek": true, "icon": false, "expanded": true, "attention": false,
+                   "urgentPeek": false, "peekOnFocusedScreen": false, "standalone": false})
+        })
+        .collect();
+    json!({"t": "facts", "modules": list}).to_string()
+}
+
+#[test]
+fn a_ui_reports_facts_peeks_pins_and_drags_and_the_state_follows() {
+    let r = rig("inputs", CFG);
+    let mut ui = r.ui();
+    ui.send_raw(&facts_line(&[("media", 50), ("timer", 80)]));
+    let s = state_where(&mut ui, mode_is(Mode::Compact)).expect("facts make a compact view");
+    assert_eq!(s.notches[0].copies[0].compact, ["timer", "media"]);
+    ui.send_raw(r#"{"t":"peek","module":"timer","ms":60000}"#);
+    assert!(state_where(&mut ui, mode_is(Mode::Peek)).is_some());
+    ui.send_raw(r#"{"t":"peek-dismiss","module":"timer"}"#);
+    assert!(state_where(&mut ui, mode_is(Mode::Compact)).is_some());
+    ui.send_raw(r#"{"t":"pin","notch":"main","screen":"","on":true}"#);
+    assert!(state_where(&mut ui, mode_is(Mode::Expanded)).is_some());
+    ui.send_raw(r#"{"t":"focus","notch":"main","screen":"","active":true}"#);
+    assert!(
+        state_where(&mut ui, |s| s.notches[0].copies[0].keyboard
+            == notchd_proto::common::KeyboardFocus::OnDemand)
+        .is_some()
+    );
+    ui.send_raw(r#"{"t":"focus","notch":"main","screen":"","active":false}"#);
+    assert!(
+        state_where(&mut ui, mode_is(Mode::Compact)).is_some(),
+        "a window took the keyboard: closed"
+    );
+    ui.send_raw(r#"{"t":"module-notch","module":"timer","op":"open"}"#);
+    assert!(state_where(&mut ui, mode_is(Mode::Expanded)).is_some());
+    ui.send_raw(r#"{"t":"module-notch","module":"timer","op":"close"}"#);
+    assert!(state_where(&mut ui, mode_is(Mode::Compact)).is_some());
+    ui.send_raw(r#"{"t":"drag","notch":"main","screen":"","ev":"start"}"#);
+    ui.send_raw(
+        r#"{"t":"drag","notch":"main","screen":"","ev":"drop","position":{"edge":"bottom","offset":0.5,"screen":""}}"#,
+    );
+    let s = state_where(&mut ui, |s| s.notches[0].edge == Edge::Bottom).expect("dropped");
+    assert_eq!(s.notches[0].copies[0].mode, Mode::Compact);
+}

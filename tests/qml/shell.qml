@@ -93,6 +93,57 @@ ShellRoot {
   // Keys and focus go to the active window: a case that types activates its own.
   function activate(item) { item.Window.window.requestActivate() }
 
+  // The daemon decides the notch state, so what a case does to a notch shows
+  // in the QML a round trip later. A case is written as a flow: a generator
+  // that yields what it waits for, each a function that takes `resume`:
+  //   yield root.settle(svc)       everything sent so far has been decided and
+  //                                the new state is in: the daemon answers a
+  //                                request after the state it made, on the
+  //                                same connection, so this needs no timing
+  //   yield root.waitFor(pred, ms) until pred() holds (3 s by default; the
+  //                                checks after it say what is missing)
+  //   yield root.wait(ms)          a delay the daemon's own timers need
+  //   yield root.nested(fn)        a callback-style helper (fn(resume))
+  // The case is done when the flow ends.
+  function go(flow) {
+    var it = flow()
+    function step() {
+      var r
+      try { r = it.next() }
+      catch (e) { root.check(false, "threw " + e); root.done(); return }
+      if (r.done) { root.done(); return }
+      r.value(step)
+    }
+    step()
+  }
+  function settle(svc) {
+    return function(resume) {
+      svc.flushConfig()
+      svc.flushReports()
+      if (!svc.client.ready) { resume(); return }
+      svc.client.ipc("state", [], function() { resume() })
+    }
+  }
+  function waitFor(pred, ms) { return function(resume) { root.until(pred, resume, ms) } }
+  function wait(ms) { return function(resume) { root.steps([[ms, function() {}]], resume) } }
+  function nested(fn) { return function(resume) { fn(resume) } }
+
+  // The pointer comes onto a copy and stays: it opens after the hover delay.
+  function hover(copy) { copy.setPointer("test", true, copy.fixedScreen) }
+  function unhover(copy) { copy.setPointer("test", false, "") }
+
+  // Navigation's keys by what they mean; the daemon reads them as keys.
+  readonly property var navKeys: ({
+    previous: ["Left", []], next: ["Right", []], up: ["Up", []], down: ["Down", []],
+    slideBack: ["Left", ["shift"]], slideOn: ["Right", ["shift"]],
+    previousTab: ["Backtab", []], nextTab: ["Tab", []],
+    open: ["Return", []], leave: ["Escape", []], move: ["m", []], settings: ["s", []], remove: ["x", []]
+  })
+  function navKey(svc, name) {
+    var key = root.navKeys[name] || [name, []]
+    svc.navKey(key[0], key[1])
+  }
+
   Component.onCompleted: {
     var all = [
       { name: "workspace chips store a real list", run: root.workspaceChipsList },
@@ -100,10 +151,10 @@ ShellRoot {
       { name: "a joined row's depth ignores a peek opening and closing", run: root.closedDepthTransitions },
       { name: "leaving the notch before it opens forgets the screen", run: root.hoverLeaveForgetsScreen },
       { name: "an opened notch keeps the screen the pointer opened it on", run: root.openKeepsScreen },
+      { name: "hover opens the notch within the delay and leaving closes it within the close delay", run: root.hoverLatency },
       { name: "peeks and the open notch never move windows", run: root.reserveIgnoresOpenNotch },
       { name: "reserved space grows at once and shrinks after the delay", run: root.reserveGrowsAndShrinks },
       { name: "one module ending as another starts keeps the space", run: root.reserveBridgesModules },
-      { name: "the space shrinks as the notch closes, not seconds later", run: root.reserveShrinksPromptly },
       { name: "a dragged notch moves windows once, when it lands", run: root.reserveHeldWhileDragging },
       { name: "the notch stays hovered over the controls inside it", run: root.hoverOverControls },
       { name: "a quick click pins the notch and never drags it", run: root.quickClickPins },
@@ -210,6 +261,9 @@ ShellRoot {
     ipcTarget: "notchd-qmltest"
     configPath: root.dir + "/config.json"
     compositor: workspace4
+    // A screen with a name: the daemon hangs a notch on no screen at all
+    // ("covered") where the screen's name is empty, as the offscreen one's is.
+    screens: [{ name: "DP-1" }]
   }
 
   // Two screens, A and B; B has focus.
@@ -244,20 +298,28 @@ ShellRoot {
   }
 
   function workspaceChipsList() {
-    var screen = { name: "test" }
-    chips.toggle(1); chips.toggle(2); chips.toggle(3)
-    var notch = service.notches[0]
-    root.check(Array.isArray(notch.workspaces), "workspaces is not an array: " + JSON.stringify(notch.workspaces))
-    root.check(JSON.stringify(notch.workspaces) === "[1,2,3]", "workspaces is " + JSON.stringify(notch.workspaces))
-    root.check(!notch.showsOn(screen), "shows on workspace 4 with [1,2,3]")
-    chips.toggle(4)
-    root.check(notch.showsOn(screen), "does not show on workspace 4 after adding it")
-    chips.toggle(4)
-    root.check(!notch.showsOn(screen), "still shows on workspace 4 after removing it")
-    chips.toggle(1); chips.toggle(2); chips.toggle(3)
-    root.check(service.configValue("workspaces") === undefined, "an empty pick left the key in the config")
-    root.check(notch.showsOn(screen), "no pick should mean every workspace")
-    root.done()
+    root.go(function*() {
+      service.replaceConfig({})
+      yield root.settle(service)
+      var notch = service.notches[0]
+      var copy = notch.copies[0]
+      chips.toggle(1); chips.toggle(2); chips.toggle(3)
+      root.check(Array.isArray(notch.workspaces), "workspaces is not an array: " + JSON.stringify(notch.workspaces))
+      root.check(JSON.stringify(notch.workspaces) === "[1,2,3]", "workspaces is " + JSON.stringify(notch.workspaces))
+      // The daemon hangs the notch on no screen: every screen shows workspace 4.
+      yield root.settle(service)
+      root.check(copy.offWorkspace, "shows on workspace 4 with [1,2,3]")
+      chips.toggle(4)
+      yield root.settle(service)
+      root.check(!copy.offWorkspace, "does not show on workspace 4 after adding it")
+      chips.toggle(4)
+      yield root.settle(service)
+      root.check(copy.offWorkspace, "still shows on workspace 4 after removing it")
+      chips.toggle(1); chips.toggle(2); chips.toggle(3)
+      root.check(service.configValue("workspaces") === undefined, "an empty pick left the key in the config")
+      yield root.settle(service)
+      root.check(!copy.offWorkspace, "no pick should mean every workspace")
+    })
   }
 
   // Bugs: the reserved space grew past the compact notch. First the peek's
@@ -332,98 +394,220 @@ ShellRoot {
   // before it opened kept that, so the next peek showed on that screen
   // instead of the focused one.
   function hoverLeaveForgetsScreen() {
-    var copy = service.firstCopy
-    copy.setPointer("notch", true, "DP-1")
-    copy.setPointer("notch", false, "")
-    root.check(copy.mode !== "expanded", "opened without waiting for the hover delay")
-    root.check(copy.openScreen === "", "kept screen " + copy.openScreen)
-    root.done()
+    root.go(function*() {
+      twoScreens.focusedScreenName = "B"
+      multi.replaceConfig({})
+      yield root.waitFor(function() { return multi.notches.length === 1 && multi.notches[0].copies.length === 1 })
+      var copy = multi.notches[0].copies[0]
+      copy.setPointer("notch", true, "A")
+      copy.setPointer("notch", false, "")
+      yield root.settle(multi)
+      root.check(copy.mode !== "expanded", "opened without waiting for the hover delay")
+      // A peek now shows where you work, not where the pointer touched.
+      root.push("forget", true)
+      yield root.settle(multi)
+      root.check(copy.mode === "peek" && copy.screenName === "B", "the peek is " + copy.mode + " on '" + copy.screenName + "', not on B")
+      multi.dismissPeek(null)
+      multi.moduleById("activities").clear("")
+    })
   }
 
   // Bug: the copy cleared the screen it opened on as it opened (onModeChanged
   // read `isOpen` before it updated), so an open notch followed the focus to
   // another screen instead of staying under the pointer.
   function openKeepsScreen() {
-    var copy = service.firstCopy
-    copy.setPointer("notch", true, "DP-1")
-    root.until(function() { return copy.mode === "expanded" }, function() {
-      root.check(copy.openScreen === "DP-1", "lost its screen on opening: '" + copy.openScreen + "'")
+    root.go(function*() {
+      twoScreens.focusedScreenName = "B"
+      multi.replaceConfig({})
+      yield root.waitFor(function() { return multi.notches.length === 1 && multi.notches[0].copies.length === 1 })
+      var copy = multi.notches[0].copies[0]
+      copy.setPointer("notch", true, "A")
+      yield root.waitFor(function() { return copy.mode === "expanded" })
+      yield root.settle(multi)
+      root.check(copy.mode === "expanded" && copy.screenName === "A", "an open notch is on '" + copy.screenName + "', not under the pointer on A")
+      // Focus moving does not take it away.
+      twoScreens.focusedScreenName = "A"
+      twoScreens.focusedScreenName = "B"
+      yield root.settle(multi)
+      root.check(copy.screenName === "A", "it followed focus to '" + copy.screenName + "'")
       copy.setPointer("notch", false, "")
-      root.done()
+      yield root.waitFor(function() { return copy.mode !== "expanded" })
+      yield root.settle(multi)
+      root.check(copy.screenName === "B", "closed, it did not go back to the focused screen: '" + copy.screenName + "'")
+    })
+  }
+
+  // The timers live in the daemon: the round trip must not show. A pointer
+  // on the card opens it after the hover delay, within a few frames of it;
+  // leaving closes it after the close delay the same way.
+  function hoverLatency() {
+    root.go(function*() {
+      twoScreens.focusedScreenName = "B"
+      multi.replaceConfig({ hoverOpenDelay: 150, hoverCloseDelay: 150 })
+      yield root.waitFor(function() { return multi.notches.length === 1 && multi.notches[0].copies.length === 1 })
+      yield root.settle(multi)
+      var copy = multi.notches[0].copies[0]
+      // The moment the mode changes, not the next poll of a wait.
+      var changedAt = 0
+      copy.modeChanged.connect(function() { changedAt = Date.now() })
+      var margin = 40
+      var worst = 0
+      for (var round = 0; round < 4; round++) {
+        var t0 = Date.now()
+        copy.setPointer("notch", true, "B")
+        yield root.waitFor(function() { return copy.mode === "expanded" }, 2000)
+        var opened = changedAt - t0
+        t0 = Date.now()
+        copy.setPointer("notch", false, "")
+        yield root.waitFor(function() { return copy.mode !== "expanded" }, 2000)
+        var closed = changedAt - t0
+        worst = Math.max(worst, opened - 150, closed - 150)
+        root.check(opened >= 148 && opened <= 150 + margin, "opened after " + opened + " ms; the delay is 150")
+        root.check(closed >= 148 && closed <= 150 + margin, "closed after " + closed + " ms; the delay is 150")
+        console.log("NOTE hover latency: open " + opened + " ms, close " + closed + " ms (the delay is 150 each)")
+      }
+      multi.replaceConfig({})
     })
   }
 
   // ------------------------------------------------------ reserved space
-  // The space follows the closed notch, so the volume OSD (a peek) and the
-  // expanded notch open over windows without moving them; it grows at once
-  // and shrinks after a delay.
-  ReservedSpace {
-    id: reserve
-    notch: cardSvc
-    notchCard: card
-    shrinkDelay: 300
-    property int lowest: 0
-    property int highest: 0
-    function watch() { lowest = space; highest = space }
-    onSpaceChanged: { lowest = Math.min(lowest, space); highest = Math.max(highest, space) }
+  // The daemon works out the space windows keep clear of the closed notch,
+  // from the depths its card measures (`measure`); the surface holds what its
+  // `state.reserve` says (NotchSurface, `reserveZones`). The rules (what
+  // counts, the 400 ms shrink delay) are the daemon's own tests; these prove
+  // the wiring, with a real card and the report it gives the daemon (a window
+  // for it needs a compositor: NotchSurface only loads in the shell).
+  QtObject {
+    id: reserveComp
+    property string focusedScreenName: ""
+    function hasFullscreen(screen) { return false }
+    readonly property bool supportsWorkspaces: false
+    readonly property var knownWorkspaces: []
+    function activeWorkspace(screen) { return null }
+  }
+  TestService {
+    id: reserved
+    ipcTarget: "notchd-qmltest-reserve"
+    configPath: root.dir + "/reserve.json"
+    compositor: reserveComp
+    defaultModules: ["activities"]
+  }
+  NotchCard {
+    id: reserveCard
+    notch: reserved.notches.length > 0 ? reserved.notches[0].copies[0] : null
+  }
+  DepthReport {
+    copy: reserved.notches.length > 0 ? reserved.notches[0].copies[0] : null
+    notchCard: reserveCard
   }
 
+  // Every depth the zones took, and the lowest and highest of them.
+  QtObject {
+    id: zoneWatch
+    property var seen: []
+    readonly property real lowest: Math.min.apply(null, seen)
+    readonly property real highest: Math.max.apply(null, seen)
+  }
+  Connections {
+    target: reserved
+    function onReserveZonesChanged() {
+      var depths = Object.keys(reserved.reserveZones).map(function(k) { return reserved.reserveZones[k] })
+      zoneWatch.seen = zoneWatch.seen.concat(depths.length > 0 ? depths : [0])
+    }
+  }
+  // The deepest zone now, 0 for none.
+  function zoneDepth() {
+    var zones = reserved.reserveZones
+    return Object.keys(zones).reduce(function(a, k) { return Math.max(a, zones[k]) }, 0)
+  }
+  function reservedModule() { return reserved.moduleById("activities") }
+  // The service with a quiet module and the card measured: the rest lip.
+  function reserveStart(extra) {
+    return function(resume) {
+      reserved.replaceConfig(Object.assign({ modules: ["activities"], reserveSpace: true }, extra || {}))
+      root.until(function() { return !!root.reservedModule() && reserved.notches.length === 1 && reserved.notches[0].copies.length === 1 }, function() {
+        root.reservedModule().clear("")
+        root.until(function() { return root.zoneDepth() > 0 }, function() {
+          root.steps([[600, function() {}]], function() {
+            zoneWatch.seen = [root.zoneDepth()]
+            resume()
+          })
+        })
+      })
+    }
+  }
   // Closed notch: compact (a module active) or rest.
   function closeAs(compact) {
     cardSvc.compactModule = compact ? fakeModule : null
     cardSvc.mode = compact ? "compact" : "rest"
   }
+  function pushReserved(id, peek) {
+    return root.reservedModule().push(JSON.stringify({ id: id, title: id, sticky: true, peek: peek }))
+  }
 
   function reserveIgnoresOpenNotch() {
-    var settle = 450
-    var compact = 0
-    root.steps([
-      [0, function() { root.closeAs(true) }],
-      [settle, function() { compact = reserve.space; reserve.watch(); cardSvc.mode = "peek" }],
-      [settle, function() { cardSvc.mode = "expanded" }],
-      [settle, function() { cardSvc.mode = "compact" }],
-      [settle, function() {
-        root.check(reserve.lowest === compact && reserve.highest === compact,
-                   "compact: moved between " + reserve.lowest + " and " + reserve.highest + ", closed is " + compact)
-        root.closeAs(false)
-      }],
-      [settle * 2, function() { reserve.watch(); cardSvc.mode = "peek" }],  // the OSD, from rest
-      [settle, function() { cardSvc.mode = "rest" }],
-      [settle, function() {}]
-    ], function() {
-      root.check(reserve.space === Math.ceil(card.restDepth), "rest reserves " + reserve.space + ", the lip is " + card.restDepth)
-      root.check(reserve.lowest === reserve.highest, "a peek from rest moved it between " + reserve.lowest + " and " + reserve.highest)
-      root.done()
+    root.go(function*() {
+      yield root.reserveStart()
+      var rest = root.zoneDepth()
+      root.pushReserved("keep", false)
+      yield root.waitFor(function() { return root.zoneDepth() > rest })
+      var compact = root.zoneDepth()
+      zoneWatch.seen = [compact]
+      var copy = reserved.notches[0].copies[0]
+      // A peek, then pinned open, then closed: the windows stay where they were.
+      reserved.requestPeek(root.reservedModule(), 400)
+      yield root.settle(reserved)
+      root.check(copy.mode === "peek", "the peek did not show: " + copy.mode)
+      yield root.wait(600)
+      copy.open()
+      yield root.settle(reserved)
+      root.check(copy.mode === "expanded", "the notch did not open: " + copy.mode)
+      yield root.wait(600)
+      copy.close()
+      yield root.waitFor(function() { return copy.mode === "compact" })
+      yield root.wait(600)
+      root.check(zoneWatch.lowest === compact && zoneWatch.highest === compact,
+                 "compact: moved between " + zoneWatch.lowest + " and " + zoneWatch.highest + ", closed is " + compact)
+      root.reservedModule().clear("")
+      // From rest, the OSD peeks and the lip is all that is kept.
+      yield root.wait(700)
+      zoneWatch.seen = [root.zoneDepth()]
+      reserved.requestPeek(root.reservedModule(), 400)
+      yield root.wait(900)
+      root.check(zoneWatch.lowest === zoneWatch.highest, "a peek from rest moved it between " + zoneWatch.lowest + " and " + zoneWatch.highest)
+      root.check(root.zoneDepth() === rest, "rest reserves " + root.zoneDepth() + ", the lip is " + rest)
     })
   }
 
   function reserveGrowsAndShrinks() {
-    var rest = Math.ceil(card.restDepth)
-    var compact = 0
-    root.steps([
-      [0, function() { root.closeAs(false) }],
-      [450, function() {
-        root.check(reserve.space === rest, "rest reserves " + reserve.space)
-        root.closeAs(true)
-        compact = reserve.space
-        root.check(compact > rest, "did not grow at once: " + compact)
-        root.closeAs(false)
-      }],
-      [150, function() { root.check(reserve.space === compact, "shrank before the delay: " + reserve.space) }],
-      [350, function() { root.check(reserve.space === rest, "did not shrink after the delay: " + reserve.space) }]
-    ], function() { root.done() })
+    root.go(function*() {
+      yield root.reserveStart()
+      var rest = root.zoneDepth()
+      root.pushReserved("grow", false)
+      yield root.waitFor(function() { return root.zoneDepth() > rest })
+      var compact = root.zoneDepth()
+      root.check(compact > rest, "did not grow at once: " + compact)
+      root.reservedModule().clear("")
+      yield root.wait(150)
+      root.check(root.zoneDepth() === compact, "shrank before the delay: " + root.zoneDepth())
+      yield root.waitFor(function() { return root.zoneDepth() === rest }, 1500)
+      root.check(root.zoneDepth() === rest, "did not shrink after the delay: " + root.zoneDepth())
+    })
   }
 
   function reserveBridgesModules() {
-    var compact = 0
-    root.steps([
-      [0, function() { root.closeAs(true) }],
-      [450, function() { compact = reserve.space; reserve.watch(); root.closeAs(false) }],
-      [100, function() { root.closeAs(true) }],
-      [500, function() {}]
-    ], function() {
-      root.check(reserve.lowest === compact, "dipped to " + reserve.lowest + " between modules, compact is " + compact)
-      root.done()
+    root.go(function*() {
+      yield root.reserveStart()
+      var rest = root.zoneDepth()
+      root.pushReserved("first", false)
+      yield root.waitFor(function() { return root.zoneDepth() > rest })
+      var compact = root.zoneDepth()
+      zoneWatch.seen = [compact]
+      root.reservedModule().clear("")
+      yield root.wait(100)
+      root.pushReserved("second", false)
+      yield root.wait(700)
+      root.check(zoneWatch.lowest === compact, "dipped to " + zoneWatch.lowest + " between modules, compact is " + compact)
     })
   }
 
@@ -433,19 +617,21 @@ ShellRoot {
   // wide view is still loaded; measured on the new axis it would read as a
   // notch 130 px deep and push windows that far.
   function reserveFollowsEdge() {
-    var settle = 450
-    var top = 0
-    root.steps([
-      [0, function() { root.closeAs(true) }],
-      [settle, function() { top = reserve.space; reserve.watch(); cardSvc.edge = "left" }],
-      [settle, function() {}]
-    ], function() {
-      root.check(card.vertical, "the card did not take the left edge")
-      root.check(reserve.highest <= top, "grew to " + reserve.highest + " moving to the side; compact on top is " + top)
-      root.check(reserve.space === Math.ceil(card.compactDepth) && reserve.space > 0,
-                 "reserves " + reserve.space + ", the side compact view is " + card.compactDepth + " deep")
-      cardSvc.edge = "top"
-      root.done()
+    root.go(function*() {
+      yield root.reserveStart()
+      root.pushReserved("edge", false)
+      yield root.wait(600)
+      var top = root.zoneDepth()
+      root.check(!!reserved.reserveZones["|top"], "no zone on the top edge: " + JSON.stringify(reserved.reserveZones))
+      zoneWatch.seen = [top]
+      reserved.setConfigValue("position", { edge: "left" })
+      yield root.waitFor(function() { return !!reserved.reserveZones["|left"] })
+      yield root.wait(700)
+      root.check(!reserved.reserveZones["|top"], "the top zone stayed: " + JSON.stringify(reserved.reserveZones))
+      root.check(root.zoneDepth() > 0 && zoneWatch.highest <= top,
+                 "grew to " + zoneWatch.highest + " moving to the side; compact on top is " + top)
+      reserved.setConfigValue("position", undefined)
+      root.reservedModule().clear("")
     })
   }
 
@@ -467,54 +653,26 @@ ShellRoot {
     })
   }
 
-  // Bug: when the last module ended, windows stayed clear of a notch that
-  // was already back to its lip for 4 s (the default shrink delay). The
-  // space now goes once the notch has collapsed.
-  ReservedSpace {
-    id: defaultReserve
-    notch: cardSvc
-    notchCard: card
-  }
-
-  function reserveShrinksPromptly() {
-    var rest = Math.ceil(card.restDepth)
-    root.steps([
-      [0, function() { root.closeAs(true) }],
-      [450, function() {
-        root.check(defaultReserve.space > rest, "compact did not grow the space: " + defaultReserve.space)
-        root.closeAs(false)
-      }],
-      [600, function() {}]
-    ], function() {
-      root.check(defaultReserve.space === rest,
-                 "still " + defaultReserve.space + " px 600 ms after the notch closed; the lip is " + rest)
-      root.done()
-    })
-  }
-
   // Dragging turns the card to each edge it passes; the space waits for the
   // drop instead of following it there and back.
   function reserveHeldWhileDragging() {
-    var compact = 0
-    root.steps([
-      [0, function() { root.closeAs(true) }],
-      [450, function() {
-        compact = reserve.space
-        reserve.watch()
-        cardSvc.dragging = true
-        cardSvc.edge = "left"
-        root.closeAs(false)
-      }],
-      [600, function() {
-        root.check(reserve.lowest === compact && reserve.highest === compact,
-                   "moved between " + reserve.lowest + " and " + reserve.highest + " mid-drag; it was " + compact)
-        cardSvc.edge = "top"
-        cardSvc.dragging = false
-      }],
-      [600, function() {}]
-    ], function() {
-      root.check(reserve.space === Math.ceil(card.restDepth), "after the drop it reserves " + reserve.space)
-      root.done()
+    root.go(function*() {
+      yield root.reserveStart()
+      var rest = root.zoneDepth()
+      root.pushReserved("drag", false)
+      yield root.waitFor(function() { return root.zoneDepth() > rest })
+      var compact = root.zoneDepth()
+      zoneWatch.seen = [compact]
+      var copy = reserved.notches[0].copies[0]
+      copy.setDragging(true)
+      yield root.settle(reserved)
+      root.reservedModule().clear("")
+      yield root.wait(800)
+      root.check(zoneWatch.lowest === compact && zoneWatch.highest === compact,
+                 "moved between " + zoneWatch.lowest + " and " + zoneWatch.highest + " mid-drag; it was " + compact)
+      copy.setDragging(false)
+      yield root.waitFor(function() { return root.zoneDepth() === rest }, 1500)
+      root.check(root.zoneDepth() === rest, "after the drop it reserves " + root.zoneDepth() + ", the lip is " + rest)
     })
   }
 
@@ -649,7 +807,7 @@ ShellRoot {
     root.until(function() {
       var main = multi.notchById("main"), side = multi.notchById("side")
       return !!main && !!side && main.copies.length === 2 && side.copies.length === 1
-    }, fn)
+    }, function() { root.settle(multi)(fn) })
   }
   function push(id, peek) {
     return multi.moduleById("activities").push(JSON.stringify({ id: id, title: id, sticky: true, peek: peek }))
@@ -659,148 +817,148 @@ ShellRoot {
   // monitor, changing the volume on another took the notch away from it.
   // A notch on every screen now peeks on the focused one only.
   function peekOnFocusedCopy() {
-    var main = null
-    root.steps([
-      [0, function() { multi.replaceConfig(root.twoNotches) }],
-      [300, function() {
-        main = multi.notchById("main")
-        root.check(!!main && main.copies.length === 2, "main has " + (main ? main.copies.length : 0) + " copies, not one per screen")
-        root.check(root.push("build", false) === "ok", "activities not loaded")
-      }],
-      [100, function() {
-        root.check(main.copyOn("A").mode === "compact" && main.copyOn("B").mode === "compact",
-                   "a quiet push left " + main.copyOn("A").mode + " / " + main.copyOn("B").mode)
-        twoScreens.focusedScreenName = "B"
-        root.push("deploy", true)
-      }],
-      [100, function() {
-        root.check(main.copyOn("B").mode === "peek", "the focused copy shows " + main.copyOn("B").mode)
-        root.check(main.copyOn("A").mode === "compact", "the copy on the other screen shows " + main.copyOn("A").mode)
-        root.check(multi.peeking(multi.moduleById("activities")), "the service does not report the peek")
-        multi.dismissPeek(null)
-        twoScreens.focusedScreenName = "A"
-        root.push("lint", true)
-      }],
-      [100, function() {
-        root.check(main.copyOn("A").mode === "peek" && main.copyOn("B").mode === "compact",
-                   "focus on A: " + main.copyOn("A").mode + " / " + main.copyOn("B").mode)
-        multi.dismissPeek(null)
-      }]
-    ], function() { root.done() })
+    root.go(function*() {
+      yield root.nested(root.withTwoNotches)
+      var main = multi.notchById("main")
+      root.check(!!main && main.copies.length === 2, "main has " + (main ? main.copies.length : 0) + " copies, not one per screen")
+      root.check(root.push("build", false) === "ok", "activities not loaded")
+      yield root.settle(multi)
+      root.check(main.copyOn("A").mode === "compact" && main.copyOn("B").mode === "compact",
+                 "a quiet push left " + main.copyOn("A").mode + " / " + main.copyOn("B").mode)
+      twoScreens.focusedScreenName = "B"
+      root.push("deploy", true)
+      yield root.settle(multi)
+      root.check(main.copyOn("B").mode === "peek", "the focused copy shows " + main.copyOn("B").mode)
+      root.check(main.copyOn("A").mode === "compact", "the copy on the other screen shows " + main.copyOn("A").mode)
+      root.check(multi.peeking(multi.moduleById("activities")), "the service does not report the peek")
+      multi.dismissPeek(null)
+      twoScreens.focusedScreenName = "A"
+      root.push("lint", true)
+      yield root.settle(multi)
+      root.check(main.copyOn("A").mode === "peek" && main.copyOn("B").mode === "compact",
+                 "focus on A: " + main.copyOn("A").mode + " / " + main.copyOn("B").mode)
+      multi.dismissPeek(null)
+      multi.moduleById("activities").clear("")
+    })
   }
 
   // Bug: the visitor's copies (a fullscreen window per screen, hidden while
   // closed) showed the compact view of whatever was active. Music playing
   // kept the equalizer drawing frames in windows nobody could see.
   function visitorRestsWhileClosed() {
-    var visitor = multi.visitor
-    root.push("quiet", false)
-    root.steps([
-      [100, function() {
-        root.check(visitor.copies.length === 2, "the visitor has " + visitor.copies.length + " copies, not one per screen")
-        visitor.copies.forEach(function(c) {
-          root.check(c.mode === "rest", "a closed visitor copy on " + c.fixedScreen + " shows " + c.mode)
-        })
-        twoScreens.focusedScreenName = "B"
-        multi.requestPeek(multi.moduleById("activities"), 2000)
-      }],
-      [100, function() {
-        root.check(visitor.copies.some(function(c) { return c.mode === "peek" }) || multi.peeking(multi.moduleById("activities")),
-                   "nothing peeks")
-        multi.dismissPeek(null)
-      }]
-    ], function() { root.done() })
+    root.go(function*() {
+      yield root.nested(root.withTwoNotches)
+      var visitor = multi.visitor
+      root.push("quiet", false)
+      yield root.settle(multi)
+      root.check(visitor.copies.length === 2, "the visitor has " + visitor.copies.length + " copies, not one per screen")
+      visitor.copies.forEach(function(c) {
+        root.check(c.mode === "rest", "a closed visitor copy on " + c.fixedScreen + " shows " + c.mode)
+      })
+      twoScreens.focusedScreenName = "B"
+      multi.requestPeek(multi.moduleById("activities"), 2000)
+      yield root.settle(multi)
+      root.check(visitor.copies.some(function(c) { return c.mode === "peek" }) || multi.peeking(multi.moduleById("activities")),
+                 "nothing peeks")
+      multi.dismissPeek(null)
+      multi.moduleById("activities").clear("")
+    })
   }
 
   // The visitor's copies held a fullscreen window each (its buffers, ~25 MB
   // per screen) while hidden. A guest's window now goes when it closes,
-  // after `windowLinger`, so the close animation ends and a peek soon after
+  // after the daemon's linger, so the close animation ends and a peek soon after
   // reuses it.
   function visitorWindowOnlyWhileShown() {
-    var visitor = multi.visitor
-    var copy = null
-    var saved = multi.config
-    visitor.copies.forEach(function(c) { c.windowLinger = 300 })
-    // A notch kept on A, focus on B: a peek there goes to the visitor.
-    multi.replaceConfig({ modules: ["activities"], position: { screen: "A" } })
-    twoScreens.focusedScreenName = "B"
-    root.steps([
-      [100, function() {
-        root.check(visitor.copies.every(function(c) { return !c.needsWindow }),
-                   "a closed visitor copy wants a window: " + visitor.copies.map(function(c) { return c.mode }))
-        root.check(multi.notches[0].copies.every(function(c) { return c.needsWindow }), "a notch of the config lost its window")
-        multi.requestPeek(multi.moduleById("activities"), 400)
-      }],
-      [100, function() {
-        copy = visitor.copyOn("B")
-        root.check(!!copy && copy.mode === "peek", "the visitor does not peek on B: " + (copy ? copy.mode : "no copy"))
-        root.check(!!copy && copy.needsWindow, "a peeking visitor copy has no window")
-      }],
-      [500, function() {
-        root.check(copy.mode !== "peek", "the peek did not end")
-        root.check(copy.needsWindow, "the window went before the notch finished closing")
-      }],
-      [400, function() {
-        root.check(!copy.needsWindow, "the window stayed after windowLinger")
-      }]
-    ], function() {
-      visitor.copies.forEach(function(c) { c.windowLinger = 5000 })
+    root.go(function*() {
+      var visitor = multi.visitor
+      // The daemon's guest windows linger 5 s after they close: shorter here
+      // (a hook of the test daemon, NOTCHD_TEST_HOOKS).
+      var saved = multi.config
+      // A notch kept on A, focus on B: a peek there goes to the visitor.
+      multi.replaceConfig({ modules: ["activities"], position: { screen: "A" } })
+      twoScreens.focusedScreenName = "B"
+      yield root.nested(function(resume) {
+        multi.client.ipc("test-linger", ["300"], function(reply) {
+          root.check(reply.t === "ok", "the daemon has no test-linger hook: " + JSON.stringify(reply))
+          resume()
+        })
+      })
+      yield root.settle(multi)
+      root.check(visitor.copies.every(function(c) { return !c.needsWindow }),
+                 "a closed visitor copy wants a window: " + visitor.copies.map(function(c) { return c.mode }))
+      root.check(multi.notches[0].copies.every(function(c) { return c.needsWindow }), "a notch of the config lost its window")
+      multi.requestPeek(multi.moduleById("activities"), 400)
+      yield root.settle(multi)
+      var copy = visitor.copyOn("B")
+      root.check(!!copy && copy.mode === "peek", "the visitor does not peek on B: " + (copy ? copy.mode : "no copy"))
+      root.check(!!copy && copy.needsWindow, "a peeking visitor copy has no window")
+      yield root.waitFor(function() { return copy.mode !== "peek" })
+      root.check(copy.needsWindow, "the window went before the notch finished closing")
+      yield root.waitFor(function() { return !copy.needsWindow })
+      root.check(!copy.needsWindow, "the window stayed after the linger")
+      yield root.nested(function(resume) { multi.client.ipc("test-linger", ["5000"], function() { resume() }) })
       multi.replaceConfig(saved)
-      root.done()
     })
   }
 
   function peekOnlyWhereShown() {
-    root.withTwoNotches(function() {
+    root.go(function*() {
+      yield root.nested(root.withTwoNotches)
       var side = multi.notchById("side")
       root.check(!!side && side.copies.length === 1 && !side.everyScreen, "side should be one copy that moves")
       root.push("test", true)
-      root.steps([[100, function() {}]], function() {
-        root.check(side.copies[0].mode === "rest", "a notch without the module shows " + side.copies[0].mode)
-        root.check(side.edge === "left", "side hangs from " + side.edge)
-        multi.dismissPeek(null)
-        root.done()
-      })
+      yield root.settle(multi)
+      root.check(side.copies[0].mode === "rest", "a notch without the module shows " + side.copies[0].mode)
+      root.check(side.edge === "left", "side hangs from " + side.edge)
+      multi.dismissPeek(null)
+      multi.moduleById("activities").clear("")
     })
   }
 
   // The notches, their copies and the modules are made once: a config edit
   // (a slider moving) must not make them again, losing what they show.
   function survivesConfigEdits() {
-    root.withTwoNotches(function() {
+    root.go(function*() {
+      yield root.nested(root.withTwoNotches)
       var main = multi.notchById("main")
       var copy = main.copyOn("A")
       var module = multi.moduleById("activities")
       root.push("edit", false)
       copy.open()
+      yield root.settle(multi)
+      root.check(copy.pinned, "the copy did not open (test setup)")
       multi.setConfigValue("hoverOpenDelay", 50)
       multi.setConfigValue("notches.0.position.edge", "bottom")
-      root.steps([[50, function() {}]], function() {
-        root.check(multi.notchById("main") === main, "the notch was made again")
-        root.check(main.copyOn("A") === copy, "the copy was made again")
-        root.check(copy.pinned, "the copy forgot it was pinned")
-        root.check(multi.moduleById("activities") === module, "the module was loaded again")
-        root.check(module.items.length > 0, "the module lost its activities")
-        root.check(main.edge === "bottom", "the edit did not apply: " + main.edge)
-        copy.close()
-        module.clear("")
-        root.done()
-      })
+      yield root.settle(multi)
+      root.check(multi.notchById("main") === main, "the notch was made again")
+      root.check(main.copyOn("A") === copy, "the copy was made again")
+      root.check(copy.pinned, "the copy forgot it was pinned")
+      root.check(multi.moduleById("activities") === module, "the module was loaded again")
+      root.check(module.items.length > 0, "the module lost its activities")
+      root.check(main.edge === "bottom", "the edit did not apply: " + main.edge)
+      copy.close()
+      module.clear("")
     })
   }
 
   function addAndRemoveNotch() {
-    var start = { modules: ["activities"], hoverOpenDelay: 40 }
-    multi.replaceConfig(start)
-    root.check(multi.notches.length === 1, "one notch to start, not " + multi.notches.length)
-    var at = multi.addNotch()
-    root.check(at === 1 && multi.notches.length === 2, "added at " + at + ", " + multi.notches.length + " notches")
-    root.check(JSON.stringify(multi.config.notches[0]) === "{}", "the first notch should inherit it all: " + JSON.stringify(multi.config.notches))
-    root.check(multi.notches[1].edge !== multi.notches[0].edge, "the new notch hangs on the same edge")
-    root.check(multi.notches[1].modules.length === 0, "the new notch starts with modules")
-    multi.removeNotch(1)
-    root.check(JSON.stringify(multi.config) === JSON.stringify(start), "the config came back as " + JSON.stringify(multi.config))
-    root.done()
+    root.go(function*() {
+      var start = { modules: ["activities"], hoverOpenDelay: 40 }
+      multi.replaceConfig(start)
+      yield root.settle(multi)
+      root.check(multi.notches.length === 1, "one notch to start, not " + multi.notches.length)
+      var at = multi.addNotch()
+      yield root.settle(multi)
+      root.check(at === 1 && multi.notches.length === 2, "added at " + at + ", " + multi.notches.length + " notches")
+      root.check(JSON.stringify(multi.config.notches[0]) === "{}", "the first notch should inherit it all: " + JSON.stringify(multi.config.notches))
+      root.check(multi.notches[1].edge !== multi.notches[0].edge, "the new notch hangs on the same edge")
+      root.check(multi.notches[1].modules.length === 0, "the new notch starts with modules")
+      multi.removeNotch(1)
+      yield root.settle(multi)
+      root.check(multi.notches.length === 1, "removed, " + multi.notches.length + " notches")
+      root.check(JSON.stringify(multi.config) === JSON.stringify(start), "the config came back as " + JSON.stringify(multi.config))
+    })
   }
 
   // Bug: the notch kept on the ultrawide (position.screen) showing music
@@ -809,53 +967,45 @@ ShellRoot {
   // OSD hangs, the visitor shows it once at the top, however many notches
   // kept elsewhere have the module.
   function peekBesideHomedNotch() {
-    var music = null, side = null
-    var visitor = multi.visitor
-    root.steps([
-      [0, function() {
-        multi.replaceConfig({ modules: ["activities"], position: { screen: "A" },
-                              notches: [{}, { id: "side", position: { edge: "left", screen: "A" } }] })
-        twoScreens.focusedScreenName = "B"
-      }],
-      [100, function() {
-        music = multi.notchById("main"); side = multi.notchById("side")
-        root.check(music.copies.length === 1 && music.copies[0].screenName === "A", "the notch kept on A is not one copy on A")
-        root.check(visitor.copies.length === 2 && visitor.copyOn("B").offWorkspace, "the visitor shows while nothing peeks")
-        root.push("music", false)
-        root.push("volume", true)
-      }],
-      [100, function() {
-        root.check(music.copies[0].mode === "peek" && music.copies[0].screenName === "A",
-                   "the notch on A shows " + music.copies[0].mode + " on " + music.copies[0].screenName)
-        root.check(side.copies[0].mode === "peek" && side.copies[0].screenName === "A", "the side notch left A")
-        var guest = visitor.copyOn("B")
-        root.check(guest.mode === "peek" && !guest.offWorkspace && guest.edge === "top",
-                   "no peek at the top of B: " + guest.mode + " on " + guest.edge)
-        root.check(visitor.copyOn("A").mode !== "peek", "the visitor also peeked on A, where the notches are")
-        root.check(JSON.stringify(guest.reservedScreens) === "[]", "the visitor reserves " + JSON.stringify(guest.reservedScreens))
-        multi.dismissPeek(null)
-      }],
-      [100, function() {
-        root.check(music.copies[0].mode === "compact", "after the peek the notch on A shows " + music.copies[0].mode)
-        root.check(visitor.copyOn("B").offWorkspace, "the visitor stays after the peek")
-        twoScreens.focusedScreenName = "A"
-        root.push("again", true)
-      }],
-      [100, function() {
-        root.check(visitor.copyOn("A").mode !== "peek" && visitor.copyOn("B").mode !== "peek",
-                   "the visitor peeked with focus where the notches are")
-        multi.dismissPeek(null)
-        // A notch that follows focus peeks on B itself: no visitor.
-        multi.setConfigValue("notches.1.position.screen", "")
-        twoScreens.focusedScreenName = "B"
-        root.push("follow", true)
-      }],
-      [100, function() {
-        root.check(visitor.copyOn("B").mode !== "peek", "the visitor peeked beside a notch that follows focus")
-        multi.dismissPeek(null)
-        multi.moduleById("activities").clear("")
-      }]
-    ], function() { root.done() })
+    root.go(function*() {
+      var visitor = multi.visitor
+      multi.replaceConfig({ modules: ["activities"], position: { screen: "A" },
+                            notches: [{}, { id: "side", position: { edge: "left", screen: "A" } }] })
+      twoScreens.focusedScreenName = "B"
+      yield root.waitFor(function() { return multi.notches.length === 2 && visitor.copies.length === 2 })
+      yield root.settle(multi)
+      var music = multi.notchById("main"), side = multi.notchById("side")
+      root.check(music.copies.length === 1 && music.copies[0].screenName === "A", "the notch kept on A is not one copy on A")
+      root.check(visitor.copies.length === 2 && visitor.copyOn("B").offWorkspace, "the visitor shows while nothing peeks")
+      root.push("music", false)
+      root.push("volume", true)
+      yield root.settle(multi)
+      root.check(music.copies[0].mode === "peek" && music.copies[0].screenName === "A",
+                 "the notch on A shows " + music.copies[0].mode + " on " + music.copies[0].screenName)
+      root.check(side.copies[0].mode === "peek" && side.copies[0].screenName === "A", "the side notch left A")
+      var guest = visitor.copyOn("B")
+      root.check(guest.mode === "peek" && !guest.offWorkspace && guest.edge === "top",
+                 "no peek at the top of B: " + guest.mode + " on " + guest.edge)
+      root.check(visitor.copyOn("A").mode !== "peek", "the visitor also peeked on A, where the notches are")
+      multi.dismissPeek(null)
+      yield root.settle(multi)
+      root.check(music.copies[0].mode === "compact", "after the peek the notch on A shows " + music.copies[0].mode)
+      root.check(visitor.copyOn("B").offWorkspace, "the visitor stays after the peek")
+      twoScreens.focusedScreenName = "A"
+      root.push("again", true)
+      yield root.settle(multi)
+      root.check(visitor.copyOn("A").mode !== "peek" && visitor.copyOn("B").mode !== "peek",
+                 "the visitor peeked with focus where the notches are")
+      multi.dismissPeek(null)
+      // A notch that follows focus peeks on B itself: no visitor.
+      multi.setConfigValue("notches.1.position.screen", "")
+      twoScreens.focusedScreenName = "B"
+      root.push("follow", true)
+      yield root.settle(multi)
+      root.check(visitor.copyOn("B").mode !== "peek", "the visitor peeked beside a notch that follows focus")
+      multi.dismissPeek(null)
+      multi.moduleById("activities").clear("")
+    })
   }
 
   // Bug: brightness changes on the focused monitor only, yet its OSD opened
@@ -874,35 +1024,32 @@ ShellRoot {
         .concat(visitor.copies.filter(function(c) { return c.mode === "peek" }).map(function(c) { return "visitor@" + c.fixedScreen }))
         .join(" ")
     }
-    root.steps([
-      [0, function() {
-        module.peekOnFocusedScreen = true
-        multi.replaceConfig({ modules: ["activities"],
-                              notches: [{ position: { screen: "A" } }, { id: "a2", position: { edge: "left", screen: "A" } },
-                                        { id: "b", position: { screen: "B" } }] })
-        twoScreens.focusedScreenName = "B"
-      }],
-      [100, function() { root.push("brightness", true) }],
-      [100, function() {
-        root.check(peeking() === "b", "focus on B: " + modes())
-        multi.dismissPeek(null)
-        twoScreens.focusedScreenName = "A"
-        root.push("volume", true)
-      }],
-      [100, function() {
-        root.check(peeking() === "main", "focus on A: " + modes())
-        multi.dismissPeek(null)
-        multi.setConfigValue("notches.2.position.screen", "A")
-        twoScreens.focusedScreenName = "B"
-        root.push("volume", true)
-      }],
-      [100, function() {
-        root.check(peeking() === "visitor@B", "nothing on B: " + modes())
-        multi.dismissPeek(null)
-        module.peekOnFocusedScreen = false
-        module.clear("")
-      }]
-    ], function() { root.done() })
+    root.go(function*() {
+      module.peekOnFocusedScreen = true
+      multi.replaceConfig({ modules: ["activities"],
+                            notches: [{ position: { screen: "A" } }, { id: "a2", position: { edge: "left", screen: "A" } },
+                                      { id: "b", position: { screen: "B" } }] })
+      twoScreens.focusedScreenName = "B"
+      yield root.waitFor(function() { return multi.notches.length === 3 && visitor.copies.length === 2 })
+      yield root.settle(multi)
+      root.push("brightness", true)
+      yield root.settle(multi)
+      root.check(peeking() === "b", "focus on B: " + modes())
+      multi.dismissPeek(null)
+      twoScreens.focusedScreenName = "A"
+      root.push("volume", true)
+      yield root.settle(multi)
+      root.check(peeking() === "main", "focus on A: " + modes())
+      multi.dismissPeek(null)
+      multi.setConfigValue("notches.2.position.screen", "A")
+      twoScreens.focusedScreenName = "B"
+      root.push("volume", true)
+      yield root.settle(multi)
+      root.check(peeking() === "visitor@B", "nothing on B: " + modes())
+      multi.dismissPeek(null)
+      module.peekOnFocusedScreen = false
+      module.clear("")
+    })
   }
 
   // Standalone modules (the OSD) are never in a notch, even one whose
@@ -923,55 +1070,50 @@ ShellRoot {
     var svc = standaloneSvc
     function own() { return svc.standaloneNotch("osd") }
     function osd() { return svc.moduleById("osd") }
-    // Bug: in the Omarchy shell the OSD did not load at startup; the module
-    // list was rebuilt before the standalone ids followed the module files.
-    root.check(!!osd() && !!own(), "the OSD did not load at startup")
-    root.steps([
-      [0, function() {
-        svc.replaceConfig({ modules: ["osd", "activities"], position: { screen: "all" } })
-        twoScreens.focusedScreenName = "B"
-      }],
-      [100, function() {
-        root.check(!!osd(), "the OSD did not load")
-        root.check(svc.isStandalone("osd"), "the OSD is not standalone")
-        root.check(svc.notches[0].modules.indexOf(osd()) === -1, "the notch took the OSD")
-        root.check(!!own() && own().edge === "top" && own().placement.offset === 0.5, "no OSD place at the top center")
-        osd().show(JSON.stringify({ icon: "volume", value: "40" }))
-      }],
-      [100, function() {
-        root.check(own().copyOn("B").mode === "peek", "no peek on B: " + own().copyOn("B").mode)
-        root.check(own().copyOn("A").mode !== "peek", "the OSD peeked on A too")
-        root.check(svc.notches[0].copies.every(function(c) { return c.mode !== "peek" }), "a notch peeked")
-        svc.dismissPeek(null)
-        svc.setConfigValue("osd.position", { edge: "bottom", offset: 0.2 })
-        twoScreens.focusedScreenName = "A"
-      }],
-      [100, function() {
-        root.check(own().edge === "bottom" && own().placement.offset === 0.2, "position: " + JSON.stringify(own().placement))
-        osd().show(JSON.stringify({ icon: "brightness", value: "70" }))
-      }],
-      [100, function() {
-        root.check(own().copyOn("A").mode === "peek", "no peek on A: " + own().copyOn("A").mode)
-        svc.dismissPeek(null)
-        svc.setConfigValue("osd.enabled", false)
-      }],
-      [100, function() {
-        root.check(osd() === null && own() === null, "switched off, the OSD still loads")
-        root.check(svc.moduleCatalog.some(function(m) { return m.moduleId === "osd" && m.standalone }), "the OSD left the catalog")
-        root.check(svc.settingsSchema.some(function(f) { return f.key === "osd.enabled" && f.page === "modules/osd" }), "no switch on its page")
-        var lists = svc.settingsSchema.filter(function(f) { return f.type === "moduleCatalog" }).map(function(f) { return f.part })
-        root.check(JSON.stringify(lists) === JSON.stringify(["notch", "agent", "terminal", "standalone"]),
-                   "the Modules page does not list agents and standalone modules apart: " + JSON.stringify(lists))
-        root.check(svc.moduleCatalog.some(function(m) { return m.moduleId === "claude" && m.agent && !m.standalone }), "claude is no agent")
-        root.check(svc.moduleSetting("codex", "command") === "codex", "codex's command default: " + svc.moduleSetting("codex", "command"))
-        root.check(svc.agentCommand("media", "toggle").indexOf("no agent media") === 0, "media took an agent command")
-        svc.setConfigValue("osd.enabled", undefined)
-      }],
-      [100, function() {
-        root.check(!!osd() && !!own(), "switched back on, the OSD did not load")
-        svc.replaceConfig({})
-      }]
-    ], function() { root.done() })
+    root.go(function*() {
+      // Bug: in the Omarchy shell the OSD did not load at startup; the module
+      // list was rebuilt before the standalone ids followed the module files.
+      yield root.waitFor(function() { return !!osd() && !!own() })
+      root.check(!!osd() && !!own(), "the OSD did not load at startup")
+      svc.replaceConfig({ modules: ["osd", "activities"], position: { screen: "all" } })
+      twoScreens.focusedScreenName = "B"
+      yield root.settle(svc)
+      root.check(!!osd(), "the OSD did not load")
+      root.check(svc.isStandalone("osd"), "the OSD is not standalone")
+      root.check(svc.notches[0].modules.indexOf(osd()) === -1, "the notch took the OSD")
+      root.check(!!own() && own().edge === "top" && own().placement.offset === 0.5, "no OSD place at the top center")
+      osd().show(JSON.stringify({ icon: "volume", value: "40" }))
+      yield root.settle(svc)
+      root.check(own().copyOn("B").mode === "peek", "no peek on B: " + own().copyOn("B").mode)
+      root.check(own().copyOn("A").mode !== "peek", "the OSD peeked on A too")
+      root.check(svc.notches[0].copies.every(function(c) { return c.mode !== "peek" }), "a notch peeked")
+      svc.dismissPeek(null)
+      svc.setConfigValue("osd.position", { edge: "bottom", offset: 0.2 })
+      twoScreens.focusedScreenName = "A"
+      yield root.settle(svc)
+      root.check(own().edge === "bottom" && own().placement.offset === 0.2, "position: " + JSON.stringify(own().placement))
+      osd().show(JSON.stringify({ icon: "brightness", value: "70" }))
+      yield root.settle(svc)
+      root.check(own().copyOn("A").mode === "peek", "no peek on A: " + own().copyOn("A").mode)
+      svc.dismissPeek(null)
+      svc.setConfigValue("osd.enabled", false)
+      yield root.settle(svc)
+      yield root.waitFor(function() { return osd() === null && own() === null })
+      root.check(osd() === null && own() === null, "switched off, the OSD still loads")
+      root.check(svc.moduleCatalog.some(function(m) { return m.moduleId === "osd" && m.standalone }), "the OSD left the catalog")
+      root.check(svc.settingsSchema.some(function(f) { return f.key === "osd.enabled" && f.page === "modules/osd" }), "no switch on its page")
+      var lists = svc.settingsSchema.filter(function(f) { return f.type === "moduleCatalog" }).map(function(f) { return f.part })
+      root.check(JSON.stringify(lists) === JSON.stringify(["notch", "agent", "terminal", "standalone"]),
+                 "the Modules page does not list agents and standalone modules apart: " + JSON.stringify(lists))
+      root.check(svc.moduleCatalog.some(function(m) { return m.moduleId === "claude" && m.agent && !m.standalone }), "claude is no agent")
+      root.check(svc.moduleSetting("codex", "command") === "codex", "codex's command default: " + svc.moduleSetting("codex", "command"))
+      root.check(svc.agentCommand("media", "toggle").indexOf("no agent media") === 0, "media took an agent command")
+      svc.setConfigValue("osd.enabled", undefined)
+      yield root.settle(svc)
+      yield root.waitFor(function() { return !!osd() && !!own() })
+      root.check(!!osd() && !!own(), "switched back on, the OSD did not load")
+      svc.replaceConfig({})
+    })
   }
 
   // A notch's keys were split between General and Modules, each with its own
@@ -1052,31 +1194,38 @@ ShellRoot {
   // once and takes the compact slot until it drops back. The setting is on
   // the module's own page, under the module's id.
   function resourcesCompactWhenShort() {
-    var m = resourced.moduleById("resources")
-    var notch = resourced.notches[0]
-    m.sampling = false
-    m.pressure = ({})
-    resourced.replaceConfig({})
-    m.record("memory", 0.5)
-    root.check(notch.compactModule === m && m.compactRows.length === 3, "not shown by default")
-    var field = resourced.settingsSchema.filter(function(f) { return f.key === "resources.compact" })[0]
-    root.check(!!field && field.page === "modules/resources", "field: " + JSON.stringify(field))
+    root.go(function*() {
+      var m = resourced.moduleById("resources")
+      var notch = resourced.notches[0]
+      m.sampling = false
+      m.pressure = ({})
+      resourced.replaceConfig({})
+      m.record("memory", 0.5)
+      yield root.settle(resourced)
+      root.check(notch.compactModule === m && m.compactRows.length === 3, "not shown by default")
+      var field = resourced.settingsSchema.filter(function(f) { return f.key === "resources.compact" })[0]
+      root.check(!!field && field.page === "modules/resources", "field: " + JSON.stringify(field))
 
-    resourced.setConfigValue("resources.compact", "short")
-    root.check(notch.compactModule === null, "the notch shows resources with nothing short")
-    m.record("memory", 0.95)
-    root.check(notch.compactModule === m && m.compactRows.length === 1, "memory short, no compact view")
-    root.check(m.peekId === "memory" && resourced.peeking(m), "memory short, no peek")
-    resourced.dismissPeek(null)
-    m.record("memory", 0.96)
-    root.check(!resourced.peeking(m), "peeked again while still short")
-    m.record("memory", 0.8)
-    root.check(notch.compactModule === null, "still compact after memory dropped")
-    m.record("cpu", 0.99)
-    root.check(notch.compactModule === null, "one CPU burst counted as short")
-    resourced.replaceConfig({})
-    m.sampling = true
-    root.done()
+      resourced.setConfigValue("resources.compact", "short")
+      yield root.settle(resourced)
+      root.check(notch.compactModule === null, "the notch shows resources with nothing short")
+      m.record("memory", 0.95)
+      yield root.settle(resourced)
+      root.check(notch.compactModule === m && m.compactRows.length === 1, "memory short, no compact view")
+      root.check(m.peekId === "memory" && resourced.peeking(m), "memory short, no peek")
+      resourced.dismissPeek(null)
+      m.record("memory", 0.96)
+      yield root.settle(resourced)
+      root.check(!resourced.peeking(m), "peeked again while still short")
+      m.record("memory", 0.8)
+      yield root.settle(resourced)
+      root.check(notch.compactModule === null, "still compact after memory dropped")
+      m.record("cpu", 0.99)
+      yield root.settle(resourced)
+      root.check(notch.compactModule === null, "one CPU burst counted as short")
+      resourced.replaceConfig({})
+      m.sampling = true
+    })
   }
 
   TestService {
@@ -1091,22 +1240,28 @@ ShellRoot {
   // open. Started, it takes the compact slot with the time left; at the end
   // it peeks (urgent, so even over the open notch) and says so until stopped.
   function timerRunsAndEnds() {
-    var m = timed.moduleById("timer")
-    var notch = timed.notches[0]
-    timed.replaceConfig({ timer: { notify: false } })
-    root.check(!!m && m.active && notch.compactModule === null, "idle timer is in the closed notch")
-    root.check(m.command("2s Tea") === "ok", "start refused")
-    root.check(notch.compactModule === m && m.status === "running", "running timer not in the closed notch")
-    root.check(m.clock === "0:02", "clock: " + m.clock)
-    timed.dismissPeek(null)
-    root.steps([[2600, function() {
+    root.go(function*() {
+      var m = timed.moduleById("timer")
+      var notch = timed.notches[0]
+      timed.replaceConfig({ timer: { notify: false } })
+      yield root.settle(timed)
+      root.check(!!m && m.active && notch.compactModule === null, "idle timer is in the closed notch")
+      root.check(m.command("2s Tea") === "ok", "start refused")
+      yield root.settle(timed)
+      root.check(notch.compactModule === m && m.status === "running", "running timer not in the closed notch")
+      root.check(m.clock === "0:02" || m.clock === "0:01", "clock: " + m.clock)
+      timed.dismissPeek(null)
+      yield root.wait(2600)
+      yield root.settle(timed)
       root.check(m.status === "done", "not done after its time: " + m.status)
       root.check(timed.peeking(m), "no peek at the end")
       root.check(notch.compactModule === m && m.doneText === "Time's up", "done text: " + m.doneText)
       timed.dismissPeek(null)
       root.check(m.command("stop") === "ok", "stop refused")
+      yield root.settle(timed)
       root.check(notch.compactModule === null, "stopped timer still in the closed notch")
-    }]], function() { timed.replaceConfig({}); root.done() })
+      timed.replaceConfig({})
+    })
   }
 
   function timerCommands() {
@@ -1136,87 +1291,109 @@ ShellRoot {
   // numbered, the selected one's copy on the focused screen open as a
   // preview, the keys driving it through navKey().
   function navigationPreview() {
-    var main = null, side = null
-    root.steps([
-      [0, function() { twoScreens.focusedScreenName = "B"; multi.replaceConfig(root.twoNotches) }],
-      [300, function() {
-        main = multi.notchById("main")
-        side = multi.notchById("side")
-        if (!root.check(!!main && !!side, "the two notches did not load")) return
-        root.check(multi.navigate() === "ok" && multi.navigating, "navigate did not start navigation")
-        root.check(main.copyOn("B").preview && main.copyOn("B").mode === "expanded",
-                   "the first notch on the focused screen does not preview: " + main.copyOn("B").mode)
-        root.check(!main.copyOn("B").pinned, "the preview pinned the notch")
-        root.check(main.copyOn("A").mode !== "expanded", "the copy on the other screen opened too")
-        root.check(main.copyOn("A").navShown && main.copyOn("A").navNumber === 1, "main is not numbered 1")
-        root.check(side.copies[0].navShown && side.copies[0].navNumber === 2, "side is not numbered 2")
-        root.check(!multi.visitor.copies.some(function(c) { return c.navShown }), "the visitor takes part in navigation")
-        multi.navKey("next")
-        root.check(multi.navSelected === 1 && side.copies[0].mode === "expanded", "next did not move to the second notch")
-        root.check(main.copyOn("B").mode !== "expanded", "the first notch stayed open after moving on")
-        multi.navKey("next")
-        root.check(multi.navSelected === 0, "next did not wrap around")
-        multi.navKey("2")
-        root.check(multi.navSelected === 1, "2 did not select the second notch")
-        multi.navKey("leave")
-        root.check(!multi.navigating, "Escape did not end navigation")
-        root.check(!side.copies[0].isOpen && !main.copyOn("B").isOpen, "Escape left a notch open")
-        root.check(!side.copies[0].navShown, "the highlight stayed after Escape")
-        multi.navigate()
-        multi.navigate()
-        root.check(!multi.navigating, "navigate again did not end navigation")
-      }]
-    ], function() { root.done() })
+    root.go(function*() {
+      yield root.nested(root.withTwoNotches)
+      var main = multi.notchById("main")
+      var side = multi.notchById("side")
+      if (!root.check(!!main && !!side, "the two notches did not load")) return
+      root.check(multi.navigate() === "ok", "navigate was refused")
+      yield root.settle(multi)
+      root.check(multi.navigating, "navigate did not start navigation")
+      root.check(main.copyOn("B").preview && main.copyOn("B").mode === "expanded",
+                 "the first notch on the focused screen does not preview: " + main.copyOn("B").mode)
+      root.check(!main.copyOn("B").pinned, "the preview pinned the notch")
+      root.check(main.copyOn("A").mode !== "expanded", "the copy on the other screen opened too")
+      root.check(main.copyOn("A").navShown && main.copyOn("A").navNumber === 1, "main is not numbered 1")
+      root.check(side.copies[0].navShown && side.copies[0].navNumber === 2, "side is not numbered 2")
+      root.check(!multi.visitor.copies.some(function(c) { return c.navShown }), "the visitor takes part in navigation")
+      root.navKey(multi, "next")
+      yield root.settle(multi)
+      root.check(multi.navSelected === 1 && side.copies[0].mode === "expanded", "next did not move to the second notch")
+      root.check(main.copyOn("B").mode !== "expanded", "the first notch stayed open after moving on")
+      root.navKey(multi, "next")
+      yield root.settle(multi)
+      root.check(multi.navSelected === 0, "next did not wrap around")
+      root.navKey(multi, "2")
+      yield root.settle(multi)
+      root.check(multi.navSelected === 1, "2 did not select the second notch")
+      root.navKey(multi, "leave")
+      yield root.settle(multi)
+      root.check(!multi.navigating, "Escape did not end navigation")
+      root.check(!side.copies[0].isOpen && !main.copyOn("B").isOpen, "Escape left a notch open")
+      root.check(!side.copies[0].navShown, "the highlight stayed after Escape")
+      multi.navigate()
+      yield root.settle(multi)
+      multi.navigate()
+      yield root.settle(multi)
+      root.check(!multi.navigating, "navigate again did not end navigation")
+    })
   }
 
   function navigationOpen() {
-    root.withTwoNotches(function() {
+    root.go(function*() {
+      yield root.nested(root.withTwoNotches)
       var main = multi.notchById("main")
       var side = multi.notchById("side")
-      if (!root.check(!!main && !!side, "the two notches did not load")) { root.done(); return }
+      if (!root.check(!!main && !!side, "the two notches did not load")) return
       main.open()
+      yield root.settle(multi)
       root.check(main.copyOn("B").pinned, "main did not open (test setup)")
       multi.navigate()
+      yield root.settle(multi)
       root.check(multi.navSelected === 0, "navigation did not start on the open notch")
-      multi.navKey("next")
+      root.navKey(multi, "next")
+      yield root.settle(multi)
       root.check(main.copyOn("B").mode !== "expanded", "the pinned notch stayed open with another one selected")
-      multi.navKey("previous")
-      multi.navKey("leave")
+      root.navKey(multi, "previous")
+      root.navKey(multi, "leave")
+      yield root.settle(multi)
       root.check(main.copyOn("B").pinned && main.copyOn("B").mode === "expanded", "Escape did not open the pinned notch again")
       multi.navigate()
-      multi.navKey("next")
-      multi.navKey("open")
+      yield root.settle(multi)
+      root.navKey(multi, "next")
+      root.navKey(multi, "open")
+      yield root.settle(multi)
       root.check(!multi.navigating, "Enter did not end navigation")
       root.check(side.copies[0].pinned, "Enter did not pin the selected notch")
       root.check(!main.copyOn("B").pinned, "Enter left the other notch open")
       side.close()
+      yield root.settle(multi)
       multi.navigate()
+      yield root.settle(multi)
       main.copyOn("B").togglePinned("")
+      yield root.settle(multi)
       root.check(!multi.navigating, "a click that pinned a notch left navigation on")
       main.close()
-      root.done()
     })
   }
 
   function navigationTabs() {
-    var copy = tabsSvc.notches.length > 0 ? tabsSvc.notches[0].copies[0] : null
-    if (!root.check(!!copy && copy.tabModules.length === 2, "the notch with two tabs did not load")) { root.done(); return }
-    var first = copy.shownModules[0].moduleId
-    tabsSvc.navigate()
-    tabsSvc.navKey("nextTab")
-    root.check(copy.shownModules[0].moduleId !== first, "Tab did not show the next tab")
-    tabsSvc.navKey("previousTab")
-    root.check(copy.shownModules[0].moduleId === first, "Shift+Tab did not go back")
-    tabsSvc.navKey("nextTab")
-    tabsSvc.navKey("leave")
-    root.check(copy.shownModules[0].moduleId === first, "Escape did not give the notch its tab back")
-    tabsSvc.navigate()
-    tabsSvc.navKey("nextTab")
-    tabsSvc.navKey("open")
-    root.check(copy.pinned && copy.shownModules[0].moduleId !== first, "Enter did not open on the tab picked")
-    copy.close()
-    copy.showTab("")
-    root.done()
+    root.go(function*() {
+      var copy = tabsSvc.notches.length > 0 ? tabsSvc.notches[0].copies[0] : null
+      if (!root.check(!!copy && copy.tabModules.length === 2, "the notch with two tabs did not load")) return
+      var first = copy.shownModules[0].moduleId
+      tabsSvc.navigate()
+      yield root.settle(tabsSvc)
+      root.navKey(tabsSvc, "nextTab")
+      yield root.settle(tabsSvc)
+      root.check(copy.shownModules[0].moduleId !== first, "Tab did not show the next tab")
+      root.navKey(tabsSvc, "previousTab")
+      yield root.settle(tabsSvc)
+      root.check(copy.shownModules[0].moduleId === first, "Shift+Tab did not go back")
+      root.navKey(tabsSvc, "nextTab")
+      root.navKey(tabsSvc, "leave")
+      yield root.settle(tabsSvc)
+      root.check(copy.shownModules[0].moduleId === first, "Escape did not give the notch its tab back")
+      tabsSvc.navigate()
+      yield root.settle(tabsSvc)
+      root.navKey(tabsSvc, "nextTab")
+      root.navKey(tabsSvc, "open")
+      yield root.settle(tabsSvc)
+      root.check(copy.pinned && copy.shownModules[0].moduleId !== first, "Enter did not open on the tab picked")
+      copy.close()
+      copy.showTab("")
+      yield root.settle(tabsSvc)
+    })
   }
 
   // Bug guarded: navigation takes the keyboard from an agent pinned open;
@@ -1224,74 +1401,88 @@ ShellRoot {
   // Navigation's keys for the selected notch (Navigate.step): a removal
   // asked twice, its settings.
   function navigationRemove() {
-    root.steps([
-      [0, function() {
-        twoScreens.focusedScreenName = "B"
-        multi.replaceConfig({ notches: root.twoNotches.notches.concat([{ id: "extra", modules: [], position: { edge: "bottom" } }]) })
-      }],
-      [300, function() {
-        multi.navigate()
-        multi.navKey("3")
-        root.check(multi.notches.length === 3 && multi.navNotch && multi.navNotch.notchId === "extra",
-                   "the third notch is not selected (test setup)")
-        multi.navKey("remove")
-        root.check(multi.navMode === "remove", "x did not ask first: " + multi.navMode)
-        root.check(multi.navNotch.copies[0].navMode === "remove", "the label does not show the question")
-        multi.navKey("leave")
-        root.check(multi.navigating && multi.navMode === "select" && multi.notches.length === 3,
-                   "Escape at the question did not keep the notch and stay in navigation")
-        multi.navKey("remove")
-        multi.navKey("remove")
-      }],
-      [300, function() {
-        root.check(multi.notches.length === 2, "x twice left " + multi.notches.length + " notches")
-        root.check(multi.navSelected === 1 && multi.navNotch && multi.navNotch.notchId === "side",
-                   "after removing the last one, " + multi.navSelected + " is selected, not the one before")
-        multi.navKey("settings")
-        root.check(!multi.navigating, "s did not end navigation")
-        root.check(multi.settingsOpen && multi.settingsNotch === 1, "s did not open the selected notch's settings")
-        multi.closeSettings()
-      }]
-    ], function() { multi.replaceConfig(root.twoNotches); root.done() })
+    root.go(function*() {
+      twoScreens.focusedScreenName = "B"
+      multi.replaceConfig({ notches: root.twoNotches.notches.concat([{ id: "extra", modules: [], position: { edge: "bottom" } }]) })
+      yield root.waitFor(function() { return multi.notches.length === 3 })
+      yield root.settle(multi)
+      multi.navigate()
+      yield root.settle(multi)
+      root.navKey(multi, "3")
+      yield root.settle(multi)
+      root.check(multi.notches.length === 3 && multi.navNotch && multi.navNotch.notchId === "extra",
+                 "the third notch is not selected (test setup)")
+      root.navKey(multi, "remove")
+      yield root.settle(multi)
+      root.check(multi.navMode === "remove", "x did not ask first: " + multi.navMode)
+      root.check(multi.navNotch.copies[0].navMode === "remove", "the label does not show the question")
+      root.navKey(multi, "leave")
+      yield root.settle(multi)
+      root.check(multi.navigating && multi.navMode === "select" && multi.notches.length === 3,
+                 "Escape at the question did not keep the notch and stay in navigation")
+      root.navKey(multi, "remove")
+      root.navKey(multi, "remove")
+      yield root.settle(multi)
+      root.check(multi.notches.length === 2, "x twice left " + multi.notches.length + " notches")
+      root.check(multi.navSelected === 1 && multi.navNotch && multi.navNotch.notchId === "side",
+                 "after removing the last one, " + multi.navSelected + " is selected, not the one before")
+      root.navKey(multi, "settings")
+      yield root.settle(multi)
+      root.check(!multi.navigating, "s did not end navigation")
+      root.check(multi.settingsOpen && multi.settingsNotch === 1, "s did not open the selected notch's settings")
+      multi.closeSettings()
+      yield root.settle(multi)
+      multi.replaceConfig(root.twoNotches)
+    })
   }
 
   // Moving the selected notch (m): arrows for the edge, Shift along it, Tab
   // the screen, live; Enter keeps it, Escape or the shortcut puts it back.
   function navigationMove() {
-    root.withTwoNotches(function() {
+    root.go(function*() {
+      yield root.nested(root.withTwoNotches)
       var side = multi.notchById("side")
-      if (!root.check(!!side, "the side notch did not load")) { root.done(); return }
+      if (!root.check(!!side, "the side notch did not load")) return
       twoScreens.focusedScreenName = "B"
       multi.navigate()
-      multi.navKey("2")
-      multi.navKey("move")
+      yield root.settle(multi)
+      root.navKey(multi, "2")
+      root.navKey(multi, "move")
+      yield root.settle(multi)
       root.check(multi.navMode === "move", "m did not start moving: " + multi.navMode)
-      multi.navKey("down")
+      root.navKey(multi, "down")
+      yield root.settle(multi)
       root.check(side.placement.edge === "bottom", "down put it on " + side.placement.edge)
-      multi.navKey("slideOn")
+      root.navKey(multi, "slideOn")
+      yield root.settle(multi)
       root.check(Math.abs(side.placement.offset - 0.55) < 1e-9, "Shift+→ slid it to " + side.placement.offset)
-      multi.navKey("leave")
+      root.navKey(multi, "leave")
+      yield root.settle(multi)
       root.check(multi.navigating && multi.navMode === "select", "Escape while moving left navigation")
       root.check(side.placement.edge === "left" && side.placement.offset === 0.5, "Escape did not put it back: "
                  + side.placement.edge + " " + side.placement.offset)
       root.check(JSON.stringify(multi.configValue("notches.1.position")) === JSON.stringify({ edge: "left" }),
                  "the config after Escape: " + JSON.stringify(multi.configValue("notches.1.position")))
-      multi.navKey("move")
-      multi.navKey("up")
-      multi.navKey("open")
+      root.navKey(multi, "move")
+      root.navKey(multi, "up")
+      root.navKey(multi, "open")
+      yield root.settle(multi)
       root.check(multi.navigating && multi.navMode === "select", "Enter while moving left navigation")
       root.check(side.placement.edge === "top", "Enter did not keep it on top: " + side.placement.edge)
-      multi.navKey("move")
-      multi.navKey("nextTab")
+      root.navKey(multi, "move")
+      root.navKey(multi, "nextTab")
+      yield root.settle(multi)
       root.check(side.placement.screen === "A", "Tab took it to '" + side.placement.screen + "', not A")
-      multi.navKey("leave")
+      root.navKey(multi, "leave")
+      yield root.settle(multi)
       root.check(side.placement.screen === "", "Escape left it on " + side.placement.screen)
-      multi.navKey("move")
-      multi.navKey("next")
+      root.navKey(multi, "move")
+      root.navKey(multi, "next")
+      yield root.settle(multi)
       multi.navigate()
+      yield root.settle(multi)
       root.check(!multi.navigating && side.placement.edge === "top", "the shortcut while moving left it on " + side.placement.edge)
       multi.replaceConfig(root.twoNotches)
-      root.done()
     })
   }
 
@@ -1299,56 +1490,64 @@ ShellRoot {
   // on demand, Hyprland gave its keyboard back to the focused screen. It
   // stays exclusive there, on demand once its screen has focus.
   function keyboardOnOtherScreen() {
-    root.withTwoNotches(function() {
+    root.go(function*() {
+      yield root.nested(root.withTwoNotches)
       var side = multi.notchById("side")
-      if (!root.check(!!side, "the side notch did not load")) { root.done(); return }
+      if (!root.check(!!side, "the side notch did not load")) return
       var copy = side.copies[0]
       multi.setConfigValue("notches.1.position.screen", "A")
       twoScreens.focusedScreenName = "B"
-      root.steps([[200, function() {
-        root.check(copy.screenName === "A", "the side notch is on " + copy.screenName + ", not A (test setup)")
-        side.open()
-        copy.windowKeyboard(true)
-        root.check(copy.pinned && copy.keyboardFocus === "exclusive", "held on the screen without focus, it asks for " + copy.keyboardFocus)
-        twoScreens.focusedScreenName = "A"
-        root.check(copy.keyboardFocus === "ondemand", "its screen focused, it asks for " + copy.keyboardFocus)
-      }]], function() {
-        side.close()
-        twoScreens.focusedScreenName = "B"
-        multi.setConfigValue("notches.1.position.screen", undefined)
-        root.done()
-      })
+      yield root.settle(multi)
+      root.check(copy.screenName === "A", "the side notch is on " + copy.screenName + ", not A (test setup)")
+      side.open()
+      copy.windowKeyboard(true)
+      yield root.settle(multi)
+      root.check(copy.pinned && copy.keyboardFocus === "exclusive", "held on the screen without focus, it asks for " + copy.keyboardFocus)
+      twoScreens.focusedScreenName = "A"
+      yield root.settle(multi)
+      root.check(copy.keyboardFocus === "ondemand", "its screen focused, it asks for " + copy.keyboardFocus)
+      side.close()
+      twoScreens.focusedScreenName = "B"
+      multi.setConfigValue("notches.1.position.screen", undefined)
     })
   }
 
   function navigationKeepsAgent() {
-    var copy = typer.notches.length > 0 ? typer.notches[0].copies[0] : null
-    if (!root.check(!!copy, "the typing notch did not load")) { root.done(); return }
-    copy.open()
-    copy.windowKeyboard(true)
-    root.check(copy.keyboardFocus === "ondemand", "pinned, holding the keyboard, it asks for " + copy.keyboardFocus)
-    typer.navigate()
-    root.check(copy.keyboardFocus === "none", "while navigating, the notch asks for " + copy.keyboardFocus)
-    root.check(copy.mode === "expanded", "selected, the open agent shows " + copy.mode)
-    copy.windowKeyboard(false)
-    root.check(copy.pinned, "losing the keyboard to navigation closed the notch")
-    typer.navKey("leave")
-    root.check(copy.pinned && copy.keyboardFocus === "exclusive", "after Escape it asks for " + copy.keyboardFocus)
-    copy.close()
-    // Enter: it takes the keyboard, then the window you were in takes it
-    // back as navigation's window goes. It asks again, still open.
-    typer.navigate()
-    typer.navKey("open")
-    copy.windowKeyboard(true)
-    copy.windowKeyboard(false)
-    root.check(copy.pinned, "losing the keyboard as navigation ended closed the agent")
-    root.check(copy.keyboardFocus === "exclusive", "it did not ask for the keyboard again: " + copy.keyboardFocus)
-    root.steps([[800, function() {}]], function() {
+    root.go(function*() {
+      var copy = typer.notches.length > 0 ? typer.notches[0].copies[0] : null
+      if (!root.check(!!copy, "the typing notch did not load")) return
+      copy.open()
+      copy.windowKeyboard(true)
+      yield root.settle(typer)
+      root.check(copy.keyboardFocus === "ondemand", "pinned, holding the keyboard, it asks for " + copy.keyboardFocus)
+      typer.navigate()
+      yield root.settle(typer)
+      root.check(copy.keyboardFocus === "none", "while navigating, the notch asks for " + copy.keyboardFocus)
+      root.check(copy.mode === "expanded", "selected, the open agent shows " + copy.mode)
+      copy.windowKeyboard(false)
+      yield root.settle(typer)
+      root.check(copy.pinned, "losing the keyboard to navigation closed the notch")
+      root.navKey(typer, "leave")
+      yield root.settle(typer)
+      root.check(copy.pinned && copy.keyboardFocus === "exclusive", "after Escape it asks for " + copy.keyboardFocus)
+      copy.close()
+      yield root.settle(typer)
+      // Enter: it takes the keyboard, then the window you were in takes it
+      // back as navigation's window goes. It asks again, still open.
+      typer.navigate()
+      yield root.settle(typer)
+      root.navKey(typer, "open")
+      copy.windowKeyboard(true)
+      copy.windowKeyboard(false)
+      yield root.settle(typer)
+      root.check(copy.pinned, "losing the keyboard as navigation ended closed the agent")
+      root.check(copy.keyboardFocus === "exclusive", "it did not ask for the keyboard again: " + copy.keyboardFocus)
+      yield root.wait(800)
       // Later on, a window taking it closes the notch, as before.
       copy.windowKeyboard(true)
       copy.windowKeyboard(false)
+      yield root.settle(typer)
       root.check(!copy.pinned, "settled, losing the keyboard to a window left the notch open")
-      root.done()
     })
   }
 
@@ -1366,28 +1565,35 @@ ShellRoot {
   }
 
   function keyboardOnlyWhilePinned() {
-    root.steps([[100, function() {}]], function() {
+    root.go(function*() {
+      yield root.wait(100)
       var module = typer.moduleById("typing")
       var copy = typer.notches.length > 0 ? typer.notches[0].copies[0] : null
-      if (!root.check(!!module && !!copy, "the typing module or its notch did not load")) { root.done(); return }
+      if (!root.check(!!module && !!copy, "the typing module or its notch did not load")) return
       root.check(copy.keyboardFocus === "none", "closed, it takes the keyboard: " + copy.keyboardFocus)
-      copy.hovered = true
+      root.hover(copy)
+      yield root.waitFor(function() { return copy.mode === "expanded" })
       root.check(copy.mode === "expanded", "hovered, it is " + copy.mode)
       root.check(copy.keyboardFocus === "none", "hover alone took the keyboard")
       module.requestKeyboard()
+      yield root.settle(typer)
       root.check(copy.pinned, "a press on the field did not pin the notch")
       root.check(copy.keyboardFocus === "exclusive", "pinned on the field, it takes " + copy.keyboardFocus)
       // Once its window has the keyboard, on demand: kept exclusive, no
       // shortcut could move focus to a window, only a click away.
       copy.windowKeyboard(true)
+      yield root.settle(typer)
       root.check(copy.keyboardFocus === "ondemand", "holding the keyboard, it asks for " + copy.keyboardFocus)
       copy.windowKeyboard(false)
+      yield root.settle(typer)
       root.check(!copy.pinned && copy.keyboardFocus === "none", "a window took the keyboard and the notch stayed open")
+      root.unhover(copy)
       copy.open()
+      yield root.settle(typer)
       root.check(copy.keyboardFocus === "exclusive", "pinned again, it takes " + copy.keyboardFocus)
       copy.close()
+      yield root.settle(typer)
       root.check(copy.keyboardFocus === "none", "closed again, it keeps the keyboard")
-      root.done()
     })
   }
 
@@ -1461,7 +1667,7 @@ ShellRoot {
   // Bug: with the top-level position on the left, a notch in `notches`
   // dropped on the top edge was saved without `edge` (top is the default),
   // took "left" from the top level and jumped back. The drop saves what
-  // NotchWindow saves: Position.configValue(drop, notch.inheritedPosition).
+  // the daemon saves: Position.configValue, against the inherited position.
   TestService {
     id: dropSvc
     ipcTarget: "notchd-qmltest-drop"
@@ -1471,18 +1677,26 @@ ShellRoot {
   }
 
   function dropOnTopStays() {
-    dropSvc.replaceConfig({ position: { edge: "left", offset: 0.9, screen: "DP-1" },
-                            notches: [{}, { id: "side", modules: ["activities"] }] })
-    var side = dropSvc.notchById("side")
-    if (!root.check(!!side && side.edge === "left", "the second notch should start on the left")) { root.done(); return }
-    var drop = { edge: "top", offset: 0.5, screen: "DP-1" }
-    side.setValue("position", Position.configValue(drop, side.inheritedPosition))
-    root.check(side.edge === "top", "dropped on the top edge, it went to " + side.edge)
-    root.check(side.placement.offset === 0.5, "dropped in the middle, it is at " + side.placement.offset)
-    var main = dropSvc.notchById("main")
-    main.setValue("position", Position.configValue({ edge: "top", offset: 0.5, screen: "" }, main.inheritedPosition))
-    root.check(main.edge === "top" && main.placement.screen === "", "the first notch went to " + JSON.stringify(main.placement))
-    root.done()
+    root.go(function*() {
+      dropSvc.replaceConfig({ position: { edge: "left", offset: 0.9, screen: "DP-1" },
+                              notches: [{}, { id: "side", modules: ["activities"] }] })
+      yield root.waitFor(function() { var n = dropSvc.notchById("side"); return !!n && n.edge === "left" })
+      var side = dropSvc.notchById("side")
+      if (!root.check(!!side && side.edge === "left", "the second notch should start on the left")) return
+      // What NotchWindow reports when the notch is let go: picked up, then
+      // dropped. The daemon saves what Position.configValue says.
+      var drop = { edge: "top", offset: 0.5, screen: "DP-1" }
+      side.copies[0].setDragging(true)
+      side.copies[0].setDragging(false, drop)
+      yield root.settle(dropSvc)
+      root.check(side.edge === "top", "dropped on the top edge, it went to " + side.edge)
+      root.check(side.placement.offset === 0.5, "dropped in the middle, it is at " + side.placement.offset)
+      var main = dropSvc.notchById("main")
+      main.copies[0].setDragging(true)
+      main.copies[0].setDragging(false, { edge: "top", offset: 0.5, screen: "" })
+      yield root.settle(dropSvc)
+      root.check(main.edge === "top" && main.placement.screen === "", "the first notch went to " + JSON.stringify(main.placement))
+    })
   }
 
   // ---------------------------------------------------------------- agents
@@ -1539,6 +1753,13 @@ ShellRoot {
     if (m.available) return false
     console.log("NOTE " + root.current + ": qmltermwidget is not installed; the terminal was not tested")
     root.done()
+    return true
+  }
+
+  // The same for a flow: the note, and whether to end it.
+  function terminalMissing(m) {
+    if (m.available) return false
+    console.log("NOTE " + root.current + ": qmltermwidget is not installed; the terminal was not tested")
     return true
   }
 
@@ -1604,9 +1825,9 @@ ShellRoot {
         root.check(!m.working && m.sessionTitle === expected, "after work: working " + m.working + ", title " + m.sessionTitle)
         // Ctrl+Escape is the way out: the notch closes, the agent goes on.
         keys.keyClick(Qt.Key_Escape, Qt.ControlModifier)
-        root.check(!copy.pinned, "Ctrl+Escape did not close the notch")
       }],
       [600, function() {
+        root.check(!copy.pinned, "Ctrl+Escape did not close the notch")
         root.check(m.viewsOpen === 0 && m.term === first && first.parent === m, "closing did not park the terminal")
         root.check(!m.exited, "closing stopped it")
         m.typed = true
@@ -1649,32 +1870,30 @@ ShellRoot {
   // Over IPC: ask opens the notch with the keyboard and types the question
   // in once the agent is up; new starts another; anything else, the usage.
   function claudeAsk() {
-    var m = claudeSvc.moduleById("claude")
-    if (root.noTerminal(m)) return
-    var copy = claudeSvc.notches[0].copies[0]
-    var pid = ""
-    root.steps([
+    root.go(function*() {
+      var m = claudeSvc.moduleById("claude")
+      if (root.terminalMissing(m)) return
+      var copy = claudeSvc.notches[0].copies[0]
+      var pid = ""
       // The last case's view is still closing.
-      [600, function() {
-        root.check(m.command("nonsense").indexOf("usage") === 0, "an unknown command did not answer the usage")
-        root.check(m.command("ask why is the sky blue?") === "ok", "ask failed")
-        root.check(copy.pinned && copy.keyboardFocus === "exclusive", "ask did not open the notch with the keyboard")
-      }],
-      [1500, function() { root.run(["cat", root.dir + "/claude-args"]) }],
-      [300, function() {
-        var lines = shellCmd.out.split("\n")
-        root.check(lines.indexOf("got why is the sky blue?") !== -1, "the question did not reach claude: " + JSON.stringify(lines))
-        pid = lines[2]
-        root.check(m.command("new") === "ok", "new failed")
-      }],
-      [900, function() { root.run(["cat", root.dir + "/claude-args"]) }],
-      [300, function() {
-        root.check(shellCmd.out.split("\n")[2] !== pid, "new did not start another claude")
-        m.closeNotch()
-      }]
-    ], function() {
+      yield root.wait(600)
+      root.check(m.command("nonsense").indexOf("usage") === 0, "an unknown command did not answer the usage")
+      root.check(m.command("ask why is the sky blue?") === "ok", "ask failed")
+      yield root.settle(claudeSvc)
+      root.check(copy.pinned && copy.keyboardFocus === "exclusive", "ask did not open the notch with the keyboard")
+      yield root.wait(1500)
+      root.run(["cat", root.dir + "/claude-args"])
+      yield root.wait(300)
+      var lines = shellCmd.out.split("\n")
+      root.check(lines.indexOf("got why is the sky blue?") !== -1, "the question did not reach claude: " + JSON.stringify(lines))
+      pid = lines[2]
+      root.check(m.command("new") === "ok", "new failed")
+      yield root.wait(900)
+      root.run(["cat", root.dir + "/claude-args"])
+      yield root.wait(300)
+      root.check(shellCmd.out.split("\n")[2] !== pid, "new did not start another claude")
+      m.closeNotch()
       m.stop()
-      root.done()
     })
   }
 
@@ -1682,58 +1901,61 @@ ShellRoot {
   // notch in settings broke it without a word. `agent <id> toggle` finds
   // the notch by the module it shows.
   function agentToggle() {
-    var m = claudeSvc.moduleById("claude")
-    var copy = claudeSvc.notches[0].copies[0]
-    root.steps([
+    root.go(function*() {
+      var m = claudeSvc.moduleById("claude")
+      var copy = claudeSvc.notches[0].copies[0]
       // The last case's view is still closing.
-      [600, function() {
-        root.check(claudeSvc.notches[0].notchId !== "claude", "the test notch is called claude: the case proves nothing")
-        root.check(claudeSvc.agentCommand("claude", "toggle") === "ok", "toggle failed")
-        root.check(copy.pinned, "toggle did not open the notch")
-      }],
-      [400, function() {
-        root.check(m.viewsOpen > 0, "open, no view shows claude")
-        root.check(claudeSvc.agentCommand("claude", "toggle") === "ok", "toggle again failed")
-        root.check(!copy.pinned, "toggle did not close the notch")
-        root.check(claudeSvc.agentCommand("nope", "toggle").indexOf("no agent nope") === 0, "an unknown agent did not say so")
-      }]
-    ], function() {
+      yield root.wait(600)
+      root.check(claudeSvc.notches[0].notchId !== "claude", "the test notch is called claude: the case proves nothing")
+      root.check(claudeSvc.agentCommand("claude", "toggle") === "ok", "toggle failed")
+      yield root.settle(claudeSvc)
+      root.check(copy.pinned, "toggle did not open the notch")
+      yield root.wait(400)
+      root.check(m.viewsOpen > 0, "open, no view shows claude")
+      root.check(claudeSvc.agentCommand("claude", "toggle") === "ok", "toggle again failed")
+      yield root.settle(claudeSvc)
+      root.check(!copy.pinned, "toggle did not close the notch")
+      root.check(claudeSvc.agentCommand("nope", "toggle").indexOf("no agent nope") === 0, "an unknown agent did not say so")
       m.stop()
-      root.done()
     })
   }
 
   // The plan's limits (AgentUsage), fed answers by hand: offscreen, nothing
   // asks the network or reads a real login (NOTCHD_OFFLINE).
   function agentUsage() {
-    var m = claudeSvc.moduleById("claude")
-    var copy = claudeSvc.notches[0].copies[0]
-    // `day`: the session window (its reset), so a new window starts over.
-    var answer = function(session, day) {
-      return { limits: [
-        { kind: "session", group: "session", percent: session, resets_at: "2099-01-0" + (day || 2) + "T05:00:00Z" },
-        { kind: "weekly_all", group: "weekly", percent: 20, resets_at: "2099-01-07T00:00:00Z" } ] }
-    }
-    root.check(!m.usage.live, "offscreen, the usage asks the network")
-    root.check(m.usageProvider === "claude" && m.usage.active, "claude has no usage: " + m.usageProvider)
-    root.check(!m.showsUsage, "usage shown before any answer")
-    root.check(m.usage.apply(answer(85, 1)), "the answer was refused")
-    root.check(m.showsUsage && m.usage.limits.length === 2, "the limits do not show: " + JSON.stringify(m.usage.limits))
-    root.check(copy.peekModule === null, "the first answer warned: a restart would warn again")
-    root.check(m.usage.apply(answer(10)) && !m.usage.apply({ nope: 1 }), "an answer that isn't one was taken")
-    m.usage.apply(answer(81))
-    root.check(copy.peekModule === m && m.peekReason === "usage", "passing 80 % did not peek")
-    root.check(m.usageAlert && m.usageAlert.level === 80 && m.usageAlert.label === "5h", "the warning: " + JSON.stringify(m.usageAlert))
-    copy.dismissPeek()
-    m.usage.apply(answer(90))
-    root.check(copy.peekModule === null, "warned twice in one window")
-    m.usage.apply(answer(100))
-    root.check(copy.peekModule === m && m.usageAlert.level === 100, "the limit reached did not peek")
-    copy.dismissPeek()
-    claudeSvc.setConfigValue("claude.usage", false)
-    root.check(!m.showsUsage, "switched off, the usage still shows")
-    claudeSvc.setConfigValue("claude.usage", undefined)
-    root.done()
+    root.go(function*() {
+      var m = claudeSvc.moduleById("claude")
+      var copy = claudeSvc.notches[0].copies[0]
+      // `day`: the session window (its reset), so a new window starts over.
+      var answer = function(session, day) {
+        return { limits: [
+          { kind: "session", group: "session", percent: session, resets_at: "2099-01-0" + (day || 2) + "T05:00:00Z" },
+          { kind: "weekly_all", group: "weekly", percent: 20, resets_at: "2099-01-07T00:00:00Z" } ] }
+      }
+      root.check(!m.usage.live, "offscreen, the usage asks the network")
+      root.check(m.usageProvider === "claude" && m.usage.active, "claude has no usage: " + m.usageProvider)
+      root.check(!m.showsUsage, "usage shown before any answer")
+      root.check(m.usage.apply(answer(85, 1)), "the answer was refused")
+      root.check(m.showsUsage && m.usage.limits.length === 2, "the limits do not show: " + JSON.stringify(m.usage.limits))
+      yield root.settle(claudeSvc)
+      root.check(copy.peekModule === null, "the first answer warned: a restart would warn again")
+      root.check(m.usage.apply(answer(10)) && !m.usage.apply({ nope: 1 }), "an answer that isn't one was taken")
+      m.usage.apply(answer(81))
+      yield root.settle(claudeSvc)
+      root.check(copy.peekModule === m && m.peekReason === "usage", "passing 80 % did not peek")
+      root.check(m.usageAlert && m.usageAlert.level === 80 && m.usageAlert.label === "5h", "the warning: " + JSON.stringify(m.usageAlert))
+      claudeSvc.dismissPeek(m)
+      m.usage.apply(answer(90))
+      yield root.settle(claudeSvc)
+      root.check(copy.peekModule === null, "warned twice in one window")
+      m.usage.apply(answer(100))
+      yield root.settle(claudeSvc)
+      root.check(copy.peekModule === m && m.usageAlert.level === 100, "the limit reached did not peek")
+      claudeSvc.dismissPeek(m)
+      claudeSvc.setConfigValue("claude.usage", false)
+      root.check(!m.showsUsage, "switched off, the usage still shows")
+      claudeSvc.setConfigValue("claude.usage", undefined)
+    })
   }
 
   // Bug (claude chat, kept for the terminal): while busy the mark cycled
@@ -1807,7 +2029,11 @@ ShellRoot {
       [300, function() {
         if (!m || !m.available) return
         root.check(shellCmd.out.trim() === Quickshell.env("HOME"), "it started in " + shellCmd.out.trim())
-        root.check(ownTermSvc.terminalCommand("mine", "toggle") === "ok" && !copy.pinned, "toggle did not close it")
+        root.check(ownTermSvc.terminalCommand("mine", "toggle") === "ok", "toggle failed")
+      }],
+      [300, function() {
+        if (!m || !m.available) return
+        root.check(!copy.pinned, "toggle did not close it")
       }]
     ], function() {
       if (m) {
@@ -2096,12 +2322,12 @@ ShellRoot {
     var m = liveSvc.moduleById("codex-live")
     liveSvc.replaceConfig({ "codex-live": { voice: "maple", directory: "~/talk", access: "workspace-write" } })
     // A hover shows it and leaves the microphone off.
-    root.liveCopy().hovered = true
+    root.hover(root.liveCopy())
     root.steps([
       [400, function() {
         root.check(root.liveCopy().mode === "expanded", "hovered, the notch didn't open")
         root.check(!m.open && m.bridge === null && !m.running, "a hover started a conversation")
-        root.liveCopy().hovered = false
+        root.unhover(root.liveCopy())
         liveSvc.open()
       }],
       [600, function() {
@@ -2450,28 +2676,34 @@ ShellRoot {
   // (a shortcut, IPC: openNotch) picks its own. Pinned, the window takes
   // the keyboard whichever tab shows.
   function tabsShowOne() {
-    var copy = tallSvc.notches.length > 0 ? tallSvc.notches[0].copies[0] : null
-    var typing = tallSvc.moduleById("typing")
-    var tall = tallSvc.moduleById("tall")
-    if (!root.check(!!copy && !!typing && !!tall, "the notch or its modules did not load")) { root.done(); return }
-    tallSvc.setConfigValue("tabs", false)
-    root.check(copy.shownModules.length === 2 && copy.tabModules.length === 0, "without tabs it shows "
-               + copy.shownModules.length + " modules and " + copy.tabModules.length + " tabs")
-    // Tabs are the default for a notch with several modules.
-    tallSvc.setConfigValue("tabs", undefined)
-    root.check(copy.tabModules.length === 2, "by default, " + copy.tabModules.length + " tabs")
-    root.check(copy.shownModules.length === 1 && copy.shownModules[0] === typing, "with tabs it does not show the first module alone")
-    tall.openNotch()
-    root.check(copy.pinned, "opening for a module did not open the notch")
-    root.check(copy.shownModules.length === 1 && copy.shownModules[0] === tall, "opening for a module did not pick its tab")
-    root.check(copy.keyboardFocus === "exclusive", "pinned on another tab, it takes " + copy.keyboardFocus)
-    copy.showTab("typing")
-    root.check(copy.keyboardFocus === "exclusive", "on the typing module's tab, pinned, it takes " + copy.keyboardFocus)
-    copy.close()
-    tallSvc.setConfigValue("tabs", false)
-    root.check(copy.tabModules.length === 0, "tabs off, " + copy.tabModules.length + " tabs")
-    tallSvc.setConfigValue("tabs", undefined)
-    root.done()
+    root.go(function*() {
+      var copy = tallSvc.notches.length > 0 ? tallSvc.notches[0].copies[0] : null
+      var typing = tallSvc.moduleById("typing")
+      var tall = tallSvc.moduleById("tall")
+      if (!root.check(!!copy && !!typing && !!tall, "the notch or its modules did not load")) return
+      tallSvc.setConfigValue("tabs", false)
+      yield root.settle(tallSvc)
+      root.check(copy.shownModules.length === 2 && copy.tabModules.length === 0, "without tabs it shows "
+                 + copy.shownModules.length + " modules and " + copy.tabModules.length + " tabs")
+      // Tabs are the default for a notch with several modules.
+      tallSvc.setConfigValue("tabs", undefined)
+      yield root.settle(tallSvc)
+      root.check(copy.tabModules.length === 2, "by default, " + copy.tabModules.length + " tabs")
+      root.check(copy.shownModules.length === 1 && copy.shownModules[0] === typing, "with tabs it does not show the first module alone")
+      tall.openNotch()
+      yield root.settle(tallSvc)
+      root.check(copy.pinned, "opening for a module did not open the notch")
+      root.check(copy.shownModules.length === 1 && copy.shownModules[0] === tall, "opening for a module did not pick its tab")
+      root.check(copy.keyboardFocus === "exclusive", "pinned on another tab, it takes " + copy.keyboardFocus)
+      copy.showTab("typing")
+      yield root.settle(tallSvc)
+      root.check(copy.keyboardFocus === "exclusive", "on the typing module's tab, pinned, it takes " + copy.keyboardFocus)
+      copy.close()
+      tallSvc.setConfigValue("tabs", false)
+      yield root.settle(tallSvc)
+      root.check(copy.tabModules.length === 0, "tabs off, " + copy.tabModules.length + " tabs")
+      tallSvc.setConfigValue("tabs", undefined)
+    })
   }
 
   // Two modules, with tabs: the closed notch and missed news.
@@ -2492,19 +2724,20 @@ ShellRoot {
   // the others (claude, the timer) a tab away even when it was closed. Now
   // it shows every active module's compact view, side by side.
   function tabsCompactAll() {
-    var copy = tabsSvc.notches.length > 0 ? tabsSvc.notches[0].copies[0] : null
-    if (!root.check(!!copy, "the notch did not load")) { root.done(); return }
-    tabsSvc.setConfigValue("tabs", false)
-    root.check(copy.compactModules.length === 1, "without tabs the closed notch shows " + copy.compactModules.length + " modules")
-    tabsSvc.setConfigValue("tabs", undefined)
-    root.steps([[600, function() {
+    root.go(function*() {
+      var copy = tabsSvc.notches.length > 0 ? tabsSvc.notches[0].copies[0] : null
+      if (!root.check(!!copy, "the notch did not load")) return
+      tabsSvc.setConfigValue("tabs", false)
+      yield root.settle(tabsSvc)
+      root.check(copy.compactModules.length === 1, "without tabs the closed notch shows " + copy.compactModules.length + " modules")
+      tabsSvc.setConfigValue("tabs", undefined)
+      yield root.settle(tabsSvc)
+      yield root.wait(600)
       root.check(copy.mode === "compact", "the notch is " + copy.mode)
       root.check(copy.compactModules.length === 2, "with tabs the closed notch shows " + copy.compactModules.length + " modules")
       // 80 and 60 px wide, a line and the gaps between them.
       root.check(tabsCard.width >= 80 + 60 + 2 * Theme.space(10), "a closed notch with both is " + tabsCard.width + " wide")
-    }]], function() {
       tabsSvc.setConfigValue("tabs", undefined)
-      root.done()
     })
   }
 
@@ -2514,35 +2747,36 @@ ShellRoot {
   // haven't seen (NotchModule.attention) now shows as the notch closes,
   // once: hovering and leaving again doesn't repeat it.
   function missedPeekOnClose() {
-    var copy = tabsSvc.notches.length > 0 ? tabsSvc.notches[0].copies[0] : null
-    var news = tabsSvc.moduleById("news")
-    if (!root.check(!!copy && !!news, "the notch or its module did not load")) { root.done(); return }
-    tabsSvc.setConfigValue("tabs", true)
-    copy.open()
-    news.attention = true
-    news.requestPeek(3000)
-    root.check(copy.peekModule === null, "an open notch peeked")
-    copy.close()
-    root.steps([
-      [50, function() {
-        root.check(copy.peekModule === news, "closing did not show the missed peek")
-        copy.dismissPeek(news)
-        copy.hovered = true
-      }],
-      [50, function() { copy.hovered = false }],
-      [50, function() {
-        root.check(copy.peekModule === null, "the missed peek showed again")
-        // News you saw before the notch closed doesn't peek.
-        copy.open()
-        news.requestPeek(3000)
-        news.attention = false
-        copy.close()
-      }],
-      [50, function() { root.check(copy.peekModule === null, "news already seen peeked") }]
-    ], function() {
+    root.go(function*() {
+      var copy = tabsSvc.notches.length > 0 ? tabsSvc.notches[0].copies[0] : null
+      var news = tabsSvc.moduleById("news")
+      if (!root.check(!!copy && !!news, "the notch or its module did not load")) return
+      tabsSvc.setConfigValue("tabs", true)
+      copy.open()
+      news.attention = true
+      news.requestPeek(3000)
+      yield root.settle(tabsSvc)
+      root.check(copy.peekModule === null, "an open notch peeked")
+      copy.close()
+      yield root.settle(tabsSvc)
+      root.check(copy.peekModule === news, "closing did not show the missed peek")
+      tabsSvc.dismissPeek(news)
+      // Hovering and leaving again does not show it again.
+      root.hover(copy)
+      yield root.waitFor(function() { return copy.mode === "expanded" })
+      root.unhover(copy)
+      yield root.waitFor(function() { return copy.mode === "compact" })
+      yield root.settle(tabsSvc)
+      root.check(copy.peekModule === null, "the missed peek showed again")
+      // News you saw before the notch closed doesn't peek.
+      copy.open()
+      news.requestPeek(3000)
+      news.attention = false
+      copy.close()
+      yield root.settle(tabsSvc)
+      root.check(copy.peekModule === null, "news already seen peeked")
       news.attention = false
       tabsSvc.setConfigValue("tabs", undefined)
-      root.done()
     })
   }
 
@@ -2563,31 +2797,32 @@ ShellRoot {
     notch: idleSvc.notches.length > 0 ? idleSvc.notches[0].copies[0] : null
   }
   function idleTimerIcon() {
-    var copy = idleSvc.notches.length > 0 ? idleSvc.notches[0].copies[0] : null
-    var timer = idleSvc.moduleById("timer")
-    if (!root.check(!!copy && !!timer, "the notch or the timer did not load")) { root.done(); return }
-    root.check(timer.status === "idle" && !timer.compact, "the timer is not idle (test setup)")
-    // The module list changing may load the modules again: ask each time.
-    // Alone in its notch.
-    idleSvc.setConfigValue("modules", ["timer"])
-    root.steps([
-      [500, function() {
-        root.check(copy.mode === "compact" && copy.compactModules[0] === idleSvc.moduleById("timer"),
-                   "an idle timer leaves the notch " + copy.mode + ", showing " + copy.compactModules.map(function(m) { return m.moduleId }))
-        root.check(idleCard.height > idleCard.restDepth, "the closed notch shows nothing: " + idleCard.height + " deep")
-        idleSvc.setConfigValue("idleIcons", false)
-      }],
-      [500, function() {
-        root.check(copy.mode === "rest", "idleIcons off, an idle timer leaves the notch " + copy.mode)
-        // Beside another module, with tabs (the default): both.
-        idleSvc.setConfigValue("idleIcons", undefined)
-        idleSvc.setConfigValue("modules", undefined)
-      }],
-      [500, function() {
-        root.check(copy.compactModules.length === 2, "beside another module, the closed notch shows "
-                   + copy.compactModules.length + " modules")
-      }]
-    ], function() { root.done() })
+    root.go(function*() {
+      var copy = idleSvc.notches.length > 0 ? idleSvc.notches[0].copies[0] : null
+      var timer = idleSvc.moduleById("timer")
+      if (!root.check(!!copy && !!timer, "the notch or the timer did not load")) return
+      root.check(timer.status === "idle" && !timer.compact, "the timer is not idle (test setup)")
+      // The module list changing may load the modules again: ask each time.
+      // Alone in its notch.
+      idleSvc.setConfigValue("modules", ["timer"])
+      yield root.wait(500)
+      yield root.settle(idleSvc)
+      timer = idleSvc.moduleById("timer")
+      root.check(copy.mode === "compact" && copy.compactModules[0] === timer,
+                 "an idle timer leaves the notch " + copy.mode + ", showing " + copy.compactModules.map(function(m) { return m.moduleId }))
+      root.check(idleCard.height > idleCard.restDepth, "the closed notch shows nothing: " + idleCard.height + " deep")
+      idleSvc.setConfigValue("idleIcons", false)
+      yield root.wait(500)
+      yield root.settle(idleSvc)
+      root.check(copy.mode === "rest", "idleIcons off, an idle timer leaves the notch " + copy.mode)
+      // Beside another module, with tabs (the default): both.
+      idleSvc.setConfigValue("idleIcons", undefined)
+      idleSvc.setConfigValue("modules", undefined)
+      yield root.wait(500)
+      yield root.settle(idleSvc)
+      root.check(copy.compactModules.length === 2, "beside another module, the closed notch shows "
+                 + copy.compactModules.length + " modules")
+    })
   }
 
   // ------------------------------------------------------ the daemon owns it
@@ -2718,6 +2953,16 @@ ShellRoot {
             daemonFile.setText("{ \"hoverOpenDelay\": 777 }\n")
             root.until(function() { return s.hoverOpenDelay === 777 }, function() {
               root.check(s.hoverOpenDelay === 777, "an edit of the file did not reach the UI: " + s.hoverOpenDelay)
+              // Bug: the lists in the daemon's config reached the UI as sequences
+              // (Array.isArray false), so a hand-written `notches` or `modules`
+              // was read as no list: one notch, the default modules.
+              daemonFile.setText("{ \"hoverOpenDelay\": 778, \"notches\": [ { \"id\": \"one\", \"modules\": [\"activities\"] }, { \"id\": \"two\", \"modules\": [] } ] }\n")
+              root.until(function() { return s.hoverOpenDelay === 778 }, function() {
+                root.check(s.notchSpecs.length === 2 && s.notchSpecs[0].id === "one", "the notches of the file: " + JSON.stringify(s.notchSpecs.map(function(n) { return n.id })))
+                root.check(s.moduleIds.indexOf("activities") !== -1 && Array.isArray(s.config.notches), "the lists of the file are not lists: " + JSON.stringify(s.moduleIds))
+                root.check(s.notchIds.length === 2, "the daemon's notches: " + JSON.stringify(s.notchIds))
+                daemonFile.setText("{ \"hoverOpenDelay\": 777 }\n")
+                root.until(function() { return s.hoverOpenDelay === 777 && s.notchSpecs.length === 1 }, function() {
               // A torn file is ignored: the last config stays.
               daemonFile.setText("{ \"hoverOpenDelay\": ")
               root.steps([[700, function() {}]], function() {
@@ -2728,6 +2973,8 @@ ShellRoot {
                   root.done()
                 })
               })
+                }, 5000)
+              }, 5000)
             })
           })
         })
@@ -2747,11 +2994,14 @@ ShellRoot {
       root.check(!s.daemonDown && s.client.ready, "down while the daemon runs")
       s.setConfigValue("hoverOpenDelay", 321)
       s.flushConfig()
-      root.until(function() { return root.fileHas(downFile, "hoverOpenDelay", 321) && !s.configSyncing }, function() {
+      root.until(function() { return root.fileHas(downFile, "hoverOpenDelay", 321) && !s.configSyncing && s.notches.length > 0 }, function() {
+        var copies = s.copies.length
         s.client.ipc("shutdown", [])
         root.until(function() { return s.daemonDown }, function() {
           root.check(s.daemonDown && !s.client.ready, "the notch does not say the daemon is gone")
           root.check(s.hoverOpenDelay === 321, "the last config went with the daemon: " + s.hoverOpenDelay)
+          // The notch stays as it was, frozen, not blank.
+          root.check(s.notches.length > 0 && s.copies.length === copies && s.copies[0].mode !== undefined, "the notches went with the daemon: " + s.notches.length)
           // An edit while it is away waits for it.
           s.setConfigValue("hoverCloseDelay", 222)
           root.until(function() { return s.client.ready && !s.daemonDown && root.fileHas(downFile, "hoverCloseDelay", 222) }, function() {

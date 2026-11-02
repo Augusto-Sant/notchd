@@ -23,11 +23,11 @@ use crate::state::{
 };
 use crate::timers::Timers;
 use notchd_proto::Num;
-use notchd_proto::common::{Edge, Mode, Slot};
+use notchd_proto::common::{Edge, KeyboardFocus, Mode, Slot};
 use notchd_proto::state as ps;
-use notchd_proto::ui::{ConfigError, ConfigUpdate, Modifier, PointerEv, Schema, Screens};
+use notchd_proto::ui::{ConfigError, ConfigUpdate, Modifier, ModuleOp, PointerEv, Schema, Screens};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What `NotchService` has when no config lists any (`defaultModules`).
 pub const DEFAULT_MODULES: [&str; 2] = ["media", "activities"];
@@ -87,6 +87,12 @@ struct CopyState {
     pinned: bool,
     /// The pointer is on the copy (`pointerInside`).
     inside: bool,
+    /// Its card is being dragged (`NotchCopy.dragging`): it stays closed and
+    /// nothing opens it, and the space it reserves holds still.
+    dragging: bool,
+    /// Its window had the keyboard since the copy last wanted it
+    /// (`NotchCopy.keyboardHeld`).
+    held: bool,
     tab: String,
     /// The screen the pointer opened the moving copy on.
     open_screen: String,
@@ -183,8 +189,9 @@ struct CopyView {
     mode: state::Mode,
     screen: String,
     covered: bool,
-    keyboard: bool,
+    keyboard: KeyboardContext,
     shown: Vec<String>,
+    tabs: Vec<String>,
     tab: String,
 }
 
@@ -206,6 +213,8 @@ pub struct Store {
 
     screens: Option<Screens>,
     modules: BTreeMap<String, ModuleFacts>,
+    /// The modules the UI reported (`facts`); the others are a user module's.
+    ui_modules: BTreeSet<String>,
     copies: BTreeMap<Key, CopyState>,
     nav: Option<Nav>,
     nav_settling: bool,
@@ -219,6 +228,9 @@ pub struct Store {
     /// The same for the modules the UI loads itself (`catalog`), kept
     /// apart so a user module coming and going never touches them.
     ui_defs: Vec<Value>,
+    /// What a notch lists when the config lists none: the host's
+    /// `defaultModules` (`catalog`), else [`DEFAULT_MODULES`].
+    default_modules: Option<Vec<String>>,
     schema_rev: u64,
     last_schema: Option<Schema>,
 
@@ -234,6 +246,14 @@ fn to_mode(m: state::Mode) -> Mode {
         state::Mode::Expanded => Mode::Expanded,
         state::Mode::Compact => Mode::Compact,
         state::Mode::Rest => Mode::Rest,
+    }
+}
+
+fn to_focus(f: state::KeyboardFocus) -> KeyboardFocus {
+    match f {
+        state::KeyboardFocus::None => KeyboardFocus::None,
+        state::KeyboardFocus::Exclusive => KeyboardFocus::Exclusive,
+        state::KeyboardFocus::OnDemand => KeyboardFocus::OnDemand,
     }
 }
 
@@ -379,6 +399,20 @@ impl Store {
         self.modules.insert(facts.info.id.clone(), facts);
     }
 
+    /// The facts of the modules the UI loads itself (`facts`): they replace
+    /// the last report, and a module that left it is gone.
+    pub fn set_ui_facts(&mut self, list: Vec<ModuleFacts>) {
+        let keep: BTreeSet<String> = list.iter().map(|f| f.info.id.clone()).collect();
+        let gone: Vec<String> = self.ui_modules.difference(&keep).cloned().collect();
+        for id in gone {
+            self.remove_module(&id);
+        }
+        for f in list {
+            self.set_module(f);
+        }
+        self.ui_modules = keep;
+    }
+
     pub fn remove_module(&mut self, id: &str) {
         self.modules.remove(id);
         self.dismiss_peek(id);
@@ -452,9 +486,19 @@ impl Store {
         self.modules.get(id).map(|m| m.info.clone())
     }
 
+    /// The active modules among `ids`, highest priority first, that have an
+    /// expanded view: what an open notch shows of them.
+    fn expanded_of(&self, ids: &[String]) -> Vec<ModuleInfo> {
+        let loaded: Vec<Option<ModuleInfo>> = ids.iter().map(|id| self.info(id)).collect();
+        state::active_modules(&loaded)
+            .into_iter()
+            .filter(|m| self.modules.get(&m.id).is_some_and(|f| f.expanded))
+            .collect()
+    }
+
     fn notch_views(&self) -> Vec<NotchView> {
         let mut out = Vec::new();
-        let specs = config::notches(&self.config, &DEFAULT_MODULES);
+        let specs = config::notches(&self.config, &self.default_refs());
         let screens = self.screen_names();
         for spec in specs {
             let pos = position::resolve(spec.position.as_ref().unwrap_or(&Value::Null));
@@ -516,12 +560,18 @@ impl Store {
                 tabs: false,
                 module_ids: vec![id.clone()],
                 compact: Vec::new(),
-                expanded: Vec::new(),
+                expanded: self.expanded_of(std::slice::from_ref(id)),
                 copy_screens: screens.clone(),
             });
         }
         // The visitor (`Notch.qml`, `visitor: true`): every module that is
         // no standalone one, a copy per screen, its position the default.
+        let visitor_ids: Vec<String> = self
+            .modules
+            .iter()
+            .filter(|(_, f)| !f.standalone)
+            .map(|(id, _)| id.clone())
+            .collect();
         out.push(NotchView {
             key: VISITOR_KEY.into(),
             id: String::new(),
@@ -533,14 +583,9 @@ impl Store {
             every: true,
             homed: false,
             tabs: false,
-            module_ids: self
-                .modules
-                .iter()
-                .filter(|(_, f)| !f.standalone)
-                .map(|(id, _)| id.clone())
-                .collect(),
+            expanded: self.expanded_of(&visitor_ids),
+            module_ids: visitor_ids,
             compact: Vec::new(),
-            expanded: Vec::new(),
             copy_screens: screens,
         });
         out
@@ -560,7 +605,7 @@ impl Store {
             compact_module: !nv.compact.is_empty(),
             pinned: copy.pinned,
             hovered: copy.hovered,
-            dragging: false,
+            dragging: copy.dragging,
             guest: nv.guest,
             navigating,
             preview,
@@ -614,20 +659,22 @@ impl Store {
             focused.clone()
         };
         let shown = state::shown_modules(&nv.expanded, nv.tabs, &copy.tab);
-        let keyboard = state::wants_keyboard(&KeyboardContext {
+        let keyboard = KeyboardContext {
             pinned: copy.pinned,
             mode: Some(mode),
             navigating: self.nav.is_some(),
+            held: copy.held,
             settling: self.nav_settling,
             elsewhere: !focused.is_empty() && screen != focused,
             ..KeyboardContext::default()
-        });
+        };
         CopyView {
             mode,
             covered: wanted.is_empty(),
             screen,
             keyboard,
             shown: shown.modules.iter().map(|m| m.id.clone()).collect(),
+            tabs: shown.tabs.iter().map(|m| m.id.clone()).collect(),
             tab: copy.tab.clone(),
         }
     }
@@ -688,8 +735,11 @@ impl Store {
                     guest_copies.push(ps::StandaloneCopy {
                         screen: view.screen,
                         mode: to_mode(view.mode),
+                        pinned: st.is_some_and(|c| c.pinned),
                         peek,
+                        shown: view.shown,
                         needs_window,
+                        keyboard: to_focus(state::keyboard_focus(&view.keyboard)),
                     });
                     continue;
                 }
@@ -700,9 +750,11 @@ impl Store {
                     tab: view.tab,
                     peek,
                     shown: view.shown,
+                    compact: nv.compact.iter().map(|m| m.id.clone()).collect(),
+                    tabs: view.tabs,
                     covered: view.covered,
                     needs_window,
-                    keyboard: view.keyboard,
+                    keyboard: to_focus(state::keyboard_focus(&view.keyboard)),
                 });
             }
             if nv.visitor {
@@ -752,6 +804,7 @@ impl Store {
             rev: self.state_rev,
             navigation,
             settings_open: self.settings_open,
+            settings_page: self.settings_page.clone(),
             notches,
             reserve: self.reserve_state(&views),
             standalone,
@@ -823,8 +876,10 @@ impl Store {
         while let Some(t) = self.timers.pop_due(now) {
             match t {
                 Timer::Open(key) => {
-                    // `if (!copy.dragging)`: a drag only ever ends in a drop here.
-                    self.set_hovered(&key, true);
+                    // `if (!copy.dragging)`.
+                    if !self.copies.get(&key).is_some_and(|c| c.dragging) {
+                        self.set_hovered(&key, true);
+                    }
                 }
                 Timer::Close(key) => self.set_hovered(&key, false),
                 Timer::Peek(key) => {
@@ -854,17 +909,20 @@ impl Store {
             let views = self.notch_views();
             let focused = self.focused();
             let mut closed = Vec::new();
+            let mut stale = Vec::new();
             let mut live = Vec::new();
             for nv in &views {
                 for cs in &nv.copy_screens {
                     let key = (nv.key.clone(), cs.clone());
                     let copy = self.copies.get(&key).cloned().unwrap_or_default();
-                    let open = matches!(
-                        self.mode_of(nv, cs, &copy, &focused),
-                        state::Mode::Peek | state::Mode::Expanded
-                    );
+                    let mode = self.mode_of(nv, cs, &copy, &focused);
+                    let open = matches!(mode, state::Mode::Peek | state::Mode::Expanded);
                     if copy.was_open && !open {
                         closed.push(key.clone());
+                    }
+                    // `onWantsKeyboardChanged`: the window's hold ends with the want.
+                    if copy.held && !(copy.pinned && mode == state::Mode::Expanded) {
+                        stale.push(key.clone());
                     }
                     live.push((key, open));
                 }
@@ -886,6 +944,11 @@ impl Store {
             for (key, open) in live {
                 let c = self.copies.entry(key).or_default();
                 c.was_open = open;
+            }
+            for key in stale {
+                if let Some(c) = self.copies.get_mut(&key) {
+                    c.held = false;
+                }
             }
             if closed.is_empty() {
                 return;
@@ -1170,27 +1233,112 @@ impl Store {
         }
     }
 
+    /// `drag` `start` (`setDragging(true)`): the card is picked up. It stays
+    /// closed, nothing opens it and what it reserves holds still, until it is
+    /// dropped or let go.
+    pub fn drag_start(&mut self, notch: &str, screen: &str, now: u64) {
+        self.drag_set(notch, screen, true, None, now);
+    }
+
     /// `drag` `drop`: the copy goes back to closed (`setDragging(false)`) and
     /// the notch is where the UI put it.
     pub fn drop_notch(&mut self, notch: &str, screen: &str, to: navigate::Position, now: u64) {
+        self.drag_set(notch, screen, false, Some(to), now);
+    }
+
+    /// `drag` `cancel`: let go where it was.
+    pub fn drag_cancel(&mut self, notch: &str, screen: &str, now: u64) {
+        self.drag_set(notch, screen, false, None, now);
+    }
+
+    fn drag_set(
+        &mut self,
+        notch: &str,
+        screen: &str,
+        on: bool,
+        to: Option<navigate::Position>,
+        now: u64,
+    ) {
         let views = self.notch_views();
         let Some(nv) = Self::find_view(&views, notch) else {
             return;
         };
         let key = Self::key_of(nv, screen);
+        self.copies.entry(key.clone()).or_default().dragging = on;
         self.timers.cancel(&Timer::Open(key.clone()));
         self.set_pinned(&key, false, now);
         self.set_hovered(&key, false);
-        if let Some(i) = nv.index {
+        if let (Some(i), Some(to)) = (nv.index, to) {
             self.move_to(i, &to);
         }
         self.advance(now);
     }
 
+    /// `pin`: a copy pinned open, or closed (and no longer hovered) by
+    /// something other than a click on it.
+    pub fn pin(&mut self, notch: &str, screen: &str, on: bool, now: u64) {
+        let views = self.notch_views();
+        let Some(nv) = Self::find_view(&views, notch) else {
+            return;
+        };
+        let key = Self::key_of(nv, screen);
+        if on {
+            self.set_pinned(&key, true, now);
+        } else {
+            self.close_copy(&key, now);
+        }
+        self.advance(now);
+    }
+
+    /// `focus`: a copy's window gained or lost the keyboard
+    /// (`NotchCopy.windowKeyboard`).
+    pub fn focus(&mut self, notch: &str, screen: &str, active: bool, now: u64) {
+        let views = self.notch_views();
+        let Some(nv) = Self::find_view(&views, notch) else {
+            return;
+        };
+        let key = Self::key_of(nv, screen);
+        let mut ctx = self.copy_view(nv, &key.1).keyboard;
+        ctx.active = active;
+        match state::keyboard_change(&ctx) {
+            state::KeyboardChange::Hold => self.copies.entry(key).or_default().held = true,
+            state::KeyboardChange::Retake => self.copies.entry(key).or_default().held = false,
+            state::KeyboardChange::Close => self.close_copy(&key, now),
+            state::KeyboardChange::None => {}
+        }
+        self.advance(now);
+    }
+
+    /// `NotchService.requestKeyboard`: every copy open on `module` pins, so
+    /// its window takes the keyboard.
+    pub fn request_keyboard(&mut self, module: &str, now: u64) {
+        let views = self.notch_views();
+        for nv in &views {
+            for cs in &nv.copy_screens {
+                let v = self.copy_view(nv, cs);
+                if v.mode == state::Mode::Expanded && v.shown.iter().any(|m| m == module) {
+                    self.set_pinned(&(nv.key.clone(), cs.clone()), true, now);
+                }
+            }
+        }
+        self.advance(now);
+    }
+
+    /// A module acts on the notches that show it (`module-notch`).
+    pub fn module_op(&mut self, module: &str, op: ModuleOp, now: u64) {
+        match op {
+            ModuleOp::Open => {
+                self.open_module(module, now);
+            }
+            ModuleOp::Close => self.close_module(module, now),
+            ModuleOp::Keyboard => self.request_keyboard(module, now),
+        }
+    }
+
     // ------------------------------------------------------------ notches
 
     fn spec_at(&self, index: usize) -> Option<NotchSpec> {
-        config::notches(&self.config, &DEFAULT_MODULES)
+        config::notches(&self.config, &self.default_refs())
             .into_iter()
             .nth(index)
     }
@@ -1263,14 +1411,14 @@ impl Store {
     }
 
     fn index_of(&self, id: &str) -> Option<usize> {
-        config::notches(&self.config, &DEFAULT_MODULES)
+        config::notches(&self.config, &self.default_refs())
             .iter()
             .find(|s| s.id == id)
             .map(|s| s.index)
     }
 
     fn notch_count(&self) -> usize {
-        config::notches(&self.config, &DEFAULT_MODULES).len()
+        config::notches(&self.config, &self.default_refs()).len()
     }
 
     /// IPC `open`: pin the first notch open on the focused screen.
@@ -1365,7 +1513,7 @@ impl Store {
 
     /// The list edits of `Settings.js` as intents (`edit`).
     pub fn edit(&mut self, notch: &str, op: &EditOp) -> Result<(), String> {
-        let spec = config::notches(&self.config, &DEFAULT_MODULES)
+        let spec = config::notches(&self.config, &self.default_refs())
             .into_iter()
             .find(|s| s.id == notch)
             .ok_or_else(|| format!("no notch {notch}"))?;
@@ -1436,6 +1584,7 @@ impl Store {
             tabs,
             move_from: None,
         });
+        self.release_keyboards();
         "ok".into()
     }
 
@@ -1448,6 +1597,7 @@ impl Store {
         if restore {
             self.undo_move(nav.move_from.take());
         }
+        self.release_keyboards();
         self.nav_settling = true;
         self.timers.after(Timer::NavSettle, now, NAV_SETTLE_MS);
         if restore {
@@ -1456,6 +1606,14 @@ impl Store {
                     c.tab = tab;
                 }
             }
+        }
+    }
+
+    /// `onNavigatingChanged`: no window holds the keyboard as navigation
+    /// starts or ends.
+    fn release_keyboards(&mut self) {
+        for c in self.copies.values_mut() {
+            c.held = false;
         }
     }
 
@@ -1687,6 +1845,11 @@ impl Store {
             for cs in &nv.copy_screens {
                 if let Some(t) = self.reserve_target(nv, cs) {
                     let key = (nv.key.clone(), cs.clone());
+                    // Held while the card is dragged, so windows move once,
+                    // when it lands (`ReservedSpace.held`).
+                    if self.copies.get(&key).is_some_and(|c| c.dragging) {
+                        continue;
+                    }
                     if self.copies.get(&key).is_some_and(|c| c.target != Some(t)) {
                         moves.push((key, t));
                     }
@@ -1786,8 +1949,22 @@ impl Store {
     /// The modules the UI loads itself, as it reports them (`catalog`): they
     /// replace the last report. An entry with the id of a user module's own
     /// def loses to it.
-    pub fn set_ui_catalog(&mut self, modules: Vec<Value>) {
+    pub fn set_ui_catalog(&mut self, modules: Vec<Value>, defaults: Option<Vec<String>>) {
         self.ui_defs = modules;
+        self.default_modules = defaults;
+    }
+
+    /// The modules a notch lists when the config lists none.
+    pub fn default_refs(&self) -> Vec<&str> {
+        match &self.default_modules {
+            Some(list) => list.iter().map(String::as_str).collect(),
+            None => DEFAULT_MODULES.to_vec(),
+        }
+    }
+
+    /// Every notch of the config, resolved.
+    pub fn notch_specs(&self) -> Vec<NotchSpec> {
+        config::notches(&self.config, &self.default_refs())
     }
 
     pub fn remove_module_def(&mut self, id: &str) {
@@ -1797,7 +1974,7 @@ impl Store {
     /// The `schema` for the config, screens and modules now (rev 0: the
     /// rev is given as it is sent).
     pub fn compute_schema(&self) -> Schema {
-        let notches = config::notches(&self.config, &DEFAULT_MODULES);
+        let notches = config::notches(&self.config, &self.default_refs());
         let mut catalog: Vec<Value> = self
             .ui_defs
             .iter()
@@ -1817,7 +1994,7 @@ impl Store {
             screens: &screens,
             supports_workspaces: self.screens.as_ref().is_some_and(|s| s.supports_workspaces),
             catalog: &catalog,
-            default_modules: &DEFAULT_MODULES,
+            default_modules: &self.default_refs(),
         })
     }
 

@@ -150,7 +150,7 @@ A module **shows** state, it does not **own** it. A notifications module mirrors
 | `peek` | the module called `requestPeek(ms)` and won: a pinned notch never peeks, hover only lets `urgentPeek` modules through, and a peek on screen is not cut short by a lower-priority one. It shows in every notch that lists the module (on the focused monitor for a notch on every monitor), and at the top of the focused monitor when no notch with the module is there. With `peekOnFocusedScreen` it shows once, on the focused monitor only: in the first notch there that lists the module, else at the top. A standalone module's peek shows in its own notch, on the focused monitor (see [Standalone modules](#standalone-modules)) |
 | `expanded` | the notch is expanded and the module is active; every active module's view stacks, highest priority first |
 
-The rules live in `core/State.js` and are tested in `tests/state.test.mjs`.
+The daemon decides which view shows (`native/notchd-core/src/state.rs` and `peek.rs`, tested in Rust and by the QML scenarios in `tests/qml/scenarios.qml`): modules report their facts (active, priority, which views they have, attention) and their `requestPeek`/`dismissPeek` to it, and the UI shows what its `state` says.
 
 ## Loading
 

@@ -8,7 +8,7 @@
 # once (default: the CPUs, at most 8), each its own Quickshell and scratch
 # dir, longest first by the last run's times (build/times/qml.tsv, which this
 # writes). Two more shards: the daemon client's (client.qml, a fake daemon) and
-# the shadow test's (shadow.qml, the real daemon, which `make qmltest` builds).
+# the notch state's scenarios (scenarios.qml, the real daemon, which `make qmltest` builds).
 # QMLTEST_ONLY=<text> runs only the cases whose name contains it;
 # QMLTEST_VERBOSE=1 lists the cases that passed too; QMLTEST_KEEP=1 keeps the scratch dir.
 set -euo pipefail
@@ -58,7 +58,7 @@ run_shard() {
   # Fake `claude` and `codex` terminal UIs (tests/qml/fixtures/bin), state,
   # data, cache and Claude Code's dir in the scratch dir; a fake live bridge
   # and a fake components installer.
-  NOTCHD_TEST_DAEMON="$daemon_bin" NOTCHD_TEST_SOCKETS="$dir/sock" \
+  NOTCHD_TEST_DAEMON="$daemon_bin" NOTCHD_TEST_SOCKETS="$dir/sock" NOTCHD_TEST_HOOKS=1 \
     NOTCHD_QMLTEST_CASES="$cases" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
     NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
     CLAUDE_CONFIG_DIR="$dir/data/claude" \
@@ -94,17 +94,17 @@ run_client_shard() {
   wait "$daemon_pid" 2>/dev/null || true
 }
 
-# The shadow shard (tests/qml/shadow.qml): the real daemon beside the QML
-# service, given the same inputs and compared. The test starts its own daemon
-# per scenario (NOTCHD_TEST_HOOKS=1, a socket in this shard's scratch dir) and
-# stops it; whatever is left is killed here when the shard ends. The binary is
+# The scenarios shard (tests/qml/scenarios.qml): the notch state, decided by
+# the real daemon and bound by the QML, scenario by scenario. The test starts
+# its own daemon per scenario (a socket in this shard's scratch dir) and stops
+# it; whatever is left is killed here when the shard ends. The binary is
 # `make daemon`'s (NOTCHD_BIN overrides).
 daemon_bin=${NOTCHD_BIN:-$root/native/target/release/notchd}
-run_shadow_shard() {
+run_scenarios_shard() {
   local dir=$1
   mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime" "$dir/sock"
   ln -s -- "$root/core" "$dir/config/core"
-  ln -s -- "$root/tests/qml/shadow.qml" "$dir/config/shell.qml"
+  ln -s -- "$root/tests/qml/scenarios.qml" "$dir/config/shell.qml"
   ln -s -- "$root/tests/qml/fixtures" "$dir/config/fixtures"
   NOTCHD_QMLTEST_SOCKETS="$dir/sock" NOTCHD_QMLTEST_DAEMON="$daemon_bin" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
     NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
@@ -124,7 +124,7 @@ done < "$scratch/shards"
 run_client_shard "$scratch/$n" &
 pids+=("$!")
 n=$((n + 1))
-run_shadow_shard "$scratch/$n" &
+run_scenarios_shard "$scratch/$n" &
 pids+=("$!")
 n=$((n + 1))
 wait "${pids[@]}"

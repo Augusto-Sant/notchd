@@ -1,0 +1,11 @@
+{
+ "message": "peek",
+ "valid": [
+  {"t":"peek","module":"media","ms":2500},
+  {"t":"peek","module":"osd"}
+ ],
+ "invalid": [
+  {"why":"module missing","json":{"t":"peek","ms":2500}},
+  {"why":"ms is not a number","json":{"t":"peek","module":"media","ms":"long"}}
+ ]
+}

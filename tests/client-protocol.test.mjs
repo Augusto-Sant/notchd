@@ -53,6 +53,46 @@ test('building: every client message matches its fixture shape', () => {
   assert.deepEqual(plain(P.ipc(7, 'state', [])), fixture('to-daemon', 'ipc', 1));
 });
 
+test('building: the notch inputs match their fixtures', () => {
+  assert.deepEqual(plain(P.pin('main', 'DP-1', true)), fixture('to-daemon', 'pin', 0));
+  assert.deepEqual(plain(P.pin('main', '', false)), fixture('to-daemon', 'pin', 1));
+  assert.deepEqual(plain(P.focus('main', 'DP-1', true)), fixture('to-daemon', 'focus', 0));
+  assert.deepEqual(plain(P.tab('main', 'DP-1', 'timer')), fixture('to-daemon', 'tab'));
+  const pos = { edge: 'left', offset: 0.3, screen: 'DP-2' };
+  assert.deepEqual(plain(P.drag('main', 'DP-1', 'start')), fixture('to-daemon', 'drag', 0));
+  assert.deepEqual(plain(P.drag('main', 'DP-1', 'drop', pos)), fixture('to-daemon', 'drag', 1));
+  assert.deepEqual(plain(P.drag('main', 'DP-1', 'cancel')), fixture('to-daemon', 'drag', 2));
+  assert.deepEqual(plain(P.measure('main', 'DP-1', 6, 34, 30)), fixture('to-daemon', 'measure'));
+  assert.deepEqual(plain(P.facts(fixture('to-daemon', 'facts', 0).modules)), fixture('to-daemon', 'facts', 0));
+  assert.deepEqual(plain(P.peek('media', 2500)), fixture('to-daemon', 'peek', 0));
+  assert.deepEqual(plain(P.peek('osd')), fixture('to-daemon', 'peek', 1));
+  assert.deepEqual(plain(P.peekDismiss('media')), fixture('to-daemon', 'peek-dismiss', 0));
+  assert.deepEqual(plain(P.peekDismiss('')), fixture('to-daemon', 'peek-dismiss', 1));
+  assert.deepEqual(plain(P.moduleNotch('timer', 'open')), fixture('to-daemon', 'module-notch', 0));
+  assert.deepEqual(plain(P.moduleNotch('claude', 'keyboard')), fixture('to-daemon', 'module-notch', 2));
+});
+
+test('wireKey: Qt keys and modifiers as the daemon names them', () => {
+  const key = (code, mods = 0) => plain(P.wireKey(code, mods));
+  assert.deepEqual(key(0x01000000), { key: 'Escape', mods: [] });
+  assert.deepEqual(key(0x01000001, 0x02000000), { key: 'Tab', mods: ['shift'] });
+  assert.deepEqual(key(0x01000002), { key: 'Backtab', mods: [] });
+  assert.deepEqual(key(0x01000004), { key: 'Return', mods: [] });
+  assert.deepEqual(key(0x01000005), { key: 'Enter', mods: [] });
+  for (const [code, name] of [[0x01000012, 'Left'], [0x01000013, 'Up'], [0x01000014, 'Right'], [0x01000015, 'Down']])
+    assert.equal(key(code).key, name);
+  // Printable ASCII is one lower-case character: letters, digits.
+  assert.equal(key(0x48).key, 'h');
+  assert.equal(key(0x31).key, '1');
+  assert.equal(key(0x58, 0x02000000).key, 'x');
+  // Every modifier, in a fixed order.
+  assert.deepEqual(key(0x41, 0x02000000 | 0x04000000 | 0x08000000 | 0x10000000).mods, ['shift', 'ctrl', 'alt', 'meta']);
+  // A key the daemon has no name for: nothing to send.
+  assert.equal(key(0x01000030).key, '');
+  assert.equal(key(0x20ac).key, '');
+  assert.deepEqual(key(0x41, undefined), { key: 'a', mods: [] });
+});
+
 test('building: a removal and a missing value go as null, ipc arguments as strings', () => {
   assert.equal(P.encode(P.set(2, 'position', undefined)), '{"t":"set","id":2,"key":"position","value":null}\n');
   assert.equal(P.encode(P.event('timer', 'expanded', 'toggle')), '{"t":"event","module":"timer","slot":"expanded","action":"toggle","value":null}\n');

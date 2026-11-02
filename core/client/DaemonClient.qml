@@ -82,7 +82,20 @@ QtObject {
   function pointer(notch, screen, ev) { return client._send(Protocol.pointer(notch, screen, ev)) }
   function key(notch, screen, name, mods, text) { return client._send(Protocol.key(notch, screen, name, mods, text)) }
   function event(moduleId, slot, action, value) { return client._send(Protocol.event(moduleId, slot, action, value)) }
-  // Any other message of the UI-to-core set (`screens`, `tab`, `settings`, `drag`,
+  // The notch's inputs. A copy is named by its notch (a standalone module's by
+  // its module id, the visitor's by "") and its screen ("" for the one that moves).
+  function pin(notch, screen, on) { return client._send(Protocol.pin(notch, screen, on)) }
+  function focus(notch, screen, active) { return client._send(Protocol.focus(notch, screen, active)) }
+  function tab(notch, screen, module) { return client._send(Protocol.tab(notch, screen, module)) }
+  // `ev`: "start", "drop" (with `position`) or "cancel".
+  function drag(notch, screen, ev, position) { return client._send(Protocol.drag(notch, screen, ev, position)) }
+  function measure(notch, screen, rest, compact, baseline) { return client._send(Protocol.measure(notch, screen, rest, compact, baseline)) }
+  // The modules this UI loads, what they say of themselves, and what they ask.
+  function facts(modules) { return client._send(Protocol.facts(modules)) }
+  function peek(module, ms) { return client._send(Protocol.peek(module, ms)) }
+  function peekDismiss(module) { return client._send(Protocol.peekDismiss(module)) }
+  function moduleNotch(module, op) { return client._send(Protocol.moduleNotch(module, op)) }
+  // Any other message of the UI-to-core set (`screens`, `settings`, `catalog`,
   // `reserve-applied`), built by the caller.
   function send(msg) { return client._send(msg) }
 

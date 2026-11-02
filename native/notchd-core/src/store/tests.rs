@@ -1,5 +1,6 @@
 use super::*;
-use notchd_proto::ui::{ScreenInfo, Workspace};
+use notchd_proto::common::KeyboardFocus;
+use notchd_proto::ui::{ModuleOp, ScreenInfo, Workspace};
 
 fn screens(names: &[&str], focused: &str) -> Screens {
     Screens {
@@ -121,9 +122,10 @@ fn press_pins_and_again_unpins() {
     s.take_changes(0);
     assert_eq!(mode(&s), Mode::Expanded);
     assert!(s.state().notches[0].copies[0].pinned);
-    assert!(
+    assert_eq!(
         s.state().notches[0].copies[0].keyboard,
-        "pinned open takes the keyboard"
+        KeyboardFocus::Exclusive,
+        "pinned open asks for the keyboard"
     );
     s.pointer("main", "DP-1", PointerEv::Press, 1);
     s.take_changes(1);
@@ -586,7 +588,14 @@ fn enter_pins_the_selected_notch_and_closes_the_others() {
     let pinned: Vec<_> = st.notches.iter().map(|n| n.copies[0].pinned).collect();
     assert_eq!(pinned, [false, true, false]);
     let kb: Vec<_> = st.notches.iter().map(|n| n.copies[0].keyboard).collect();
-    assert_eq!(kb, [false, true, false]);
+    assert_eq!(
+        kb,
+        [
+            KeyboardFocus::None,
+            KeyboardFocus::Exclusive,
+            KeyboardFocus::None
+        ]
+    );
 }
 
 #[test]
@@ -1055,10 +1064,13 @@ fn the_uis_catalog_shapes_the_schema_and_a_user_module_wins_its_id() {
     let _ = s.take_changes(0);
     let agent = json!({"moduleId": "claude", "title": "Claude Code", "agent": true,
         "settings": [{"key": "directory", "type": "string", "label": "Folder"}]});
-    s.set_ui_catalog(vec![
-        agent.clone(),
-        json!({"moduleId": "osd", "title": "OSD", "standalone": true, "settings": []}),
-    ]);
+    s.set_ui_catalog(
+        vec![
+            agent.clone(),
+            json!({"moduleId": "osd", "title": "OSD", "standalone": true, "settings": []}),
+        ],
+        None,
+    );
     let schema = s.take_changes(1).schema.expect("the catalog changed it");
     // The lists of the Modules page that only exist with such modules.
     let parts: Vec<_> = schema
@@ -1083,7 +1095,7 @@ fn the_uis_catalog_shapes_the_schema_and_a_user_module_wins_its_id() {
     );
     // A new report replaces the last one.
     s.remove_module_def("claude");
-    s.set_ui_catalog(Vec::new());
+    s.set_ui_catalog(Vec::new(), None);
     let schema = s.take_changes(3).schema.expect("changed");
     assert!(!schema.pages.iter().any(|p| p.id == "modules/claude"));
 }
@@ -1100,4 +1112,243 @@ fn showing_a_notchs_page_picks_the_notch_the_schema_edits() {
             .any(|f| f.key.as_deref() == Some("notches.1.id"))
     );
     assert!(schema.pages.iter().any(|p| p.id == "notch/1"));
+}
+
+// ---------------------------------------------------------------- 3.2: the
+// inputs the QML used to decide on its own.
+
+fn mode_at(s: &Store, notch: usize) -> Mode {
+    s.state().notches[notch].copies[0].mode
+}
+
+#[test]
+fn a_dragged_copy_stays_closed_nothing_opens_it_and_a_drop_or_cancel_ends_it() {
+    let mut s = store(cfg());
+    s.pointer("main", "DP-1", PointerEv::Enter, 0);
+    s.drag_start("main", "DP-1", 10);
+    s.take_changes(10);
+    assert_eq!(
+        mode(&s),
+        Mode::Compact,
+        "closed while dragged, hovered or not"
+    );
+    s.advance(500);
+    s.take_changes(500);
+    assert_eq!(mode(&s), Mode::Compact, "the open timer does not open it");
+    s.pointer("main", "DP-1", PointerEv::Leave, 600);
+    s.pointer("main", "DP-1", PointerEv::Enter, 610);
+    s.advance(1000);
+    s.take_changes(1000);
+    assert_eq!(
+        mode(&s),
+        Mode::Compact,
+        "coming back mid-drag opens nothing"
+    );
+    s.drag_cancel("main", "DP-1", 1100);
+    s.take_changes(1100);
+    assert_eq!(
+        mode(&s),
+        Mode::Compact,
+        "let go: closed until the pointer returns"
+    );
+    s.pointer("main", "DP-1", PointerEv::Leave, 1200);
+    s.pointer("main", "DP-1", PointerEv::Enter, 1300);
+    s.advance(1500);
+    s.take_changes(1500);
+    assert_eq!(mode(&s), Mode::Expanded, "and then it opens as usual");
+}
+
+#[test]
+fn pin_opens_and_closes_a_copy_and_closing_ends_its_hover() {
+    let mut s = store(cfg());
+    s.pin("main", "DP-1", true, 0);
+    s.take_changes(0);
+    assert!(s.state().notches[0].copies[0].pinned);
+    s.pointer("main", "DP-1", PointerEv::Enter, 1);
+    s.advance(200);
+    s.pin("main", "DP-1", false, 201);
+    s.take_changes(201);
+    assert_eq!(mode(&s), Mode::Compact, "unpinned and no longer hovered");
+}
+
+#[test]
+fn the_keyboard_is_exclusive_until_the_window_has_it_then_on_demand_and_lost_it_closes() {
+    let mut s = store(cfg());
+    let kb = |s: &Store| s.state().notches[0].copies[0].keyboard;
+    s.pin("main", "DP-1", true, 0);
+    s.take_changes(0);
+    assert_eq!(kb(&s), KeyboardFocus::Exclusive);
+    s.focus("main", "DP-1", true, 1);
+    s.take_changes(1);
+    assert_eq!(kb(&s), KeyboardFocus::OnDemand, "the window has it");
+    s.focus("main", "DP-1", false, 2);
+    s.take_changes(2);
+    assert_eq!(
+        mode(&s),
+        Mode::Compact,
+        "a window took it: the notch closes"
+    );
+    assert_eq!(kb(&s), KeyboardFocus::None);
+    // Never held, never closed by losing it.
+    s.pin("main", "DP-1", true, 3);
+    s.focus("main", "DP-1", false, 4);
+    s.take_changes(4);
+    assert_eq!(mode(&s), Mode::Expanded);
+}
+
+#[test]
+fn a_keyboard_lost_as_navigation_ends_is_asked_for_again_not_closed() {
+    let mut s = store(cfg());
+    let kb = |s: &Store| s.state().notches[0].copies[0].keyboard;
+    s.pin("main", "DP-1", true, 0);
+    s.focus("main", "DP-1", true, 1);
+    s.navigate(2);
+    s.take_changes(2);
+    assert_eq!(kb(&s), KeyboardFocus::None, "navigation has the keyboard");
+    s.key("Return", &[], 3);
+    s.take_changes(3);
+    assert_eq!(
+        kb(&s),
+        KeyboardFocus::Exclusive,
+        "not held any more: asks again"
+    );
+    s.focus("main", "DP-1", true, 4);
+    s.navigate(5);
+    s.key("Escape", &[], 6);
+    s.focus("main", "DP-1", false, 7);
+    s.take_changes(7);
+    assert_eq!(
+        mode(&s),
+        Mode::Expanded,
+        "lost within the settle time: no close"
+    );
+    assert_eq!(kb(&s), KeyboardFocus::Exclusive);
+}
+
+#[test]
+fn facts_replace_the_ui_modules_and_leave_a_user_modules_alone() {
+    let mut s = store(cfg());
+    let mut user = module("weather", 1.0);
+    user.info.compact = false;
+    s.set_module(user);
+    s.set_ui_facts(vec![module("media", 10.0), module("timer", 20.0)]);
+    s.set_ui_facts(vec![module("media", 10.0)]);
+    assert!(s.module("media").is_some());
+    assert!(s.module("timer").is_none(), "left the report: gone");
+    assert!(
+        s.module("weather").is_some(),
+        "a user module is not the UI's"
+    );
+    s.set_ui_facts(vec![]);
+    assert!(s.module("media").is_none());
+    assert!(s.module("weather").is_some());
+}
+
+#[test]
+fn the_copy_says_what_the_closed_notch_shows_and_what_the_tabs_are() {
+    let mut s = store(json!({"modules": ["media", "timer"]}));
+    s.take_changes(0);
+    let c = &s.state().notches[0].copies[0];
+    assert_eq!(
+        c.compact,
+        ["timer", "media"],
+        "by priority, side by side with tabs"
+    );
+    assert_eq!(c.tabs, ["timer", "media"]);
+    assert_eq!(
+        c.shown,
+        ["timer"],
+        "the open notch shows the first tab's module"
+    );
+    let mut s = store(json!({"modules": ["media", "timer"], "tabs": false}));
+    s.take_changes(0);
+    let c = &s.state().notches[0].copies[0];
+    assert_eq!(
+        c.compact,
+        ["timer"],
+        "without tabs the compact module alone"
+    );
+    assert!(c.tabs.is_empty());
+}
+
+#[test]
+fn a_module_opens_closes_or_asks_the_keyboard_for_the_notches_that_show_it() {
+    let mut s = store(cfg());
+    s.module_op("timer", ModuleOp::Open, 0);
+    s.take_changes(0);
+    assert_eq!(mode_at(&s, 0), Mode::Expanded);
+    assert!(s.state().notches[0].copies[0].pinned);
+    s.module_op("timer", ModuleOp::Close, 1);
+    s.take_changes(1);
+    assert_eq!(mode_at(&s, 0), Mode::Compact);
+    // Hovered open, not pinned: asking for the keyboard pins it.
+    s.pointer("main", "DP-1", PointerEv::Enter, 2);
+    s.advance(500);
+    s.take_changes(500);
+    assert!(!s.state().notches[0].copies[0].pinned);
+    s.module_op("timer", ModuleOp::Keyboard, 501);
+    s.take_changes(501);
+    assert!(s.state().notches[0].copies[0].pinned);
+    // A module the open notch does not show pins nothing.
+    s.module_op("timer", ModuleOp::Close, 502);
+    s.module_op("nobody", ModuleOp::Keyboard, 503);
+    s.take_changes(503);
+    assert!(!s.state().notches[0].copies[0].pinned);
+}
+
+#[test]
+fn what_a_dragged_copy_reserves_holds_until_it_lands() {
+    let mut s = store(json!({"modules": ["media", "timer"], "reserveSpace": true}));
+    s.measure("main", "DP-1", 6.0, 0.0, 30.0);
+    s.take_changes(0);
+    s.drag_start("main", "DP-1", 1);
+    s.measure("main", "DP-1", 6.0, 40.0, 30.0);
+    s.take_changes(2);
+    assert_eq!(depth(&s), Some(30.0), "held while dragged");
+    s.drag_cancel("main", "DP-1", 3);
+    s.take_changes(3);
+    assert_eq!(depth(&s), Some(40.0), "grows once it is let go");
+}
+
+#[test]
+fn the_state_carries_the_settings_page() {
+    let mut s = store(cfg());
+    s.settings(true, Some("notch/1".into()));
+    assert_eq!(s.state().settings_page, "notch/1");
+    assert!(s.state().settings_open);
+}
+
+#[test]
+fn a_notch_lists_the_hosts_default_modules_when_the_config_lists_none() {
+    let mut s = Store::new();
+    s.set_config(json!({}));
+    s.set_screens(screens(&["DP-1"], "DP-1"));
+    assert_eq!(s.state().notches[0].modules, ["media", "activities"]);
+    s.set_ui_catalog(Vec::new(), Some(vec!["timer".into()]));
+    assert_eq!(s.state().notches[0].modules, ["timer"]);
+    s.set_config(json!({"modules": ["media"]}));
+    assert_eq!(s.state().notches[0].modules, ["media"], "the config wins");
+    s.set_ui_catalog(Vec::new(), None);
+    s.set_config(json!({}));
+    assert_eq!(s.state().notches[0].modules, ["media", "activities"]);
+}
+
+#[test]
+fn a_guest_copy_shows_the_expanded_views_of_its_modules_while_open() {
+    let mut s = store(cfg());
+    let mut osd = module("osd", 10.0);
+    osd.standalone = true;
+    s.set_module(osd);
+    s.take_changes(0);
+    s.pointer("osd", "DP-1", PointerEv::Press, 0);
+    s.take_changes(0);
+    let c = &s.state().standalone[0].copies[0];
+    assert_eq!(c.mode, Mode::Expanded);
+    assert!(c.pinned);
+    assert_eq!(c.shown, ["osd"]);
+    assert_eq!(c.keyboard, KeyboardFocus::Exclusive);
+    // The visitor opens on every module's expanded view.
+    s.pointer("", "DP-1", PointerEv::Press, 1);
+    s.take_changes(1);
+    assert_eq!(s.state().visitor[0].shown, ["timer", "media"]);
 }
