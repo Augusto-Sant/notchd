@@ -68,7 +68,7 @@ geometry half is `geometry/position.json`), `countdown`, `usage`,
   expected result (`valueAt` of a missing key, `toggleWorkspace` of the last
   workspace).
 
-`state.json` and `navigate.json` are Rust-only now (their JS, `State.js` and `Navigate.js`, went in 3.2). `tests/vectors-rules.test.mjs` runs every case against the JS;
+`state.json`, `navigate.json`, `countdown.json` and `resources.json` are Rust-only now (their JS went in 3.2 and 3.3). `tests/vectors-rules.test.mjs` runs every case against the JS;
 `native/notchd-core/tests/vectors.rs` runs them against the Rust. The `fn`
 dispatch and the argument and result adapters are `tests/vectors/rules/adapt.mjs`
 (JS) and `native/notchd-core/tests/vectors/<file>.rs` (Rust). A case never

@@ -263,9 +263,9 @@ ShellRoot {
   Timer {
     interval: 1500; running: true
     onTriggered: {
-      activitySvc.moduleById("activities").push(JSON.stringify({
+      activitySvc.daemonIpc("push", [JSON.stringify({
         id: "train", icon: "󰚩", title: "Fine-tuning a LoRA", subtitle: "epoch 2 of 3 · loss 1.42",
-        progress: 64, duration: 600000 }))
+        progress: 64, duration: 600000 })], "ok")
       // Agents in notchd's folder here, not the real one.
       var services = [compactSvc, usageSvc, expandedSvc]
       for (var i = 0; i < services.length; i++) {

@@ -29,7 +29,7 @@ cp -- "$root/tests/qml/TestService.qml" "$scratch/config/TestService.qml"
 # Fake `claude` and `codex` terminal UIs, state, data and cache in the
 # scratch dir. A fake live bridge (no microphone, no network) and a fake
 # components installer (nothing is installed).
-NOTCHD_TEST_DAEMON="$root/native/target/release/notchd" NOTCHD_TEST_SOCKETS="$scratch/sock" \
+NOTCHD_TEST_DAEMON="$root/native/target/release/notchd" NOTCHD_TEST_SOCKETS="$scratch/sock" NOTCHD_TEST_HOOKS=1 \
   NOTCHD_VISUAL_DIR="$scratch/shots" XDG_STATE_HOME="$scratch/shots/state" XDG_DATA_HOME="$scratch/shots/share" XDG_CACHE_HOME="$scratch/shots/cache" \
   CLAUDE_CONFIG_DIR="$scratch/shots/claude" \
   NOTCHD_LIVE_BRIDGE="$root/tests/qml/fixtures/bin/codex-live" \

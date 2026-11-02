@@ -165,16 +165,15 @@ ShellRoot {
   readonly property var demoServices: [mediaSvc, activitySvc, osdSvc, openSvc, resourcesSvc, resourcesOpenSvc,
                                        timerSvc, pomodoroSvc, timerIdleSvc, timerDoneSvc, restSvc, navSvc]
 
-  // Demo values instead of this machine's: memory short, the rest fine.
-  function demoResources(m) {
-    var gib = 1024 * 1024 * 1024
-    m.sampling = false
-    m.cpu = 0.34
-    m.cores = 16
-    m.memory = { used: 29.1 * gib, total: 31.2 * gib, fraction: 29.1 / 31.2 }
-    m.disk = { used: 412 * gib, total: 931 * gib, fraction: 412 / 931 }
-    m.pressure = { cpu: { hot: false, streak: 0 }, memory: { hot: true, streak: 1 }, disk: { hot: false, streak: 0 } }
+  // Demo values instead of this machine's (the daemon's test hook stops its
+  // readings): memory short, the rest fine; the peek that turning short asks
+  // for is dismissed, the renders show the views as they rest.
+  function demoResources(svc) {
+    svc.client.ipc("test-resources", ["0.34", String(29.1 / 31.2), String(412 / 931), "16", "31.2", "931"], null)
+    svc.dismissPeek(null)
   }
+  // The daemon's timer, set by hand (its test hook): a countdown state.
+  function demoTimer(svc, state) { svc.client.ipc("test-timer", [JSON.stringify(state)], null) }
 
   // Once the modules are up: an activity on two of them, the volume OSD
   // held open, the last one pinned open.
@@ -184,21 +183,21 @@ ShellRoot {
     onTriggered: {
       var deploy = JSON.stringify({ id: "deploy", icon: "󰜎", title: "Deploying api", subtitle: "staging · 3 of 5",
                                     progress: 64, sticky: true, peek: false })
-      activitySvc.moduleById("activities").push(deploy)
-      openSvc.moduleById("activities").push(deploy)
-      osdSvc.moduleById("osd").show(JSON.stringify({ icon: "volume", value: "62", duration: "600000" }))
+      activitySvc.daemonIpc("push", [deploy], "ok")
+      openSvc.daemonIpc("push", [deploy], "ok")
+      osdSvc.daemonIpc("osd", ["show", JSON.stringify({ icon: "volume", value: "62", duration: "600000" })], "ok")
       openSvc.open()
-      root.demoResources(resourcesSvc.moduleById("resources"))
-      root.demoResources(resourcesOpenSvc.moduleById("resources"))
+      root.demoResources(resourcesSvc)
+      root.demoResources(resourcesOpenSvc)
       resourcesOpenSvc.open()
-      timerSvc.moduleById("timer").run({ action: "start", ms: 18 * 60000 + 42000, label: "Tea" })
-      pomodoroSvc.moduleById("timer").countdown = { status: "running", kind: "pomodoro", phase: "focus", round: 2, rounds: 4,
-                                                    label: "Focus", duration: 25 * 60000, endsAt: Date.now() + 18 * 60000 + 56000 }
+      root.demoTimer(timerSvc, { status: "running", kind: "timer", label: "Tea", duration: 18 * 60000 + 42000,
+                                 endsAt: Date.now() + 18 * 60000 + 42000 })
+      root.demoTimer(pomodoroSvc, { status: "running", kind: "pomodoro", phase: "focus", round: 2, rounds: 4,
+                                    label: "Focus", duration: 25 * 60000, endsAt: Date.now() + 18 * 60000 + 56000 })
       pomodoroSvc.open()
       timerIdleSvc.open()
-      var done = timerDoneSvc.moduleById("timer")
-      done.countdown = { status: "done", kind: "timer", label: "Tea", duration: 3 * 60000 }
-      done.requestPeek(600000)
+      root.demoTimer(timerDoneSvc, { status: "done", kind: "timer", label: "Tea", duration: 3 * 60000 })
+      timerDoneSvc.requestPeek(timerDoneSvc.moduleById("timer"), 600000)
       claudeSvc.setConfigValue("claude.directory", root.outDir)
       claudeSvc.open()
       // The plan's limits, by hand: offscreen nothing asks the network.
@@ -238,7 +237,7 @@ ShellRoot {
     id: navTimer
     interval: 300
     onTriggered: {
-      root.demoResources(navSvc.moduleById("resources"))
+      root.demoResources(navSvc)
       navSvc.navigate()
     }
   }

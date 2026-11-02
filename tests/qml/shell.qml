@@ -124,6 +124,33 @@ ShellRoot {
       svc.client.ipc("state", [], function() { resume() })
     }
   }
+  // A request to the daemon, answered: `yield root.ask(svc, "timer", ["pause"], function(answer) { ... })`.
+  // The answer is the method's string, or "err <code>: <message>". What was
+  // sent before it (a config edit, the modules' facts) is sent first.
+  function ask(svc, method, args, got) {
+    return function(resume) {
+      svc.flushReports()
+      svc.client.ipc(method, args, function(reply) {
+        got(reply.t === "ok" ? reply.result : "err " + reply.code + ": " + (reply.message || ""))
+        resume()
+      })
+    }
+  }
+  // Every text and label of a view tree (what a module shows), in order.
+  function texts(tree) {
+    var out = []
+    function walk(n) {
+      if (n === null || n === undefined) return
+      if (typeof n.text === "string") out.push(n.text)
+      if (typeof n.label === "string") out.push(n.label)
+      var kids = n.children
+      for (var i = 0; kids && i < kids.length; i++) walk(kids[i])
+    }
+    walk(tree)
+    return out
+  }
+  // Clears every activity of a service's module (`clear ""`).
+  function clearActivities(svc) { return svc.daemonIpc("clear", [""], "ok") }
   function waitFor(pred, ms) { return function(resume) { root.until(pred, resume, ms) } }
   function wait(ms) { return function(resume) { root.steps([[ms, function() {}]], resume) } }
   function nested(fn) { return function(resume) { fn(resume) } }
@@ -200,6 +227,7 @@ ShellRoot {
       { name: "with tabs the open notch shows one module, and opening for a module picks its tab", run: root.tabsShowOne },
       { name: "with tabs the closed notch shows every module side by side", run: root.tabsCompactAll },
       { name: "news missed while the notch was open peeks once as it closes", run: root.missedPeekOnClose },
+      { name: "a user module of the daemon shows in the notch through a CoreModule, its button reaches the module", run: root.userModuleShows },
       { name: "a timer that isn't running shows its icon in the closed notch, unless idleIcons is off", run: root.idleTimerIcon },
       { name: "navigation numbers every notch, previews the selected one and Escape leaves it as it was", run: root.navigationPreview },
       { name: "navigation: Enter pins the selected notch and closes the others; a click ends it too", run: root.navigationOpen },
@@ -283,6 +311,7 @@ ShellRoot {
     compositor: twoScreens
     screens: [{ name: "A" }, { name: "B" }]
     defaultModules: ["activities"]
+    hostModules: ({ focus: Qt.resolvedUrl("fixtures/focus.qml") })
   }
 
   // ---------------------------------------------------------------- cases
@@ -408,7 +437,7 @@ ShellRoot {
       yield root.settle(multi)
       root.check(copy.mode === "peek" && copy.screenName === "B", "the peek is " + copy.mode + " on '" + copy.screenName + "', not on B")
       multi.dismissPeek(null)
-      multi.moduleById("activities").clear("")
+      root.clearActivities(multi)
     })
   }
 
@@ -526,7 +555,7 @@ ShellRoot {
     return function(resume) {
       reserved.replaceConfig(Object.assign({ modules: ["activities"], reserveSpace: true }, extra || {}))
       root.until(function() { return !!root.reservedModule() && reserved.notches.length === 1 && reserved.notches[0].copies.length === 1 }, function() {
-        root.reservedModule().clear("")
+        root.clearActivities(reserved)
         root.until(function() { return root.zoneDepth() > 0 }, function() {
           root.steps([[600, function() {}]], function() {
             zoneWatch.seen = [root.zoneDepth()]
@@ -542,7 +571,7 @@ ShellRoot {
     cardSvc.mode = compact ? "compact" : "rest"
   }
   function pushReserved(id, peek) {
-    return root.reservedModule().push(JSON.stringify({ id: id, title: id, sticky: true, peek: peek }))
+    return reserved.daemonIpc("push", [JSON.stringify({ id: id, title: id, sticky: true, peek: peek })], "ok")
   }
 
   function reserveIgnoresOpenNotch() {
@@ -568,7 +597,7 @@ ShellRoot {
       yield root.wait(600)
       root.check(zoneWatch.lowest === compact && zoneWatch.highest === compact,
                  "compact: moved between " + zoneWatch.lowest + " and " + zoneWatch.highest + ", closed is " + compact)
-      root.reservedModule().clear("")
+      root.clearActivities(reserved)
       // From rest, the OSD peeks and the lip is all that is kept.
       yield root.wait(700)
       zoneWatch.seen = [root.zoneDepth()]
@@ -587,7 +616,7 @@ ShellRoot {
       yield root.waitFor(function() { return root.zoneDepth() > rest })
       var compact = root.zoneDepth()
       root.check(compact > rest, "did not grow at once: " + compact)
-      root.reservedModule().clear("")
+      root.clearActivities(reserved)
       yield root.wait(150)
       root.check(root.zoneDepth() === compact, "shrank before the delay: " + root.zoneDepth())
       yield root.waitFor(function() { return root.zoneDepth() === rest }, 1500)
@@ -603,7 +632,7 @@ ShellRoot {
       yield root.waitFor(function() { return root.zoneDepth() > rest })
       var compact = root.zoneDepth()
       zoneWatch.seen = [compact]
-      root.reservedModule().clear("")
+      root.clearActivities(reserved)
       yield root.wait(100)
       root.pushReserved("second", false)
       yield root.wait(700)
@@ -631,7 +660,7 @@ ShellRoot {
       root.check(root.zoneDepth() > 0 && zoneWatch.highest <= top,
                  "grew to " + zoneWatch.highest + " moving to the side; compact on top is " + top)
       reserved.setConfigValue("position", undefined)
-      root.reservedModule().clear("")
+      root.clearActivities(reserved)
     })
   }
 
@@ -666,7 +695,7 @@ ShellRoot {
       var copy = reserved.notches[0].copies[0]
       copy.setDragging(true)
       yield root.settle(reserved)
-      root.reservedModule().clear("")
+      root.clearActivities(reserved)
       yield root.wait(800)
       root.check(zoneWatch.lowest === compact && zoneWatch.highest === compact,
                  "moved between " + zoneWatch.lowest + " and " + zoneWatch.highest + " mid-drag; it was " + compact)
@@ -810,7 +839,7 @@ ShellRoot {
     }, function() { root.settle(multi)(fn) })
   }
   function push(id, peek) {
-    return multi.moduleById("activities").push(JSON.stringify({ id: id, title: id, sticky: true, peek: peek }))
+    return multi.daemonIpc("push", [JSON.stringify({ id: id, title: id, sticky: true, peek: peek })], "ok")
   }
 
   // Bug: one notch window moved between screens. With media showing on one
@@ -821,7 +850,7 @@ ShellRoot {
       yield root.nested(root.withTwoNotches)
       var main = multi.notchById("main")
       root.check(!!main && main.copies.length === 2, "main has " + (main ? main.copies.length : 0) + " copies, not one per screen")
-      root.check(root.push("build", false) === "ok", "activities not loaded")
+      root.check(root.push("build", false) === "ok", "the daemon is not there")
       yield root.settle(multi)
       root.check(main.copyOn("A").mode === "compact" && main.copyOn("B").mode === "compact",
                  "a quiet push left " + main.copyOn("A").mode + " / " + main.copyOn("B").mode)
@@ -838,7 +867,7 @@ ShellRoot {
       root.check(main.copyOn("A").mode === "peek" && main.copyOn("B").mode === "compact",
                  "focus on A: " + main.copyOn("A").mode + " / " + main.copyOn("B").mode)
       multi.dismissPeek(null)
-      multi.moduleById("activities").clear("")
+      root.clearActivities(multi)
     })
   }
 
@@ -861,7 +890,7 @@ ShellRoot {
       root.check(visitor.copies.some(function(c) { return c.mode === "peek" }) || multi.peeking(multi.moduleById("activities")),
                  "nothing peeks")
       multi.dismissPeek(null)
-      multi.moduleById("activities").clear("")
+      root.clearActivities(multi)
     })
   }
 
@@ -912,7 +941,7 @@ ShellRoot {
       root.check(side.copies[0].mode === "rest", "a notch without the module shows " + side.copies[0].mode)
       root.check(side.edge === "left", "side hangs from " + side.edge)
       multi.dismissPeek(null)
-      multi.moduleById("activities").clear("")
+      root.clearActivities(multi)
     })
   }
 
@@ -935,10 +964,10 @@ ShellRoot {
       root.check(main.copyOn("A") === copy, "the copy was made again")
       root.check(copy.pinned, "the copy forgot it was pinned")
       root.check(multi.moduleById("activities") === module, "the module was loaded again")
-      root.check(module.items.length > 0, "the module lost its activities")
+      root.check(module.active && !!module.compact, "the module lost its activities")
       root.check(main.edge === "bottom", "the edit did not apply: " + main.edge)
       copy.close()
-      module.clear("")
+      root.clearActivities(multi)
     })
   }
 
@@ -1004,7 +1033,7 @@ ShellRoot {
       yield root.settle(multi)
       root.check(visitor.copyOn("B").mode !== "peek", "the visitor peeked beside a notch that follows focus")
       multi.dismissPeek(null)
-      multi.moduleById("activities").clear("")
+      root.clearActivities(multi)
     })
   }
 
@@ -1013,7 +1042,6 @@ ShellRoot {
   // peekOnFocusedScreen (the OSD) peeks once: in the first notch on the
   // focused screen that shows it, else at the top, in the visitor.
   function osdPeekOnFocusedScreen() {
-    var module = multi.moduleById("activities")
     var visitor = multi.visitor
     function modes() {
       return multi.notches.map(function(n) { return n.notchId + ":" + n.copies[0].mode }).join(" ")
@@ -1025,30 +1053,28 @@ ShellRoot {
         .join(" ")
     }
     root.go(function*() {
-      module.peekOnFocusedScreen = true
-      multi.replaceConfig({ modules: ["activities"],
+      multi.replaceConfig({ modules: ["focus"],
                             notches: [{ position: { screen: "A" } }, { id: "a2", position: { edge: "left", screen: "A" } },
                                       { id: "b", position: { screen: "B" } }] })
       twoScreens.focusedScreenName = "B"
-      yield root.waitFor(function() { return multi.notches.length === 3 && visitor.copies.length === 2 })
+      yield root.waitFor(function() { return multi.notches.length === 3 && visitor.copies.length === 2 && !!multi.moduleById("focus") })
+      var module = multi.moduleById("focus")
       yield root.settle(multi)
-      root.push("brightness", true)
+      module.requestPeek(2000)
       yield root.settle(multi)
       root.check(peeking() === "b", "focus on B: " + modes())
       multi.dismissPeek(null)
       twoScreens.focusedScreenName = "A"
-      root.push("volume", true)
+      module.requestPeek(2000)
       yield root.settle(multi)
       root.check(peeking() === "main", "focus on A: " + modes())
       multi.dismissPeek(null)
       multi.setConfigValue("notches.2.position.screen", "A")
       twoScreens.focusedScreenName = "B"
-      root.push("volume", true)
+      module.requestPeek(2000)
       yield root.settle(multi)
       root.check(peeking() === "visitor@B", "nothing on B: " + modes())
       multi.dismissPeek(null)
-      module.peekOnFocusedScreen = false
-      module.clear("")
     })
   }
 
@@ -1082,7 +1108,7 @@ ShellRoot {
       root.check(svc.isStandalone("osd"), "the OSD is not standalone")
       root.check(svc.notches[0].modules.indexOf(osd()) === -1, "the notch took the OSD")
       root.check(!!own() && own().edge === "top" && own().placement.offset === 0.5, "no OSD place at the top center")
-      osd().show(JSON.stringify({ icon: "volume", value: "40" }))
+      svc.daemonIpc("osd", ["show", JSON.stringify({ icon: "volume", value: "40" })], "ok")
       yield root.settle(svc)
       root.check(own().copyOn("B").mode === "peek", "no peek on B: " + own().copyOn("B").mode)
       root.check(own().copyOn("A").mode !== "peek", "the OSD peeked on A too")
@@ -1092,7 +1118,7 @@ ShellRoot {
       twoScreens.focusedScreenName = "A"
       yield root.settle(svc)
       root.check(own().edge === "bottom" && own().placement.offset === 0.2, "position: " + JSON.stringify(own().placement))
-      osd().show(JSON.stringify({ icon: "brightness", value: "70" }))
+      svc.daemonIpc("osd", ["show", JSON.stringify({ icon: "brightness", value: "70" })], "ok")
       yield root.settle(svc)
       root.check(own().copyOn("A").mode === "peek", "no peek on A: " + own().copyOn("A").mode)
       svc.dismissPeek(null)
@@ -1175,56 +1201,65 @@ ShellRoot {
     defaultModules: ["resources"]
   }
 
-  // FileView on /proc (whose files report no size) and df's output both
-  // reach the module: a CPU figure needs two samples, 2 s apart.
+  // The daemon reads /proc and df and hands the module the numbers: the
+  // expanded view shows them (a CPU figure needs two readings, 2 s apart).
   function resourcesRead() {
-    var m = resourced.moduleById("resources")
-    root.check(!!m, "the module did not load")
-    root.steps([[2600, function() {
-      root.check(m.cpu !== null && m.cpu >= 0 && m.cpu <= 1, "cpu: " + m.cpu)
-      root.check(m.cores > 0, "cores: " + m.cores)
-      root.check(!!m.memory && m.memory.total > 0, "memory: " + JSON.stringify(m.memory))
-      root.check(!!m.disk && m.disk.total > 0, "disk: " + JSON.stringify(m.disk))
+    root.go(function*() {
+      yield root.waitFor(function() { return !!resourced.moduleById("resources") })
+      var m = resourced.moduleById("resources")
+      root.check(!!m, "the module did not load")
+      yield root.waitFor(function() {
+        var t = root.texts(m.tree("expanded"))
+        return t.length > 0 && t.indexOf("–") === -1 && t.some(function(x) { return /^\d+ cores?$/.test(x) })
+      }, 6000)
+      var t = root.texts(m.tree("expanded"))
+      root.check(t.indexOf("–") === -1, "a figure is missing: " + JSON.stringify(t))
+      root.check(t.some(function(x) { return /^\d+ cores?$/.test(x) }), "cores: " + JSON.stringify(t))
+      root.check(t.some(function(x) { return /^[\d.]+ of [\d.]+ (GiB|TiB)$/.test(x) }), "memory: " + JSON.stringify(t))
+      root.check(t.some(function(x) { return / · \/$/.test(x) }), "disk: " + JSON.stringify(t))
       root.check(m.active && !!m.expanded, "no expanded view")
-    }]], function() { root.done() })
+    })
   }
 
   // By default the closed notch always shows the three. With `compact` at
   // "short" it rests while every resource is fine; one running short peeks
   // once and takes the compact slot until it drops back. The setting is on
-  // the module's own page, under the module's id.
+  // the module's own page, under the module's id. The readings are demo
+  // values (the daemon's test hook), as the renders use.
   function resourcesCompactWhenShort() {
     root.go(function*() {
+      yield root.waitFor(function() { return !!resourced.moduleById("resources") && resourced.notches.length > 0 })
       var m = resourced.moduleById("resources")
       var notch = resourced.notches[0]
-      m.sampling = false
-      m.pressure = ({})
+      function reading(cpu, memory, disk) {
+        return root.ask(resourced, "test-resources", [String(cpu), String(memory), String(disk)], function(a) { root.check(a === "ok", "reading: " + a) })
+      }
+      function shown() { return root.texts(m.tree("compact")).filter(function(x) { return /%$/.test(x) }).length }
       resourced.replaceConfig({})
-      m.record("memory", 0.5)
+      yield reading(0.2, 0.5, 0.4)
       yield root.settle(resourced)
-      root.check(notch.compactModule === m && m.compactRows.length === 3, "not shown by default")
+      root.check(notch.compactModule === m && shown() === 3, "not shown by default: " + JSON.stringify(root.texts(m.tree("compact"))))
       var field = resourced.settingsSchema.filter(function(f) { return f.key === "resources.compact" })[0]
       root.check(!!field && field.page === "modules/resources", "field: " + JSON.stringify(field))
 
       resourced.setConfigValue("resources.compact", "short")
       yield root.settle(resourced)
       root.check(notch.compactModule === null, "the notch shows resources with nothing short")
-      m.record("memory", 0.95)
+      yield reading(0.2, 0.95, 0.4)
       yield root.settle(resourced)
-      root.check(notch.compactModule === m && m.compactRows.length === 1, "memory short, no compact view")
-      root.check(m.peekId === "memory" && resourced.peeking(m), "memory short, no peek")
+      root.check(notch.compactModule === m && shown() === 1, "memory short, no compact view")
+      root.check(resourced.peeking(m), "memory short, no peek")
       resourced.dismissPeek(null)
-      m.record("memory", 0.96)
+      yield reading(0.2, 0.96, 0.4)
       yield root.settle(resourced)
       root.check(!resourced.peeking(m), "peeked again while still short")
-      m.record("memory", 0.8)
+      yield reading(0.2, 0.8, 0.4)
       yield root.settle(resourced)
       root.check(notch.compactModule === null, "still compact after memory dropped")
-      m.record("cpu", 0.99)
+      yield reading(0.99, 0.8, 0.4)
       yield root.settle(resourced)
       root.check(notch.compactModule === null, "one CPU burst counted as short")
       resourced.replaceConfig({})
-      m.sampling = true
     })
   }
 
@@ -1241,23 +1276,24 @@ ShellRoot {
   // it peeks (urgent, so even over the open notch) and says so until stopped.
   function timerRunsAndEnds() {
     root.go(function*() {
+      yield root.waitFor(function() { return !!timed.moduleById("timer") && timed.notches.length > 0 })
       var m = timed.moduleById("timer")
       var notch = timed.notches[0]
       timed.replaceConfig({ timer: { notify: false } })
       yield root.settle(timed)
       root.check(!!m && m.active && notch.compactModule === null, "idle timer is in the closed notch")
-      root.check(m.command("2s Tea") === "ok", "start refused")
+      yield root.ask(timed, "timer", ["2s Tea"], function(a) { root.check(a === "ok", "start refused: " + a) })
       yield root.settle(timed)
-      root.check(notch.compactModule === m && m.status === "running", "running timer not in the closed notch")
-      root.check(m.clock === "0:02" || m.clock === "0:01", "clock: " + m.clock)
+      var clock = root.texts(m.tree("compact"))[1]
+      root.check(notch.compactModule === m && !!m.compact, "running timer not in the closed notch")
+      root.check(clock === "0:02" || clock === "0:01", "clock: " + clock)
       timed.dismissPeek(null)
       yield root.wait(2600)
       yield root.settle(timed)
-      root.check(m.status === "done", "not done after its time: " + m.status)
       root.check(timed.peeking(m), "no peek at the end")
-      root.check(notch.compactModule === m && m.doneText === "Time's up", "done text: " + m.doneText)
+      root.check(notch.compactModule === m && root.texts(m.tree("compact"))[1] === "Time's up", "done text: " + JSON.stringify(root.texts(m.tree("compact"))))
       timed.dismissPeek(null)
-      root.check(m.command("stop") === "ok", "stop refused")
+      yield root.ask(timed, "timer", ["stop"], function(a) { root.check(a === "ok", "stop refused: " + a) })
       yield root.settle(timed)
       root.check(notch.compactModule === null, "stopped timer still in the closed notch")
       timed.replaceConfig({})
@@ -1265,25 +1301,37 @@ ShellRoot {
   }
 
   function timerCommands() {
-    var m = timed.moduleById("timer")
-    timed.replaceConfig({ timer: { notify: false, focus: 50 } })
-    root.check(m.command("pause") === "no timer running", "pause while idle: " + m.command("pause"))
-    root.check(m.command("soon").indexOf("usage") === 0, "a bad command was accepted")
-    m.command("pomodoro")
-    root.check(m.countdown.phase === "focus" && m.countdown.duration === 50 * 60000, "focus setting ignored: " + JSON.stringify(m.countdown))
-    m.command("toggle")
-    root.check(m.status === "paused", "toggle did not pause")
-    var left = m.remaining
-    m.command("+5m")
-    root.check(m.remaining === left + 5 * 60000, "added time lost while paused")
-    m.command("skip")
-    root.check(m.countdown.phase === "short" && m.status === "running", "skip: " + JSON.stringify(m.countdown))
-    var keys = timed.settingsSchema.filter(function(f) { return f.page === "modules/timer" }).map(function(f) { return f.key })
-    root.check(keys.indexOf("timer.focus") !== -1 && keys.indexOf("timer.notify") !== -1, "settings: " + keys)
-    m.command("stop")
-    timed.dismissPeek(null)
-    timed.replaceConfig({})
-    root.done()
+    root.go(function*() {
+      yield root.waitFor(function() { return !!timed.moduleById("timer") })
+      var m = timed.moduleById("timer")
+      function say(command, want) {
+        return root.ask(timed, "timer", [command], function(a) {
+          if (want instanceof RegExp) root.check(want.test(a), command + " answered " + a)
+          else root.check(a === want, command + " answered " + a + ", not " + want)
+        })
+      }
+      function expanded() { return root.texts(m.tree("expanded")) }
+      timed.replaceConfig({ timer: { notify: false, focus: 50 } })
+      yield say("pause", "no timer running")
+      yield say("soon", /^usage/)
+      yield say("pomodoro", "ok")
+      yield root.settle(timed)
+      root.check(expanded().indexOf("Focus · 1 of 4") !== -1 && expanded().indexOf("50:00") !== -1, "focus setting ignored: " + JSON.stringify(expanded()))
+      yield say("toggle", "ok")
+      yield root.settle(timed)
+      root.check(expanded().indexOf("Focus · 1 of 4 · paused") !== -1, "toggle did not pause: " + JSON.stringify(expanded()))
+      yield say("+5m", "ok")
+      yield root.settle(timed)
+      root.check(expanded().indexOf("55:00") !== -1, "added time lost while paused: " + JSON.stringify(expanded()))
+      yield say("skip", "ok")
+      yield root.settle(timed)
+      root.check(expanded().indexOf("Short break") !== -1 && expanded().indexOf("5:00") !== -1, "skip: " + JSON.stringify(expanded()))
+      var keys = timed.settingsSchema.filter(function(f) { return f.page === "modules/timer" }).map(function(f) { return f.key })
+      root.check(keys.indexOf("timer.focus") !== -1 && keys.indexOf("timer.notify") !== -1, "settings: " + keys)
+      yield say("stop", "ok")
+      timed.dismissPeek(null)
+      timed.replaceConfig({})
+    })
   }
 
   // ---------------------------------------------------------- navigation
@@ -2780,6 +2828,44 @@ ShellRoot {
     })
   }
 
+  // A user module (tests/modules/hello, a process the daemon runs) has no QML
+  // file: the service makes a CoreModule from the daemon's `module` message,
+  // and the notch shows its tree like any module's. A press in its view goes
+  // back to the module as an event, and its answer comes back as a new view.
+  TestService {
+    id: userSvc
+    ipcTarget: "notchd-qmltest-user"
+    configPath: root.dir + "/user.json"
+    compositor: twoScreens
+    defaultModules: ["hello"]
+  }
+  NotchCard {
+    id: userCard
+    notch: userSvc.notches.length > 0 ? userSvc.notches[0].copies[0] : null
+  }
+  function userModuleShows() {
+    root.go(function*() {
+      yield root.waitFor(function() { var m = userSvc.moduleById("hello"); return !!m && !!m.compact && m.active }, 6000)
+      var m = userSvc.moduleById("hello")
+      if (!root.check(!!m, "no module for hello")) return
+      root.check(m.title === "Hello" && m.priority === 40 && m.icon === "H", "facts: " + m.title + " " + m.priority + " " + m.icon)
+      root.check(root.texts(m.tree("compact")).join("|") === "hello there", "compact: " + JSON.stringify(m.tree("compact")))
+      var copy = userSvc.notches[0].copies[0]
+      yield root.settle(userSvc)
+      root.check(copy.mode === "compact" && copy.compactModule === m, "the notch shows " + copy.mode)
+      root.check(userCard.height > userCard.restDepth, "the closed notch draws nothing: " + userCard.height + " deep")
+      root.check(!!m.expanded && !m.peek && !m.verticalCompact, "slots: expanded " + !!m.expanded + ", peek " + !!m.peek)
+      // The expanded view's button: its action goes to the module, whose
+      // answer is a new compact view.
+      var view = m.expanded.createObject(userCard)
+      root.check(root.texts(m.tree("expanded")).indexOf("Poke") !== -1, "no button in its expanded view")
+      view.action("poke", null)
+      yield root.waitFor(function() { return root.texts(m.tree("compact")).indexOf("poked") !== -1 }, 4000)
+      root.check(root.texts(m.tree("compact")).indexOf("poked") !== -1, "the button did not reach the module: ")
+      view.destroy()
+    })
+  }
+
   // A timer that isn't running has no compact view: the closed notch was
   // empty (a notch of its own rested; beside claude and codex it was
   // missing). Now an idle module shows its icon there (NotchModule.icon),
@@ -2801,7 +2887,7 @@ ShellRoot {
       var copy = idleSvc.notches.length > 0 ? idleSvc.notches[0].copies[0] : null
       var timer = idleSvc.moduleById("timer")
       if (!root.check(!!copy && !!timer, "the notch or the timer did not load")) return
-      root.check(timer.status === "idle" && !timer.compact, "the timer is not idle (test setup)")
+      root.check(!timer.compact, "the timer is not idle (test setup)")
       // The module list changing may load the modules again: ask each time.
       // Alone in its notch.
       idleSvc.setConfigValue("modules", ["timer"])

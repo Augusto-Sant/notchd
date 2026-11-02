@@ -1,0 +1,463 @@
+//! The modules that live in the daemon (`notchd-modules`: timer, activities,
+//! resources, osd), driven the way the module host drives a user module's
+//! process: they are loaded while a notch lists them (a standalone one:
+//! unless switched off), told the config, the time, a provider's data, an
+//! IPC command or an `event`, and after each call their facts, views and
+//! effects (a peek, a notification) go to the store and the UIs, only what
+//! changed. Pure over a [`Store`] and [`Mods`] and a time, like `modstate`;
+//! the hub owns the lock, the clock and the providers.
+
+use crate::modstate::Mods;
+use notchd_core::store::Store;
+use notchd_modules::{CoreModule, Ctx, Effect};
+use notchd_proto::common::Mode;
+use notchd_proto::{EventValue, Slot, ToUi};
+use notchd_providers::notifications::Notifier;
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+/// The IPC methods a module of the daemon answers, by module. A method of
+/// one that is not loaded is answered `<id> module not loaded`.
+const METHODS: &[(&str, &str)] = &[
+    ("push", "activities"),
+    ("clear", "activities"),
+    ("timer", "timer"),
+    ("osd", "osd"),
+];
+
+/// The module that owns an IPC method.
+pub fn owner(method: &str) -> Option<&'static str> {
+    METHODS
+        .iter()
+        .find(|(m, _)| *m == method)
+        .map(|(_, id)| *id)
+}
+
+pub struct CoreHost {
+    loaded: BTreeMap<&'static str, Box<dyn CoreModule>>,
+    /// When each wants `tick`, as it said after its last change.
+    due: BTreeMap<&'static str, u64>,
+    notifier: Option<Box<dyn Notifier>>,
+    /// The system's readings feed `resources`; off once a test hook gave it
+    /// demo values.
+    pub sampling: bool,
+}
+
+impl Default for CoreHost {
+    fn default() -> CoreHost {
+        CoreHost::new(notchd_providers::notifications::system())
+    }
+}
+
+impl CoreHost {
+    pub fn new(notifier: Option<Box<dyn Notifier>>) -> CoreHost {
+        CoreHost {
+            loaded: BTreeMap::new(),
+            due: BTreeMap::new(),
+            notifier,
+            sampling: true,
+        }
+    }
+
+    pub fn has(&self, id: &str) -> bool {
+        self.loaded.contains_key(id)
+    }
+
+    /// Whether the module `id` wants the system's readings.
+    pub fn wants_resources(&self) -> bool {
+        self.sampling && self.loaded.contains_key("resources")
+    }
+
+    /// What a module's rules need to know of the notches.
+    fn ctx(store: &Store, id: &str) -> Ctx {
+        let st = store.state();
+        let mut seen: Vec<(Mode, Option<String>)> = Vec::new();
+        for c in st.notches.iter().flat_map(|n| n.copies.iter()) {
+            seen.push((c.mode, c.peek.as_ref().map(|p| p.module.clone())));
+        }
+        for c in st
+            .standalone
+            .iter()
+            .flat_map(|n| n.copies.iter())
+            .chain(st.visitor.iter())
+        {
+            seen.push((c.mode, c.peek.as_ref().map(|p| p.module.clone())));
+        }
+        let mut ctx = Ctx::default();
+        for (mode, peek) in seen {
+            ctx.expanded |= mode == Mode::Expanded;
+            ctx.peeking |= mode == Mode::Peek && peek.as_deref() == Some(id);
+        }
+        ctx
+    }
+
+    /// Loads and unloads to match the config, hands the loaded modules the
+    /// config, and returns what the UIs need. A module that is not listed
+    /// anywhere is gone with its state, as an unloaded QML module was.
+    pub fn sync(&mut self, store: &mut Store, mods: &mut Mods, now: u64) -> Vec<ToUi> {
+        let cfg = store.config().clone();
+        let listed: Vec<String> = store
+            .notch_specs()
+            .into_iter()
+            .flat_map(|n| n.module_ids)
+            .collect();
+        let mut out = Vec::new();
+        for id in notchd_modules::IDS {
+            let Some(probe) = self
+                .loaded
+                .get(id)
+                .map(|m| m.standalone())
+                .or_else(|| notchd_modules::create(id).map(|m| m.standalone()))
+            else {
+                continue;
+            };
+            let off = notchd_core::config::value_at(&cfg, &format!("{id}.enabled"))
+                == Some(&Value::Bool(false));
+            // A standalone module belongs to a host (the OSD to the one that
+            // forwards its IPC target): it runs once the host declares it.
+            let wanted = if probe {
+                !off && store.ui_declares(id)
+            } else {
+                listed.iter().any(|l| l == id)
+            };
+            if wanted && !self.loaded.contains_key(id) {
+                if let Some(m) = notchd_modules::create(id) {
+                    self.loaded.insert(id, m);
+                }
+            } else if !wanted && self.loaded.remove(id).is_some() {
+                self.due.remove(id);
+                out.extend(mods.apply(
+                    store,
+                    crate::modhost::ModEvent::Removed {
+                        module: (*id).into(),
+                    },
+                    now,
+                ));
+            }
+        }
+        let ids: Vec<&'static str> = self.loaded.keys().copied().collect();
+        for id in ids {
+            if let Some(m) = self.loaded.get_mut(id) {
+                m.config(&cfg, now);
+            }
+            out.extend(self.settle(store, mods, id, now));
+        }
+        out
+    }
+
+    /// A module's facts, views and effects, after something changed it.
+    fn settle(&mut self, store: &mut Store, mods: &mut Mods, id: &str, now: u64) -> Vec<ToUi> {
+        let Some(m) = self.loaded.get_mut(id) else {
+            return Vec::new();
+        };
+        let facts = m.facts(now);
+        let views = Slot::ALL.iter().map(|s| (*s, m.view(*s, now))).collect();
+        let effects = m.take_effects();
+        match m.next_due(now) {
+            Some(at) => self.due.insert(m.id(), at),
+            None => self.due.remove(m.id()),
+        };
+        let title = notchd_modules::title(id);
+        let out = mods.set_builtin(store, id, title, m.standalone(), &facts, views);
+        for e in effects {
+            match e {
+                Effect::Peek(ms) => store.request_peek(id, Some(f64::from(ms)), now),
+                Effect::DismissPeek => store.dismiss_peek(id),
+                Effect::Notify { title, body } => {
+                    if let Some(n) = &self.notifier {
+                        n.notify(&title, &body);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// An IPC method of a module of the daemon: the answer and what changed.
+    /// `None` when no module of the daemon owns the method.
+    pub fn command(
+        &mut self,
+        store: &mut Store,
+        mods: &mut Mods,
+        method: &str,
+        args: &[String],
+        now: u64,
+    ) -> Option<(String, Vec<ToUi>)> {
+        let id = owner(method)?;
+        let ctx = Self::ctx(store, id);
+        let Some(m) = self.loaded.get_mut(id) else {
+            return Some((format!("{id} module not loaded"), Vec::new()));
+        };
+        let answer = m.command(&ctx, method, args, now)?;
+        Some((answer, self.settle(store, mods, id, now)))
+    }
+
+    /// A primitive's `action` in a module's view.
+    pub fn event(
+        &mut self,
+        store: &mut Store,
+        mods: &mut Mods,
+        id: &str,
+        action: &str,
+        value: &EventValue,
+        now: u64,
+    ) -> Vec<ToUi> {
+        let ctx = Self::ctx(store, id);
+        let Some(m) = self.loaded.get_mut(id) else {
+            return Vec::new();
+        };
+        m.event(&ctx, action, value, now);
+        self.settle(store, mods, id, now)
+    }
+
+    /// A provider's data, for the modules that take it.
+    pub fn feed(
+        &mut self,
+        store: &mut Store,
+        mods: &mut Mods,
+        provider: &str,
+        data: &Value,
+        now: u64,
+    ) -> Vec<ToUi> {
+        let ids: Vec<&'static str> = self.loaded.keys().copied().collect();
+        let mut out = Vec::new();
+        for id in ids {
+            if let Some(m) = self.loaded.get_mut(id) {
+                m.feed(provider, data, now);
+            }
+            out.extend(self.settle(store, mods, id, now));
+        }
+        out
+    }
+
+    /// Runs the modules whose time has come.
+    pub fn tick(&mut self, store: &mut Store, mods: &mut Mods, now: u64) -> Vec<ToUi> {
+        let due: Vec<&'static str> = self
+            .due
+            .iter()
+            .filter(|(_, at)| **at <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        let mut out = Vec::new();
+        for id in due {
+            if let Some(m) = self.loaded.get_mut(id) {
+                m.tick(now);
+            }
+            out.extend(self.settle(store, mods, id, now));
+        }
+        out
+    }
+
+    /// When the first module wants `tick`.
+    pub fn next_due(&self) -> Option<u64> {
+        self.due.values().copied().min()
+    }
+
+    /// The test hook `test-<id>`: demo data in a module's place of the
+    /// system's. `None` when there is no such hook.
+    pub fn demo(
+        &mut self,
+        store: &mut Store,
+        mods: &mut Mods,
+        id: &str,
+        args: &[String],
+        now: u64,
+    ) -> Option<(String, Vec<ToUi>)> {
+        if id == "resources" {
+            self.sampling = false;
+        }
+        let m = self.loaded.get_mut(id)?;
+        let answer = m.demo(args, now)?;
+        Some((answer, self.settle(store, mods, id, now)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    struct Spy(Arc<Mutex<Vec<(String, String)>>>);
+    impl Notifier for Spy {
+        fn notify(&self, title: &str, body: &str) {
+            self.0.lock().unwrap().push((title.into(), body.into()));
+        }
+    }
+
+    type Seen = Arc<Mutex<Vec<(String, String)>>>;
+
+    fn rig(cfg: Value) -> (CoreHost, Store, Mods, Seen) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut store = Store::new();
+        store.set_config(cfg);
+        (
+            CoreHost::new(Some(Box::new(Spy(seen.clone())))),
+            store,
+            Mods::new(),
+            seen,
+        )
+    }
+
+    fn say(
+        h: &mut CoreHost,
+        s: &mut Store,
+        m: &mut Mods,
+        method: &str,
+        args: &[&str],
+        now: u64,
+    ) -> String {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        h.command(s, m, method, &args, now).expect("an owner").0
+    }
+
+    #[test]
+    fn a_module_loads_while_a_notch_lists_it_and_is_gone_with_its_state_when_not() {
+        let (mut h, mut s, mut m, _) = rig(json!({"modules": ["timer"]}));
+        let out = h.sync(&mut s, &mut m, 0);
+        assert!(h.has("timer") && !h.has("activities"));
+        assert!(
+            out.iter()
+                .any(|u| matches!(u, ToUi::Module(i) if i.id == "timer" && i.title == "Timer"))
+        );
+        assert_eq!(say(&mut h, &mut s, &mut m, "timer", &["5m"], 1000), "ok");
+        assert_eq!(
+            say(&mut h, &mut s, &mut m, "push", &["{}"], 0),
+            "activities module not loaded"
+        );
+        s.set_config(json!({"modules": ["activities"]}));
+        let out = h.sync(&mut s, &mut m, 2000);
+        assert!(!h.has("timer") && h.has("activities"));
+        assert!(
+            out.iter()
+                .any(|u| matches!(u, ToUi::View(v) if v.module == "timer" && v.tree.is_none()))
+        );
+        assert!(s.module("timer").is_none(), "its facts leave the store");
+        s.set_config(json!({"modules": ["timer"]}));
+        h.sync(&mut s, &mut m, 3000);
+        assert_eq!(
+            say(&mut h, &mut s, &mut m, "timer", &["pause"], 3000),
+            "no timer running"
+        );
+    }
+
+    #[test]
+    fn a_standalone_module_loads_unless_switched_off() {
+        let (mut h, mut s, mut m, _) = rig(json!({"modules": []}));
+        h.sync(&mut s, &mut m, 0);
+        assert!(!h.has("osd"), "no host declared it");
+        s.set_ui_catalog(
+            vec![json!({"moduleId": "osd", "title": "OSD", "settings": [], "standalone": true})],
+            None,
+        );
+        h.sync(&mut s, &mut m, 0);
+        assert!(h.has("osd"));
+        s.set_config(json!({"modules": [], "osd": {"enabled": false}}));
+        h.sync(&mut s, &mut m, 0);
+        assert!(!h.has("osd"));
+        assert_eq!(
+            say(&mut h, &mut s, &mut m, "osd", &["ping"], 0),
+            "osd module not loaded"
+        );
+    }
+
+    #[test]
+    fn a_views_change_goes_to_the_ui_once_and_the_peek_to_the_store() {
+        let (mut h, mut s, mut m, _) = rig(json!({"modules": ["activities"]}));
+        h.sync(&mut s, &mut m, 0);
+        let json = r#"{"id":"a","title":"Deploy","sticky":true}"#;
+        let args = [json.to_string()];
+        let (answer, out) = h.command(&mut s, &mut m, "push", &args, 5).unwrap();
+        assert_eq!(answer, "ok");
+        assert!(out.iter().any(|u| matches!(u, ToUi::Module(i) if i.active)));
+        let slots: Vec<Slot> = out
+            .iter()
+            .filter_map(|u| match u {
+                ToUi::View(v) => Some(v.slot),
+                _ => None,
+            })
+            .collect();
+        for slot in [
+            Slot::Compact,
+            Slot::VerticalCompact,
+            Slot::Peek,
+            Slot::Expanded,
+        ] {
+            assert!(slots.contains(&slot), "{slot:?} in {slots:?}");
+        }
+        // The same push again changes nothing the UIs see.
+        let (_, out) = h.command(&mut s, &mut m, "push", &args, 6).unwrap();
+        assert!(out.is_empty(), "{out:?}");
+        assert!(s.module("activities").unwrap().info.compact);
+    }
+
+    #[test]
+    fn the_clock_drives_a_running_timer_and_its_end_notifies() {
+        let (mut h, mut s, mut m, seen) = rig(json!({"modules": ["timer"]}));
+        h.sync(&mut s, &mut m, 0);
+        say(&mut h, &mut s, &mut m, "timer", &["1m Tea"], 10_000);
+        let due = h.next_due().unwrap();
+        assert!(due > 10_000 && due <= 11_100);
+        let out = h.tick(&mut s, &mut m, due);
+        let compact = out.iter().find_map(|u| match u {
+            ToUi::View(v) if v.slot == Slot::Compact => v.tree.clone(),
+            _ => None,
+        });
+        assert!(
+            serde_json::to_string(&compact.unwrap())
+                .unwrap()
+                .contains("0:59")
+        );
+        h.tick(&mut s, &mut m, 70_010);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![("Time's up".to_string(), "Tea".to_string())]
+        );
+        assert_eq!(
+            h.next_due(),
+            Some(70_010 + 60_000),
+            "a done timer goes after a minute"
+        );
+    }
+
+    #[test]
+    fn a_button_of_a_view_is_an_event_and_resources_take_a_providers_data() {
+        let (mut h, mut s, mut m, _) = rig(json!({"modules": ["timer", "resources"]}));
+        h.sync(&mut s, &mut m, 0);
+        let out = h.event(
+            &mut s,
+            &mut m,
+            "timer",
+            "start",
+            &EventValue::Text("5".into()),
+            1000,
+        );
+        assert!(
+            out.iter()
+                .any(|u| matches!(u, ToUi::View(v) if v.slot == Slot::Compact && v.tree.is_some()))
+        );
+        let sample = json!({"cpu": 0.5, "cores": 4, "memory": {"used": 1.0, "total": 2.0, "fraction": 0.5}, "disk": null});
+        let out = h.feed(&mut s, &mut m, "resources", &sample, 2000);
+        assert!(out.iter().any(
+            |u| matches!(u, ToUi::View(v) if v.module == "resources" && v.slot == Slot::Compact)
+        ));
+        assert!(
+            h.demo(
+                &mut s,
+                &mut m,
+                "resources",
+                &["0.1".into(), "0.2".into(), "0.3".into()],
+                3000
+            )
+            .is_some()
+        );
+        assert!(!h.wants_resources(), "demo values stop the readings");
+    }
+
+    #[test]
+    fn the_context_says_whether_a_notch_is_open() {
+        let (mut h, mut s, mut m, _) = rig(json!({"modules": ["timer"]}));
+        h.sync(&mut s, &mut m, 0);
+        assert!(!CoreHost::ctx(&s, "timer").expanded);
+    }
+}

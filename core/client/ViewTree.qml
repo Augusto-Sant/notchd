@@ -41,8 +41,25 @@ Item {
   readonly property bool clickable: !root.empty && root.problem === "" && typeof root.node.action === "string"
     && root.node.action !== "" && !Tree.selfActing(root.node.t)
 
-  implicitWidth: primLoader.implicitWidth
-  implicitHeight: primLoader.implicitHeight
+  // The sizes a node may ask of its own (design pixels): a fixed `width` or
+  // `height`, at least `minWidth`, and, for a row or a column, at most
+  // `maxWidth` (a text caps its own width).
+  function widthOf(natural) {
+    var n = root.node
+    if (typeof n.width === "number" && isFinite(n.width)) return Theme.space(n.width)
+    var w = natural
+    if (typeof n.minWidth === "number" && isFinite(n.minWidth)) w = Math.max(w, Theme.space(n.minWidth))
+    if ((n.t === "row" || n.t === "column") && typeof n.maxWidth === "number" && isFinite(n.maxWidth))
+      w = Math.min(w, Theme.space(n.maxWidth))
+    return w
+  }
+  function heightOf(natural) {
+    var n = root.node
+    return typeof n.height === "number" && isFinite(n.height) ? Theme.space(n.height) : natural
+  }
+
+  implicitWidth: root.widthOf(primLoader.implicitWidth)
+  implicitHeight: root.heightOf(primLoader.implicitHeight)
   visible: root.kind !== "" && root.node.visible !== false
 
   // Under the primitive, so a button inside a clickable row still gets its own click.

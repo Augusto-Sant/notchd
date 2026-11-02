@@ -25,6 +25,16 @@ pub struct Common {
     /// In a `row` or `column`: this child takes the rest of the space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<bool>,
+    /// A fixed width in design pixels, for a node whose natural one would
+    /// shift (a number that changes) or that a design fixes (a bar's length).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<Num>,
+    /// A fixed height in design pixels (a vertical bar's length).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<Num>,
+    /// At least this wide, in design pixels.
+    #[serde(rename = "minWidth", default, skip_serializing_if = "Option::is_none")]
+    pub min_width: Option<Num>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -56,6 +66,9 @@ pub struct Layout {
     pub gap: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<Align>,
+    /// At most this wide, in design pixels: the natural width up to it.
+    #[serde(rename = "maxWidth", default, skip_serializing_if = "Option::is_none")]
+    pub max_width: Option<Num>,
     pub children: Vec<Node>,
 }
 
@@ -282,6 +295,9 @@ pub struct Button {
     pub selected: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant: Option<ButtonVariant>,
+    /// A larger round button (36 px, a larger glyph): the main control of a row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub big: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

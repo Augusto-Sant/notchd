@@ -41,7 +41,7 @@ pub enum Phase {
 
 impl Phase {
     /// `PHASE_LABELS`.
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Phase::Focus => "Focus",
             Phase::Short => "Short break",

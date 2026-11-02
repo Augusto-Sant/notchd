@@ -70,26 +70,48 @@ Item {
   // -------------------------------------------------------------- built-ins
   readonly property var builtinModules: ({
     media: Qt.resolvedUrl("modules/media.qml"),
-    activities: Qt.resolvedUrl("modules/activities.qml"),
-    resources: Qt.resolvedUrl("modules/resources.qml"),
-    timer: Qt.resolvedUrl("modules/timer.qml"),
     claude: Qt.resolvedUrl("modules/claude.qml"),
     codex: Qt.resolvedUrl("modules/codex.qml"),
     "codex-live": Qt.resolvedUrl("modules/codex-live.qml"),
     "local-live": Qt.resolvedUrl("modules/local-live.qml")
   })
+  // The built-ins that live in the daemon (native/notchd-modules): no QML
+  // file, only the JSON next to where it would be, which gives the settings
+  // page its title and fields. The daemon announces each (`module`) and
+  // the service makes a CoreModule for it.
+  readonly property var coreModules: ({
+    activities: Qt.resolvedUrl("modules/activities.qml"),
+    resources: Qt.resolvedUrl("modules/resources.qml"),
+    timer: Qt.resolvedUrl("modules/timer.qml")
+  })
 
+  // The QML file of a module this UI loads itself.
   function moduleUrl(id) {
     if (svc.hostModules && svc.hostModules[id]) return svc.hostModules[id]
     if (svc.builtinModules[id]) return svc.builtinModules[id]
     return svc.isTerminal(id) ? Qt.resolvedUrl("terminal/CustomTerminal.qml") : ""
   }
+  // Where its JSON file is (a url of the `.qml` beside it), whether it has
+  // a QML file or lives in the daemon.
+  function infoUrl(id) {
+    var u = svc.moduleUrl(id)
+    return String(u) !== "" ? u : svc.coreModules[id] || ""
+  }
+  // What loads a module: its QML file, else a CoreModule when the daemon has
+  // announced it (a built-in of its own, or a user module).
+  function loadUrl(id) {
+    var u = svc.moduleUrl(id)
+    if (String(u) !== "") return u
+    return svc.daemonModuleIds.indexOf(id) !== -1 ? Qt.resolvedUrl("CoreModule.qml") : ""
+  }
+  // Every module the daemon runs, as it announced them.
+  readonly property var daemonModuleIds: Object.keys(svc.client.modules || {})
 
   // Every module that has a file: built-ins first, then the host's. Its
   // title and settings fields are in a JSON file next to its QML
   // (media.json), read whether it loads or not (moduleInfo).
   readonly property var fileModuleIds: {
-    var out = Object.keys(svc.builtinModules)
+    var out = Object.keys(svc.builtinModules).concat(Object.keys(svc.coreModules))
     var host = Object.keys(svc.hostModules || {})
     for (var i = 0; i < host.length; i++)
       if (out.indexOf(host[i]) === -1) out.push(host[i])
@@ -250,7 +272,7 @@ Item {
     model: svc.fileModuleIds
     delegate: FileView {
       required property string modelData
-      path: svc.moduleInfoPath(svc.moduleUrl(modelData))
+      path: svc.moduleInfoPath(svc.infoUrl(modelData))
       blockLoading: true
       printErrors: false
       onLoaded: {
@@ -261,8 +283,8 @@ Item {
       onLoadFailed: svc.setModuleInfo(modelData, { title: "", settings: [] })
       // A module url in a form moduleInfoPath doesn't know would lose its
       // title and settings without a word.
-      Component.onCompleted: if (path === "" && String(svc.moduleUrl(modelData)) !== "")
-        console.warn(svc.logName + ": no settings file for module '" + modelData + "' at " + svc.moduleUrl(modelData))
+      Component.onCompleted: if (path === "" && String(svc.infoUrl(modelData)) !== "")
+        console.warn(svc.logName + ": no settings file for module '" + modelData + "' at " + svc.infoUrl(modelData))
     }
   }
 
@@ -285,6 +307,8 @@ Item {
   // `standaloneIds` follows them (the OSD was left out at startup).
   function loadList(specs) {
     var standalone = svc.availableModuleIds.filter(function(id) { return svc.isStandalone(id) })
+    // A user module that is standalone says so to the daemon, not in a file.
+    svc.standaloneStateIds.forEach(function(id) { if (standalone.indexOf(id) === -1) standalone.push(id) })
     var enabled = standalone.filter(function(id) { return svc.standaloneEnabled(id) })
     return Config.moduleLoadList(specs, standalone, enabled)
   }
@@ -388,6 +412,7 @@ Item {
   // The standalone modules that have a notch, as the daemon says: stable,
   // like `notchIds`, so a new state does not make every notch again.
   property var standaloneStateIds: []
+  onStandaloneStateIdsChanged: svc.refreshModuleIds()
   // { "<screen>|<edge>": depth }: what windows keep clear (NotchSurface).
   property var reserveZones: ({})
 
@@ -432,7 +457,7 @@ Item {
   // What the modules this UI loads say of themselves (`facts`): sent when
   // they change and again whenever the daemon (re)connects, and before a
   // peek request, so the daemon never decides on a module as it was.
-  readonly property string factsReport: JSON.stringify(svc.modules.map(function(m) {
+  readonly property string factsReport: JSON.stringify(svc.modules.filter(function(m) { return !m.daemonOwned }).map(function(m) {
     return {
       id: m.moduleId, priority: m.priority, active: m.active, compact: !!m.compact, peek: !!m.peek,
       icon: !!m.icon, expanded: !!m.expanded, attention: m.attention, urgentPeek: m.urgentPeek,
@@ -830,6 +855,19 @@ Item {
     svc.client.moduleNotch(module.moduleId, "close")
   }
 
+  // An IPC method of a module of the daemon (`push`, `clear`, `timer`, `osd`):
+  // sent at once, answered with `answer` (the host's target cannot wait).
+  function daemonIpc(method, args, answer) {
+    if (answer !== "ok") return answer
+    return svc.notchIpc(method, args) ? "ok" : "notchd is not running"
+  }
+  // What `push` answers to a payload that is not a JSON object.
+  function pushAnswer(json) {
+    var o
+    try { o = JSON.parse(String(json || "")) } catch (e) { return "invalid json" }
+    return o && typeof o === "object" && !Array.isArray(o) ? "ok" : "invalid json"
+  }
+
   // Without a notch named, open and toggle act on the first notch and close
   // closes them all. The daemon does it (`ipc`); false when it is not there.
   function notchIpc(method, args) {
@@ -897,20 +935,26 @@ Item {
     model: svc.configResolved && svc.moduleInfoReady ? svc.moduleIds : []
     delegate: Loader {
       required property string modelData
-      source: svc.moduleUrl(modelData)
+      source: svc.loadUrl(modelData)
       onLoaded: {
         var module = item as NotchModule
         if (!module) { console.warn(svc.logName + ": module '" + modelData + "' is not a NotchModule"); return }
         module.notch = svc
         if (module.moduleId === "") module.moduleId = modelData
-        if (module.title === "") {
+        if (module.title === "" && !module.daemonOwned) {
           var id = module.moduleId
           module.title = Qt.binding(function() { return Settings.moduleTitle(id, svc.moduleInfo[id]) })
         }
         svc.rebuildModules()
       }
       onStatusChanged: if (status === Loader.Error) console.warn(svc.logName + ": module '" + modelData + "' failed to load")
-      Component.onCompleted: if (String(source) === "") console.warn(svc.logName + ": unknown module '" + modelData + "'")
+      // The daemon may not have announced a module of its own yet: unknown
+      // only if it still has not a moment after it is connected.
+      readonly property Timer unknown: Timer {
+        interval: 3000
+        running: String(parent.source) === "" && svc.client.ready
+        onTriggered: console.warn(svc.logName + ": unknown module '" + parent.modelData + "'")
+      }
       Component.onDestruction: Qt.callLater(svc.rebuildModules)
     }
   }
@@ -951,21 +995,15 @@ Item {
       svc.flushConfig()
       return "ok"
     }
-    // Generic activities, for scripts: see modules/activities.qml.
-    function push(json: string): string {
-      var m = svc.moduleById("activities")
-      return m ? m.push(json) : "activities module not loaded"
-    }
-    function clear(id: string): string {
-      var m = svc.moduleById("activities")
-      return m ? m.clear(id) : "activities module not loaded"
-    }
-    // The timer module: "25m", "3m Tea", "pomodoro", "toggle", "+5m",
-    // "skip", "stop"; see modules/timer.qml.
-    function timer(command: string): string {
-      var m = svc.moduleById("timer")
-      return m ? m.command(command) : "timer module not loaded"
-    }
+    // Generic activities, for scripts, and the timer ("25m", "3m Tea",
+    // "pomodoro", "toggle", "+5m", "skip", "stop"): the daemon's modules
+    // (native/notchd-modules). An IPC handler cannot wait for the daemon's
+    // answer, so these send the method and answer `ok` (`invalid json` for a
+    // push that is not, which is known here); `notchd ipc <method>` has the
+    // module's own answer (`timer module not loaded`, `no timer running`...).
+    function push(json: string): string { return svc.daemonIpc("push", [json], svc.pushAnswer(json)) }
+    function clear(id: string): string { return svc.daemonIpc("clear", [id], "ok") }
+    function timer(command: string): string { return svc.daemonIpc("timer", [command], "ok") }
     // An agent, by its module's id: "toggle" opens or closes its notch,
     // "new" starts a new session, "ask <question>" opens the notch and types
     // it in; see TerminalModule.qml. `claude` and `codex` are the same.

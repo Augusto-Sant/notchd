@@ -8,9 +8,7 @@ export const SOURCES = {
   'config.json': 'core/Config.js',
   'settings.json': 'core/settings/Settings.js',
   'position.json': 'core/Position.js',
-  'countdown.json': 'core/Countdown.js',
   'usage.json': 'core/Usage.js',
-  'resources.json': 'core/Resources.js',
   'agent.json': 'core/Agent.js',
   'live.json': 'core/Live.js',
   'components.json': 'core/Components.js',
@@ -50,19 +48,9 @@ const before = {
     moduleInfoPath: (m) => (url, dir) => { try { return m.moduleInfoPath(url, dir); } catch (e) { if (e.name !== 'URIError') throw e; return ''; } },
     sortWorkspaces: (m) => (list) => m.sortWorkspaces(list.slice())
   },
-  'countdown.json': {
-    add: (m) => (s, now, ms) => m.add(s, now, ms)
-  }
-};
-// A countdown state's `next` is null once a pomodoro cycle is over; Rust has no
-// such key then. Compared as absent.
-const dropNext = (r) => {
-  const one = (x) => { if (x && typeof x === 'object' && x.next === null) { const { next, ...rest } = x; return rest; } return x; };
-  return r && r.state !== undefined ? { ...r, state: one(r.state) } : one(r);
 };
 const after = {
   'live.json': { parseLine: (r) => (r === null ? null : true) },
-  'countdown.json': Object.fromEntries(['startPhase', 'pause', 'resume', 'toggle', 'add', 'tick', 'skip', 'apply'].map((f) => [f, dropNext])),
   'config.json': { parse: (r) => (r.ok ? r : { ok: false, error: message(r.error) }) },
   'settings.json': { parseModuleInfo: (r) => (r.error === undefined ? r : { ...r, error: message(r.error) }) }
 };

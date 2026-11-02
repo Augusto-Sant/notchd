@@ -1,6 +1,7 @@
 {
  "message": "row",
  "valid": [
+  {"t":"row","width":220,"height":28,"minWidth":100,"maxWidth":340,"children":[]},
   {"t":"row","children":[]},
   {"t":"row","id":"r1","visible":true,"tooltip":"tip","gap":8,"align":"center","children":[{"t":"text","fill":true,"text":"a"},{"t":"spacer","fill":true},{"t":"icon","glyph":"󰔛"}]}
  ],

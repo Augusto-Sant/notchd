@@ -104,7 +104,7 @@ omarchy-shell eryk.notchd timer pomodoro
 omarchy-shell eryk.notchd timer toggle
 ```
 
-It answers `ok`, `no timer running`, the usage, or `timer module not loaded` when no notch lists `timer`.
+It answers `ok`, `no timer running`, the usage, or `timer module not loaded` when no notch lists `timer`. The timer lives in the daemon, which answers: `notchd ipc timer ...` prints those. The shell's own target (`omarchy-shell eryk.notchd timer`) cannot wait for the daemon and answers `ok` once it has sent the command (the same goes for `push` and `clear`, which answer `invalid json` themselves for a payload that is not a JSON object).
 
 ## Agents
 

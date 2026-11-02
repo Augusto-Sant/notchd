@@ -36,6 +36,8 @@ struct ModState {
     urgent_peek: bool,
     peek_on_focused_screen: bool,
     standalone: bool,
+    /// A module that lives in the daemon (`corehost`), not a process.
+    builtin: bool,
     /// The error text, and the row that shows it.
     error: Option<(String, Node)>,
     /// What the module sent.
@@ -130,8 +132,49 @@ impl Mods {
         self.mods.contains_key(id)
     }
 
+    /// The user modules' ids: the ones the module host runs.
     pub fn ids(&self) -> Vec<String> {
-        self.mods.keys().cloned().collect()
+        self.mods
+            .iter()
+            .filter(|(_, m)| !m.builtin)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Whether a module of the daemon itself has this id.
+    pub fn is_builtin(&self, id: &str) -> bool {
+        self.mods.get(id).is_some_and(|m| m.builtin)
+    }
+
+    /// A module that lives in the daemon (`corehost`): its facts and its
+    /// views, as it says them now. The store follows, and the `module` and
+    /// `view` messages the UIs need are returned. Its settings page is the
+    /// UI catalog's (the JSON file next to its QML), not a def of its own.
+    pub fn set_builtin(
+        &mut self,
+        store: &mut Store,
+        id: &str,
+        title: &str,
+        standalone: bool,
+        facts: &notchd_modules::Facts,
+        views: Vec<(Slot, Option<Node>)>,
+    ) -> Vec<ToUi> {
+        let m = self.entry(id);
+        m.builtin = true;
+        m.title = title.to_string();
+        m.standalone = standalone;
+        m.priority = facts.priority;
+        m.active = facts.active;
+        m.icon = facts.icon.clone();
+        m.attention = facts.attention;
+        m.expanded_width = facts.expanded_width;
+        m.urgent_peek = facts.urgent_peek;
+        m.peek_on_focused_screen = facts.peek_on_focused_screen;
+        m.views = views
+            .into_iter()
+            .filter_map(|(slot, tree)| tree.map(|t| (slot, t)))
+            .collect();
+        self.sync(store, id)
     }
 
     pub fn standalone(&self, id: &str) -> bool {

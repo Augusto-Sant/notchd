@@ -21,6 +21,10 @@ Item {
   id: module
   visible: false
 
+  // Its facts and views are the daemon's (CoreModule): the service does not
+  // report them back.
+  property bool daemonOwned: false
+
   // Set by the notch when the module loads.
   property var notch: null
 

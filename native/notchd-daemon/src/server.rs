@@ -67,6 +67,12 @@ impl Server {
         self.hub.start_modules(modules_dir, log_dir);
     }
 
+    /// Starts the readings of the system the modules of the daemon take (the
+    /// resources). A hub driven by hand, as the tests do, has none.
+    pub fn start_providers(&self) {
+        self.hub.start_providers();
+    }
+
     /// Accepts forever.
     pub fn serve(self) {
         let hub = Arc::clone(&self.hub);

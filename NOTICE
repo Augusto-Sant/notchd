@@ -4,7 +4,7 @@ Licensed under the MIT License (see LICENSE).
 
 Third-party code
 
-hosts/omarchy/modules/osd.qml adapts the icon mapping and payload rules of
+native/notchd-modules/src/osd.rs adapts the icon mapping and payload rules of
 Omarchy's OSD (shell/plugins/osd/OsdModel.js, https://github.com/basecamp/omarchy),
 distributed under the MIT License:
 

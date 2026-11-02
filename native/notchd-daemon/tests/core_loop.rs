@@ -85,7 +85,7 @@ fn replied(ui: &mut FakeUi, id: u64) -> ToUi {
     .expect("a reply")
 }
 
-const CFG: &str = r#"{"modules":["media","timer"],"hoverOpenDelay":40,"hoverCloseDelay":80}"#;
+const CFG: &str = r#"{"modules":["media","clock"],"hoverOpenDelay":40,"hoverCloseDelay":80}"#;
 
 #[test]
 fn hover_enter_opens_after_the_delay_and_leave_closes_it() {
@@ -124,16 +124,16 @@ fn leaving_before_the_delay_never_opens() {
 fn peek_arbitration_between_two_modules() {
     let r = rig("peek", CFG);
     r.module("media", 50.0, false);
-    r.module("timer", 80.0, false);
+    r.module("clock", 80.0, false);
     let mut ui = r.ui();
     assert!(state_where(&mut ui, mode_is(Mode::Compact)).is_some());
-    r.peek("timer", 60_000.0);
-    let s = state_where(&mut ui, mode_is(Mode::Peek)).expect("timer peeks");
+    r.peek("clock", 60_000.0);
+    let s = state_where(&mut ui, mode_is(Mode::Peek)).expect("clock peeks");
     assert_eq!(
         s.notches[0].copies[0].peek.as_ref().unwrap().module,
-        "timer"
+        "clock"
     );
-    // media (50) cannot cut timer (80)
+    // media (50) cannot cut clock (80)
     r.peek("media", 60_000.0);
     // a hover drops a plain peek
     ui.pointer("main", "DP-1", PointerEv::Enter);
@@ -150,18 +150,18 @@ fn peek_arbitration_between_two_modules() {
 fn a_short_peek_ends_by_itself_and_an_urgent_one_shows_over_a_hover() {
     let r = rig("short", CFG);
     r.module("media", 50.0, false);
-    r.module("timer", 80.0, true);
+    r.module("clock", 80.0, true);
     let mut ui = r.ui();
     assert!(state_where(&mut ui, mode_is(Mode::Compact)).is_some());
     r.peek("media", 400.0);
     assert!(state_where(&mut ui, mode_is(Mode::Peek)).is_some());
     assert!(
         state_where(&mut ui, mode_is(Mode::Compact)).is_some(),
-        "the peek timer ran out"
+        "the peek clock ran out"
     );
     ui.pointer("main", "DP-1", PointerEv::Enter);
     assert!(state_where(&mut ui, mode_is(Mode::Expanded)).is_some());
-    r.peek("timer", 5000.0);
+    r.peek("clock", 5000.0);
     assert!(
         state_where(&mut ui, mode_is(Mode::Peek)).is_some(),
         "urgent through a hover"
@@ -236,7 +236,7 @@ fn ipc_set_navigate_and_state_work_over_the_socket() {
     };
     let v: Value = serde_json::from_str(&o.result.unwrap()).unwrap();
     assert_eq!(v["notches"][0]["id"], "main");
-    let id = ui.ipc("timer", &["3m"]);
+    let id = ui.ipc("agent", &["claude", "toggle"]);
     assert!(matches!(replied(&mut ui, id), ToUi::Err(e) if e.code == "method"));
 }
 
@@ -331,12 +331,12 @@ fn facts_line(modules: &[(&str, i32)]) -> String {
 fn a_ui_reports_facts_peeks_pins_and_drags_and_the_state_follows() {
     let r = rig("inputs", CFG);
     let mut ui = r.ui();
-    ui.send_raw(&facts_line(&[("media", 50), ("timer", 80)]));
+    ui.send_raw(&facts_line(&[("media", 50), ("clock", 80)]));
     let s = state_where(&mut ui, mode_is(Mode::Compact)).expect("facts make a compact view");
-    assert_eq!(s.notches[0].copies[0].compact, ["timer", "media"]);
-    ui.send_raw(r#"{"t":"peek","module":"timer","ms":60000}"#);
+    assert_eq!(s.notches[0].copies[0].compact, ["clock", "media"]);
+    ui.send_raw(r#"{"t":"peek","module":"clock","ms":60000}"#);
     assert!(state_where(&mut ui, mode_is(Mode::Peek)).is_some());
-    ui.send_raw(r#"{"t":"peek-dismiss","module":"timer"}"#);
+    ui.send_raw(r#"{"t":"peek-dismiss","module":"clock"}"#);
     assert!(state_where(&mut ui, mode_is(Mode::Compact)).is_some());
     ui.send_raw(r#"{"t":"pin","notch":"main","screen":"","on":true}"#);
     assert!(state_where(&mut ui, mode_is(Mode::Expanded)).is_some());
@@ -351,9 +351,9 @@ fn a_ui_reports_facts_peeks_pins_and_drags_and_the_state_follows() {
         state_where(&mut ui, mode_is(Mode::Compact)).is_some(),
         "a window took the keyboard: closed"
     );
-    ui.send_raw(r#"{"t":"module-notch","module":"timer","op":"open"}"#);
+    ui.send_raw(r#"{"t":"module-notch","module":"clock","op":"open"}"#);
     assert!(state_where(&mut ui, mode_is(Mode::Expanded)).is_some());
-    ui.send_raw(r#"{"t":"module-notch","module":"timer","op":"close"}"#);
+    ui.send_raw(r#"{"t":"module-notch","module":"clock","op":"close"}"#);
     assert!(state_where(&mut ui, mode_is(Mode::Compact)).is_some());
     ui.send_raw(r#"{"t":"drag","notch":"main","screen":"","ev":"start"}"#);
     ui.send_raw(

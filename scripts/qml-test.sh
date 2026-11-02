@@ -55,6 +55,9 @@ run_shard() {
   ln -s -- "$root/tests/qml/shell.qml" "$dir/config/shell.qml"
   ln -s -- "$root/tests/qml/fixtures" "$dir/config/fixtures"
   cp -- "$root/tests/qml/TestService.qml" "$dir/config/TestService.qml"
+  # A user module for the daemons (their config dir is data/): tests/modules/hello.
+  mkdir -- "$dir/data/modules"
+  cp -r -- "$root/tests/modules/hello" "$dir/data/modules/hello"
   # Fake `claude` and `codex` terminal UIs (tests/qml/fixtures/bin), state,
   # data, cache and Claude Code's dir in the scratch dir; a fake live bridge
   # and a fake components installer.

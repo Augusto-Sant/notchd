@@ -1954,6 +1954,15 @@ impl Store {
         self.default_modules = defaults;
     }
 
+    /// Whether the UI's catalog lists a module: a host declares the modules
+    /// it owns (the Omarchy `osd`, which the daemon runs only for a host that
+    /// forwards its target).
+    pub fn ui_declares(&self, id: &str) -> bool {
+        self.ui_defs
+            .iter()
+            .any(|d| d.get("moduleId").and_then(Value::as_str) == Some(id))
+    }
+
     /// The modules a notch lists when the config lists none.
     pub fn default_refs(&self) -> Vec<&str> {
         match &self.default_modules {

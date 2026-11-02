@@ -14,9 +14,16 @@
 //! reach the hub on a thread of their own (the sink only forwards into a
 //! channel), and apply under the same lock as any other change.
 //!
+//! The modules that live in the daemon (`corehost`: timer, activities,
+//! resources, osd) run under the same lock: the ticker wakes them at their
+//! time, an IPC method or an `event` reaches them from a connection thread,
+//! and the system's readings arrive from a sampler thread
+//! ([`Hub::start_providers`]).
+//!
 //! One ticker thread sleeps until the store's next timer (or the next poll of
 //! the config file, 100 ms) and wakes early when a change moves it.
 
+use crate::corehost::CoreHost;
 use crate::modhost::{ModEvent, ModHost};
 use crate::modstate::Mods;
 use crate::router;
@@ -37,6 +44,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// How often the config file is looked at for an edit from outside.
 pub const CONFIG_POLL: Duration = Duration::from_millis(100);
+/// How often the system's resources are read.
+const RESOURCES_EVERY: Duration = Duration::from_secs(2);
 
 /// Milliseconds since the epoch, advancing monotonically: the wall clock read
 /// once, then an `Instant`, so a clock step never moves a timer.
@@ -85,6 +94,8 @@ struct Inner {
     stop: bool,
     /// The user modules the host reported.
     mods: Mods,
+    /// The modules that live in the daemon.
+    core: CoreHost,
     /// What the host was last told per module: enabled, and its config.
     host_told: BTreeMap<String, (bool, Value)>,
 }
@@ -169,6 +180,7 @@ impl Hub {
                 last_text: None,
                 stop: false,
                 mods: Mods::new(),
+                core: CoreHost::default(),
                 host_told: BTreeMap::new(),
             }),
             modhost: Mutex::new(None),
@@ -227,8 +239,30 @@ impl Hub {
         g.announce(changes);
         if config_changed {
             self.sync_host(g);
+            self.sync_core(g);
         }
         result
+    }
+
+    /// Loads and unloads the modules of the daemon to match the config, and
+    /// announces them: their `module` and `view` messages, then the state
+    /// those facts changed.
+    fn sync_core(&self, g: &mut Inner) {
+        let now = self.clock.now();
+        let Inner {
+            core, store, mods, ..
+        } = &mut *g;
+        let msgs = core.sync(store, mods, now);
+        self.announce_core(g, msgs);
+    }
+
+    /// Sends what a module of the daemon changed, and the state it moved.
+    fn announce_core(&self, g: &mut Inner, msgs: Vec<ToUi>) {
+        for m in &msgs {
+            g.broadcast(m);
+        }
+        let changes = g.store.take_changes(self.clock.now());
+        g.announce(changes);
     }
 
     // ------------------------------------------------------------ clients
@@ -307,12 +341,38 @@ impl Hub {
         // A primitive's action in a user module's view goes to the module;
         // `restart` (the error row's button) restarts it.
         if let ToDaemon::Event(e) = msg {
-            if g.mods.knows(&e.module) {
+            let now = self.clock.now();
+            if g.core.has(&e.module) {
+                let Inner {
+                    core, store, mods, ..
+                } = &mut *g;
+                let msgs = core.event(store, mods, &e.module, &e.action, &e.value, now);
+                self.announce_core(&mut g, msgs);
+                drop(g);
+                self.wake.notify_all();
+            } else if g.mods.knows(&e.module) {
                 self.module_event(&e.module, e);
             }
             return;
         }
+        // A method of a module of the daemon (`timer`, `push`, `clear`,
+        // `osd`, the test hooks): its answer, after the state it made.
+        if let ToDaemon::Ipc(r) = msg
+            && let Some(answer) = self.core_ipc(&mut g, &r.method, &r.args)
+        {
+            let reply = router::ok(r.id, Some(answer));
+            let _ = self.publish(&mut g);
+            g.send_to(client, reply);
+            drop(g);
+            self.wake.notify_all();
+            return;
+        }
         let mut replies = router::route(&mut g.store, msg, self.clock.now());
+        // The UI's default modules changed what a notch lists.
+        if matches!(msg, ToDaemon::Catalog(_)) {
+            self.sync_host(&mut g);
+            self.sync_core(&mut g);
+        }
         if let Err(e) = self.publish(&mut g) {
             for r in &mut replies {
                 if let ToUi::Ok(o) = r {
@@ -325,6 +385,74 @@ impl Hub {
         }
         drop(g);
         self.wake.notify_all();
+    }
+
+    /// An `ipc` method one of the daemon's own modules answers, or a test
+    /// hook that feeds them: the answer.
+    fn core_ipc(&self, g: &mut Inner, method: &str, args: &[String]) -> Option<String> {
+        let now = self.clock.now();
+        let Inner {
+            core, store, mods, ..
+        } = &mut *g;
+        let (answer, msgs) = if let Some(id) = method
+            .strip_prefix("test-")
+            .filter(|_| crate::testhooks::enabled())
+        {
+            core.demo(store, mods, id, args, now)?
+        } else {
+            core.command(store, mods, method, args, now)?
+        };
+        self.announce_core(g, msgs);
+        Some(answer)
+    }
+
+    /// Feeds a provider's data to the modules of the daemon.
+    pub fn feed(&self, provider: &str, data: &Value) {
+        let mut g = self.lock();
+        let now = self.clock.now();
+        let Inner {
+            core, store, mods, ..
+        } = &mut *g;
+        let msgs = core.feed(store, mods, provider, data, now);
+        self.announce_core(&mut g, msgs);
+        let _ = self.publish(&mut g);
+        drop(g);
+        self.wake.notify_all();
+    }
+
+    /// Starts the readings of the system that feed the modules of the daemon
+    /// (`resources`: every 2 s while the module is loaded, on a thread of its
+    /// own, so a slow `df` never holds the hub's lock). Not started by a
+    /// hub that tests drive by hand.
+    pub fn start_providers(self: &Arc<Hub>) {
+        let weak = Arc::downgrade(self);
+        let spawned = thread::Builder::new()
+            .name("notchd-resources".into())
+            .spawn(move || {
+                let Some(mut provider) = notchd_providers::resources::system() else {
+                    return;
+                };
+                loop {
+                    let Some(hub) = weak.upgrade() else { return };
+                    if hub.lock().stop {
+                        return;
+                    }
+                    if hub.lock().core.wants_resources() {
+                        let sample = provider.sample(notchd_modules::resources::DISK_PATH);
+                        if let Ok(data) = serde_json::to_value(sample) {
+                            // A hook may have taken over while we read.
+                            if hub.lock().core.wants_resources() {
+                                hub.feed("resources", &data);
+                            }
+                        }
+                    }
+                    drop(hub);
+                    thread::sleep(RESOURCES_EVERY);
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("notchd: cannot start the resources reader: {e}");
+        }
     }
 
     /// Changes the store directly (a module's facts, a peek request: what the
@@ -464,7 +592,22 @@ impl Hub {
             self.poll_config(&mut g);
             let _ = self.publish(&mut g);
             let now = self.clock.now();
-            let wait = g.store.next_due().map_or(CONFIG_POLL, |due| {
+            {
+                let Inner {
+                    core, store, mods, ..
+                } = &mut *g;
+                let msgs = core.tick(store, mods, now);
+                if !msgs.is_empty() {
+                    self.announce_core(&mut g, msgs);
+                    let _ = self.publish(&mut g);
+                }
+            }
+            let now = self.clock.now();
+            let due = [g.store.next_due(), g.core.next_due()]
+                .into_iter()
+                .flatten()
+                .min();
+            let wait = due.map_or(CONFIG_POLL, |due| {
                 Duration::from_millis(due.saturating_sub(now).max(1)).min(CONFIG_POLL)
             });
             g = self

@@ -93,6 +93,7 @@ pub fn run_bounded(mut cmd: Command, limit: Duration) -> (Option<i32>, String, S
     )
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Ev {
     Msg(ToUi),
     Unparsed(String),

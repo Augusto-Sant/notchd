@@ -7,7 +7,7 @@ use serde_json::Value;
 
 /// JS `\s` / `String.prototype.trim` whitespace (differs from Rust's
 /// `char::is_whitespace`: U+FEFF counts, U+0085 does not).
-pub(crate) fn is_ws(c: char) -> bool {
+pub fn is_ws(c: char) -> bool {
     matches!(
         c,
         '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
@@ -22,13 +22,13 @@ pub(crate) fn is_ws(c: char) -> bool {
 }
 
 /// JS `String.prototype.trim`.
-pub(crate) fn trim(s: &str) -> &str {
+pub fn trim(s: &str) -> &str {
     s.trim_matches(is_ws)
 }
 
 /// JS `Number(string)`: empty is 0, hex/octal/binary prefixes, decimal and
 /// exponent forms, `Infinity`; anything else is NaN.
-pub(crate) fn str_to_number(s: &str) -> f64 {
+pub fn str_to_number(s: &str) -> f64 {
     let t = trim(s);
     if t.is_empty() {
         return 0.0;
@@ -58,7 +58,7 @@ pub(crate) fn str_to_number(s: &str) -> f64 {
 }
 
 /// JS `Number(value)` for a JSON value (arrays and objects are NaN here).
-pub(crate) fn number(v: &Value) -> f64 {
+pub fn number(v: &Value) -> f64 {
     match v {
         Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
         Value::String(s) => str_to_number(s),
@@ -69,13 +69,13 @@ pub(crate) fn number(v: &Value) -> f64 {
 }
 
 /// JS `Number(value) || 0`.
-pub(crate) fn number_or_zero(v: &Value) -> f64 {
+pub fn number_or_zero(v: &Value) -> f64 {
     let n = number(v);
     if n.is_nan() { 0.0 } else { n }
 }
 
 /// JS truthiness of a JSON value.
-pub(crate) fn truthy(v: &Value) -> bool {
+pub fn truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Bool(b) => *b,
@@ -86,13 +86,13 @@ pub(crate) fn truthy(v: &Value) -> bool {
 }
 
 /// JS truthiness of an optional value (`undefined` is falsy).
-pub(crate) fn truthy_opt(v: Option<&Value>) -> bool {
+pub fn truthy_opt(v: Option<&Value>) -> bool {
     v.is_some_and(truthy)
 }
 
 /// A number as JS prints it: integers without a fraction, an exponent from
 /// 1e21 and below 1e-6, `-0` as "0".
-pub(crate) fn num_str(n: f64) -> String {
+pub fn num_str(n: f64) -> String {
     if n.is_nan() {
         "NaN".to_string()
     } else if n.is_infinite() {
@@ -122,7 +122,7 @@ pub(crate) fn num_str(n: f64) -> String {
 }
 
 /// JS `String(value)` for a JSON value.
-pub(crate) fn string(v: &Value) -> String {
+pub fn string(v: &Value) -> String {
     match v {
         Value::Null => "null".into(),
         Value::Bool(b) => b.to_string(),
@@ -144,12 +144,12 @@ pub(crate) fn string(v: &Value) -> String {
 }
 
 /// JS `String(v || "")`.
-pub(crate) fn string_or_empty(v: &Value) -> String {
+pub fn string_or_empty(v: &Value) -> String {
     if truthy(v) { string(v) } else { String::new() }
 }
 
 /// JS `===` between two values (numbers compare as numbers, so 1 equals 1.0).
-pub(crate) fn eq(a: &Value, b: &Value) -> bool {
+pub fn eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
         _ => a == b,
@@ -157,7 +157,7 @@ pub(crate) fn eq(a: &Value, b: &Value) -> bool {
 }
 
 /// JS `===` between two possibly-`undefined` values.
-pub(crate) fn eq_opt(a: Option<&Value>, b: Option<&Value>) -> bool {
+pub fn eq_opt(a: Option<&Value>, b: Option<&Value>) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(x), Some(y)) => eq(x, y),
@@ -166,14 +166,14 @@ pub(crate) fn eq_opt(a: Option<&Value>, b: Option<&Value>) -> bool {
 }
 
 /// JS `Math.round`: halves round toward +infinity.
-pub(crate) fn round(x: f64) -> f64 {
+pub fn round(x: f64) -> f64 {
     let r = x.floor();
     if x - r >= 0.5 { r + 1.0 } else { r }
 }
 
 /// JS `Number.prototype.toFixed`: rounds half up (away from zero) on the
 /// exact decimal value; Rust's formatting rounds ties to even.
-pub(crate) fn to_fixed(v: f64, digits: usize) -> String {
+pub fn to_fixed(v: f64, digits: usize) -> String {
     if v.is_nan() {
         return "NaN".to_string();
     }
@@ -201,7 +201,7 @@ pub(crate) fn to_fixed(v: f64, digits: usize) -> String {
 
 /// JS `decodeURIComponent`, or `None` where JS throws (a bad `%` escape, or
 /// bytes that are not UTF-8).
-pub(crate) fn decode_uri_component(s: &str) -> Option<String> {
+pub fn decode_uri_component(s: &str) -> Option<String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;

@@ -18,6 +18,7 @@ pub fn run(instance: Instance) -> Result<(), String> {
         Some(logs) => server.start_modules(&crate::server::modules_dir(&instance.config), &logs),
         None => eprintln!("notchd: no XDG_STATE_HOME or HOME: user modules are not started"),
     }
+    server.start_providers();
     server.serve();
     Ok(())
 }

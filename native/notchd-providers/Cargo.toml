@@ -7,5 +7,6 @@ description = "notchd's providers: facts per OS behind traits."
 
 [dependencies]
 notchd-proto = { path = "../notchd-proto" }
+notchd-core = { path = "../notchd-core" }
 serde.workspace = true
 serde_json.workspace = true

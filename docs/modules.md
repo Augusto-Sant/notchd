@@ -1,6 +1,6 @@
 # Writing a module
 
-A module is a QML file whose root is a `NotchModule`. Built-ins live in `core/modules/` and import the core with `import ".."`. A host's modules live in its own folder (the Omarchy host's in `hosts/omarchy/modules/`, importing `"../../../core"`) and register through the service's `hostModules`.
+A module is either a QML file whose root is a `NotchModule`, or logic that lives in the daemon and is drawn from view trees ([below](#a-module-in-the-daemon)). Built-ins live in `core/modules/` and import the core with `import ".."`. A host's modules live in its own folder (the Omarchy host's in `hosts/omarchy/modules/`, importing `"../../../core"`) and register through the service's `hostModules`.
 
 ```qml
 import QtQuick
@@ -35,6 +35,18 @@ The expanded view is as tall as it lays itself out; it needn't fit the screen. P
 Give the module an `icon` (a Nerd Font glyph, e.g. `String.fromCodePoint(0xF051B)`). While it is active with no `compact` view (the timer, stopped), the closed notch shows the icon in its place, unless the notch's `idleIcons` is off. Without an icon it stays out of the closed notch then.
 
 A peek asked for while the notch is open (on another tab, say) doesn't show. For news that matters, set `attention: true` before `requestPeek()`: its tab gets a dot, and the peek shows once as the notch closes, unless you have seen it by then. Clear `attention` once you have (the terminal modules clear it when their view opens). The rule is `State.attentionPeek`.
+
+## A module in the daemon
+
+The timer, activities, resources and OSD, and every user module (a folder of `modules/` in the config dir, run by the daemon as a process), keep their logic in the daemon and send **view trees** (the primitives of [architecture.md](architecture.md#primitive-tree-v1)), not QML. `core/CoreModule.qml` is the one QML type that shows them, so to the notch (tabs, compact row, peeks, the settings page) they are modules like any other:
+
+- Its facts (`title`, `priority`, `active`, `icon`, `attention`, `urgentPeek`, `peekOnFocusedScreen`, `expandedWidth`) are the daemon's `module` message, bound as properties (`daemonOwned` is true, so the service never reports facts for it).
+- Each slot (`compact`, `verticalCompact`, `peek`, `verticalPeek`, `expanded`) is a stable `Component` that draws `client.view(id, slot)` with `ViewTree`, or `null` while the daemon sends no tree for it. A press in a view goes back as the client's `event(module, slot, action, value)`.
+- `NotchService` makes one for every module the daemon announces that has no QML file (`loadUrl`) and that some notch lists (or that is standalone and on); a built-in in the daemon still has its JSON file next to where its QML was (`coreModules`), which gives its settings page and defaults. A host module that only owns an IPC target (the Omarchy `osd`) is a `CoreModule` with the `IpcHandler` inside.
+
+To move a module to the daemon: write `native/notchd-modules/src/<id>.rs` implementing `CoreModule` (`facts`, `view(slot, now)`, and as needed `config`, `command` for IPC, `event`, `tick`/`next_due`, `feed` for a provider's data, `take_effects` for peeks and notifications), add it to `IDS` and `create` in `lib.rs` and, if it has IPC methods, to `METHODS` in `notchd-daemon/src/corehost.rs`; move the id from `builtinModules` to `coreModules` in `NotchService.qml` and delete the QML. Settings defaults are read from its JSON file (`tree::Settings`). Test it as values in Rust (every slot builds a valid tree), and the QML behaviour with the helpers `root.ask`, `root.texts` of `tests/qml/shell.qml`. A module that needs demo data offscreen implements `demo` (the test hook `test-<id>`, only with `NOTCHD_TEST_HOOKS=1`).
+
+A tree draws like the QML it replaced where a few general properties say so: `width`, `height`, `minWidth` (and a row's or column's `maxWidth`) fix a size, `fill` takes the rest of a row, and glyphs that need a size are `text` nodes (`size: "body"`), which draw the same Nerd Font.
 
 ## Settings
 

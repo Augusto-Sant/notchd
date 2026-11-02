@@ -45,12 +45,11 @@ core/                 the framework: no desktop-specific code
   NotchWindow.qml     the layer-shell overlay that puts one copy on screen
   NotchCard.qml       the notch itself: outline, padding, the current view
   NotchModule.qml     base type for modules
+  CoreModule.qml      a module that lives in the daemon (timer, activities, resources, osd, user modules): draws its views
   Theme.qml           visual tokens (singleton), fed by the host
   Config.js           config rules (pure JS)
   Position.js         edge and offset: where the notch sits, corners and joined rows (pure JS)
   Outline.js          the notch's outline: shoulders, corners, joins (pure JS)
-  Resources.js        /proc and df parsing, when a resource runs short (pure JS)
-  Countdown.js        timer and pomodoro: durations, commands, the countdown (pure JS)
   TerminalModule.qml  base type for a module that runs a program's terminal UI (claude, codex)
   Agent.js            what Claude Code's and Codex's terminal titles say, when to peek, IPC commands (pure JS)
   Terminal.js         the terminal view: the command line, the folder, the color scheme (pure JS)
@@ -61,7 +60,7 @@ core/                 the framework: no desktop-specific code
   DepthReport.qml     what a notch card measures of itself, sent to the daemon, which works out how much of its edge windows leave to the closed notch
   KeepShown.qml       shows a window again after its monitor goes away and comes back
   *Compositor.qml     compositor adapters (Hyprland, generic)
-  modules/            built-in modules: media, activities, resources, timer, claude, codex
+  modules/            built-in modules: media, claude, codex, the voice ones; and the JSON files of the daemon's (activities, resources, timer)
   settings/           the settings window, its controls and Settings.js
 hosts/
   omarchy/            Omarchy shell plugin entry points and the osd module

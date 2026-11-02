@@ -1,5 +1,6 @@
 singleton Theme 1.0 Theme.qml
 NotchModule 1.0 NotchModule.qml
+CoreModule 1.0 CoreModule.qml
 NotchService 1.0 NotchService.qml
 NotchSurface 1.0 NotchSurface.qml
 HyprlandCompositor 1.0 HyprlandCompositor.qml

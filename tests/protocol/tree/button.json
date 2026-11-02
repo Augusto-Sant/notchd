@@ -2,6 +2,7 @@
  "message": "button",
  "valid": [
   {"t":"button","action":"toggle","glyph":"󰐊"},
+  {"t":"button","action":"toggle","glyph":"󰏤","big":true},
   {"t":"button","action":"refresh","label":"Refresh","tone":"accent","enabled":false,"selected":true,"variant":"outline"}
  ],
  "invalid": [

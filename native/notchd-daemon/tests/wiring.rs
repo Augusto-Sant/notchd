@@ -467,3 +467,110 @@ fn shutdown_stops_the_module_processes_before_the_daemon_exits() {
     }
     assert!(!alive(pid), "no module process outlives the daemon");
 }
+
+// ------------------------------------------------- modules of the daemon
+
+fn answer(ui: &mut FakeUi, method: &str, args: &[&str]) -> Result<String, String> {
+    let id = ui.ipc(method, args);
+    match ui.wait_for(WAIT, |m| {
+        matches!(m, ToUi::Ok(o) if o.id == id) || matches!(m, ToUi::Err(e) if e.id == Some(id))
+    }) {
+        Some(ToUi::Ok(o)) => Ok(o.result.unwrap_or_default()),
+        Some(ToUi::Err(e)) => Err(e.message.unwrap_or_default()),
+        other => panic!("no answer to {method}: {other:?}"),
+    }
+}
+
+#[test]
+fn the_timer_activities_and_osd_live_in_the_daemon_and_answer_their_ipc() {
+    let r = rig(
+        "core",
+        r#"{"modules":["timer","activities"],"timer":{"notify":false}}"#,
+    );
+    let mut ui = r.ui_on(&["DP-1"], "DP-1");
+    // The host that owns the OSD's IPC target declares the module.
+    ui.send_raw(
+        r#"{"t":"catalog","modules":[{"moduleId":"osd","title":"OSD","settings":[],"standalone":true}]}"#,
+    );
+    // Listed, they load: their facts and an idle timer's expanded view arrive.
+    assert!(
+        ui.wait_for(START_WAIT, |m| matches!(m, ToUi::Module(i)
+            if i.id == "timer" && i.title == "Timer" && i.active && i.urgent_peek))
+            .is_some()
+    );
+    assert!(view_where(&mut ui, "timer", Slot::Expanded, "5 min").is_some());
+    // The osd is standalone: loaded without a notch listing it.
+    assert!(
+        ui.wait_for(START_WAIT, |m| matches!(m, ToUi::Module(i)
+            if i.id == "osd" && i.priority == 100))
+            .is_some()
+    );
+    // The same answers as the QML modules gave.
+    assert_eq!(
+        answer(&mut ui, "timer", &["pause"]).unwrap(),
+        "no timer running"
+    );
+    assert_eq!(answer(&mut ui, "timer", &["3m Tea"]).unwrap(), "ok");
+    assert!(
+        view_where(&mut ui, "timer", Slot::Compact, "2:5").is_some(),
+        "counting down"
+    );
+    let st = state_where(&mut ui, WAIT, |s| {
+        s.notches[0].copies[0].mode == Mode::Peek
+            && s.notches[0].copies[0]
+                .peek
+                .as_ref()
+                .is_some_and(|p| p.module == "timer")
+    });
+    assert!(st.is_some(), "a start confirms with a peek");
+    assert_eq!(answer(&mut ui, "push", &["nope"]).unwrap(), "invalid json");
+    assert_eq!(
+        answer(
+            &mut ui,
+            "push",
+            &[r#"{"id":"d","title":"Deploy","sticky":true}"#]
+        )
+        .unwrap(),
+        "ok"
+    );
+    assert!(view_where(&mut ui, "activities", Slot::Compact, "Deploy").is_some());
+    assert_eq!(answer(&mut ui, "clear", &["d"]).unwrap(), "ok");
+    // A button of the expanded view is an event.
+    ui.send(&ToDaemon::Event(Event {
+        module: "timer".into(),
+        slot: Slot::Expanded,
+        action: "stop".into(),
+        value: EventValue::Null(()),
+    }));
+    assert!(
+        ui.wait_for(
+            START_WAIT,
+            |m| matches!(m, ToUi::View(v) if v.module == "timer"
+            && v.slot == Slot::Compact && v.tree.is_none())
+        )
+        .is_some(),
+        "stopped: no compact view"
+    );
+    // The osd's own target: show peeks in its notch, state says open.
+    assert_eq!(answer(&mut ui, "osd", &["state"]).unwrap(), "closed");
+    assert_eq!(
+        answer(
+            &mut ui,
+            "osd",
+            &["show", r#"{"icon":"volume","value":"40"}"#]
+        )
+        .unwrap(),
+        "ok"
+    );
+    assert!(view_where(&mut ui, "osd", Slot::Peek, "40%").is_some());
+    assert_eq!(answer(&mut ui, "osd", &["state"]).unwrap(), "open");
+    assert_eq!(answer(&mut ui, "osd", &["close"]).unwrap(), "ok");
+    // A module no notch lists is not loaded.
+    r.hub.update(|s, _| {
+        s.set_value("modules", Some(&serde_json::json!(["activities"])));
+    });
+    assert_eq!(
+        answer(&mut ui, "timer", &["5m"]).unwrap(),
+        "timer module not loaded"
+    );
+}

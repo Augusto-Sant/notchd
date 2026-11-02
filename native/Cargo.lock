@@ -87,6 +87,7 @@ dependencies = [
 name = "notchd-providers"
 version = "0.1.0"
 dependencies = [
+ "notchd-core",
  "notchd-proto",
  "serde",
  "serde_json",

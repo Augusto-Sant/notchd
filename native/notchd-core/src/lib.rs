@@ -18,4 +18,4 @@ pub mod terminal;
 pub mod timers;
 pub mod usage;
 
-pub(crate) mod js;
+pub mod js;
