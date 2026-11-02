@@ -166,7 +166,7 @@ gnome-test-46: daemon gnome-image-46
 	$(GNOME46_RUN) python3 tests/gnome_test.py'
 
 gnome-dev-46: daemon gnome-image-46
-	podman run --rm --ipc=host -v "$(CURDIR)":/src -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY="$(DISPLAY)" \
+	podman run --rm --ipc=host --tmpfs /tmp -v "$(CURDIR)":/src -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY="$(DISPLAY)" \
 	  $(GNOME46_IMAGE) bash -c 'dbus-daemon --system --fork && scripts/gnome-dev.sh --nested'
 
 # The extension as one folder and the zip extensions.gnome.org takes, with

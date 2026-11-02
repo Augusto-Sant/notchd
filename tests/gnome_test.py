@@ -49,29 +49,11 @@ def missing():
     return None
 
 
-class Stalled(Exception):
-    """The shell never finished starting (it loads extensions only then)."""
-
-
 class Shell:
     """One headless GNOME Shell with the extension and its daemon."""
 
-    # GNOME 46 in its container (no systemd, no session) dies in about half
-    # its startups, before "GNOME Shell started" and so before any extension
-    # loads, for a reason not found (not GeoClue, not the SVG loader). A
-    # startup that works takes 1-2 s, so a failed one is retried.
+    # A shell that works has started within 1-2 s.
     STARTED_WITHIN = 10
-    ATTEMPTS = 4
-
-    @classmethod
-    def start(cls, config):
-        for attempt in range(cls.ATTEMPTS):
-            try:
-                return cls(config)
-            except Stalled as e:
-                stalled = e
-                print("gnome-shell did not start (attempt %d): %s" % (attempt + 1, str(e).splitlines()[0]))
-        raise AssertionError("gnome-shell never finished starting in %d attempts:\n%s" % (cls.ATTEMPTS, stalled))
 
     def __init__(self, config):
         # Short on purpose: mutter's Wayland socket path must fit 108 bytes.
@@ -105,9 +87,9 @@ class Shell:
             time.sleep(0.1)
         while not self._started():
             if self.proc.poll() is not None:
-                raise Stalled("exited with %s before starting:\n%s" % (self.proc.returncode, self.tail(5)))
+                raise RuntimeError("gnome-shell exited with %s before starting:\n%s" % (self.proc.returncode, self.tail()))
             if time.time() > deadline:
-                raise Stalled(self.tail(5))
+                raise RuntimeError("gnome-shell has not started:\n" + self.tail())
             time.sleep(0.1)
         address = self._address()
         flags = Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION
@@ -230,7 +212,7 @@ class ShellCase(unittest.TestCase):
         why = missing()
         if why:
             raise unittest.SkipTest(why)
-        cls.shell = Shell.start(cls.config)
+        cls.shell = Shell(cls.config)
 
     @classmethod
     def tearDownClass(cls):
