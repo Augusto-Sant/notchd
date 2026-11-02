@@ -15,7 +15,7 @@ QMLLINT ?= $(firstword $(wildcard /usr/lib/qt6/bin/qmllint /usr/lib64/qt6/bin/qm
 # The Omarchy host imports qs.Commons/qs.Ui, which only exist inside the
 # Omarchy shell, so lint skips it; `make restart` and the shell log cover it.
 LINT_FILES = shell.qml core/*.qml core/settings/*.qml core/settings/previews/*.qml \
-	core/modules/*.qml
+	core/modules/*.qml $(wildcard core/client/*.qml core/client/prims/*.qml)
 # Not core/terminal/: it imports QMLTermWidget, whose package ships no type
 # information for qmllint. The QML tests load it where it is installed.
 

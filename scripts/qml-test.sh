@@ -66,6 +66,29 @@ run_shard() {
     timeout -k 5 90 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
 }
 
+# The client's cases (tests/qml/client.qml) are one more shard, with the fake
+# daemon (tests/qml/fake-daemon.mjs) on a socket in the shard's own scratch dir.
+# Cut off like the others (isolated.sh); the daemon is killed when the shard
+# ends, whatever happens, and every wait is bounded.
+run_client_shard() {
+  local dir=$1 daemon_pid="" i
+  mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime" "$dir/sock"
+  ln -s -- "$root/core" "$dir/config/core"
+  ln -s -- "$root/tests/qml/client.qml" "$dir/config/shell.qml"
+  node "$root/tests/qml/fake-daemon.mjs" "$dir/sock/d.sock" > "$dir/daemon.log" 2>&1 &
+  daemon_pid=$!
+  for ((i = 0; i < 100; i++)); do
+    [[ -S $dir/sock/d.sock.ctl ]] && break
+    sleep 0.05
+  done
+  NOTCHD_QMLTEST_SOCKET="$dir/sock/d.sock" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
+    NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
+    "$root/scripts/isolated.sh" "$dir/runtime" timeout -k 5 90 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
+  kill "$daemon_pid" 2>/dev/null || true
+  wait "$daemon_pid" 2>/dev/null || true
+}
+
+command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
 n=0
 pids=()
 while IFS= read -r cases; do
@@ -73,6 +96,9 @@ while IFS= read -r cases; do
   pids+=("$!")
   n=$((n + 1))
 done < "$scratch/shards"
+run_client_shard "$scratch/$n" &
+pids+=("$!")
+n=$((n + 1))
 wait "${pids[@]}"
 
 status=0
@@ -86,6 +112,11 @@ for ((i = 0; i < n; i++)); do
   # The offscreen backend's lack of window masks is expected (the pointer
   # tests use a window).
   problems=$(grep -E '^\s*(WARN|ERROR)' "$log" | grep -vE 'window masks' || true)
+  # The client's cases drop and refuse the connection on purpose: Quickshell
+  # warns of each socket error, and the client of the junk line it is sent.
+  if [[ -f $(dirname -- "$log")/daemon.log ]]; then
+    problems=$(grep -vE 'quickshell\.io\.socket: Socket error|notchd client: ignoring a line' <<< "$problems" || true)
+  fi
   if [[ -n $problems ]]; then
     echo "QML warnings during the tests (shard $i):" >&2
     echo "$problems" >&2
