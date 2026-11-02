@@ -441,7 +441,7 @@ How a host finds and launches the daemon (**Open**; options):
 
 Rule for every phase: **Linux behaviour is identical at its end and `make check` passes** (all layers, CLAUDE.md). The strategy is a strangler: the Rust core grows a slice at a time behind a feature the QML reads through `DaemonClient`; the QML rules it replaces are deleted only after the slice's QML tests pass against the daemon.
 
-**Status.** The workspace lives at `native/` (`native/Cargo.toml`, `native/rust-toolchain.toml`), with `notchd-core` and one stub per rule file; `make test` runs `cargo test` on it. Phase 1's ports of the rule files run ahead of 0.2 and 0.3, since they are pure functions with no protocol. The `position` config half, `peek` and the shared `tests/vectors/` are still to do.
+**Status.** The workspace lives at `native/` (`native/Cargo.toml`, `native/rust-toolchain.toml`), with `notchd-core` and one stub per rule file; `make test` runs `cargo test` on it. Phase 1's ports of the rule files run ahead of 0.2 and 0.3, since they are pure functions with no protocol. The `position` config half is ported, and JS semantics live once in `native/notchd-core/src/js.rs`. `peek` and the shared `tests/vectors/` for the rules are still to do.
 
 A new `make rust` (`cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace`) joins `make test`'s unit layer and `make check`. Every Rust test is hermetic (temp `XDG_*`, `NOTCHD_CONFIG`, random socket names under a temp dir).
 
