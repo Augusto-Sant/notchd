@@ -4,9 +4,14 @@ Rules for working in this repo, for Claude Code and humans. Keep it tight:
 invariants that are easy to break, not a project tour. The tour is
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
+## While you work
+
+- After every change, `make test` (the unit layer, about a second), plus the layer that covers what you touched: `make integration` for `core/live/` or `core/components/` Python, `make qmltest` (and `make lint`) for QML, `make visual` for how something looks. `QMLTEST_ONLY=<name>` narrows the QML cases. Not `make check` after each edit.
+- A new test goes in the lowest layer that can hold it (DEVELOPMENT.md, "The gate"); `make times` shows what each layer and test costs.
+
 ## Before you commit
 
-- `make check` passes (Node and QML tests, lint, plugin validation, visual scenarios).
+- `make check` passes (every layer: unit, integration, QML, lint, plugin validation, visual scenarios).
 - A bug fix comes with a regression test that fails without it: `tests/*.test.mjs` for rules, `tests/qml/shell.qml` for QML behaviour.
 - A visual change: run `make visual` and look at the PNGs in `build/visual/`.
 - A QML change in `hosts/omarchy/`: `make restart` and read the shell log; lint and the visual scenarios cannot load it.
@@ -24,6 +29,7 @@ invariants that are easy to break, not a project tour. The tour is
 - **Theme tokens, not ad-hoc colors.** Use `Theme.muted`, `Theme.line`, `Theme.hover`… and `Theme.space()` / `Theme.font.*`. A hard-coded color or alpha breaks light themes.
 - **Settings controls share one contract:** `field` and `value` in, `edited(value)` out. A new field type is a control plus one case in `SettingRow.qml`, documented in `docs/settings.md`.
 - **Tests are hermetic.** Nothing in `tests/` or `make` targets touches `~/.config/notchd` or other real user paths.
+- **QML cases stand alone.** They run in parallel shards in any order: a case sets up what it needs (`root.withTwoNotches`, `root.activate`, `root.until`), never relying on an earlier one.
 - **No `svc: svc`.** Inside an object with a `svc` property, a same-named id reads ambiguously; name ids `service`, `compositorLoader`, etc. qmllint flags it (`id-shadows-member`).
 
 ## Gotchas

@@ -27,6 +27,7 @@ ShellRoot {
   property int index: -1
   property string current: ""
   property bool failed: false
+  property real started: 0
 
   function check(cond, why) {
     if (!cond && !root.failed) {
@@ -37,6 +38,7 @@ ShellRoot {
   }
   function done() {
     if (!root.failed) console.log("PASS " + root.current)
+    console.log("TIME " + (Date.now() - root.started) + " " + root.current)
     Qt.callLater(root.next)
   }
   function next() {
@@ -44,6 +46,7 @@ ShellRoot {
     if (root.index >= root.cases.length) { console.log("DONE"); Qt.quit(); return }
     root.current = root.cases[root.index].name
     root.failed = false
+    root.started = Date.now()
     try { root.cases[root.index].run() }
     catch (e) { root.check(false, "threw " + e); root.done() }
   }
@@ -62,8 +65,36 @@ ShellRoot {
     onTriggered: if (action) action()
   }
 
+  // Waits until pred() holds (checked every 20 ms, for at most ms), then
+  // runs fn; on a timeout, fn still runs and its checks say what is missing.
+  // A case waits for what it needs, never on an earlier case having loaded it.
+  function until(pred, fn, ms) {
+    untilTimer.left = Math.ceil((ms || 3000) / untilTimer.interval)
+    untilTimer.pred = pred
+    untilTimer.action = fn
+    if (pred()) { untilTimer.action = null; fn(); return }
+    untilTimer.restart()
+  }
+  Timer {
+    id: untilTimer
+    interval: 20
+    repeat: true
+    property var pred: null
+    property var action: null
+    property int left: 0
+    onTriggered: {
+      if (!pred() && --left > 0) return
+      stop()
+      var fn = action
+      action = null
+      if (fn) fn()
+    }
+  }
+  // Keys and focus go to the active window: a case that types activates its own.
+  function activate(item) { item.Window.window.requestActivate() }
+
   Component.onCompleted: {
-    root.cases = [
+    var all = [
       { name: "workspace chips store a real list", run: root.workspaceChipsList },
       { name: "compact depth ignores peek and expanded transitions", run: root.compactDepthTransitions },
       { name: "a joined row's depth ignores a peek opening and closing", run: root.closedDepthTransitions },
@@ -132,8 +163,20 @@ ShellRoot {
       { name: "live: the local voice starts its own bridge with its settings", run: root.localLiveArgs },
       { name: "components: the settings rows show the installer's state, install, cancel and remove (twice) through it, and lock a voice until it is installed", run: root.componentRows }
     ]
-    Qt.callLater(root.next)
+    // scripts/qml-test.sh runs the cases in shards at once: NOTCHD_QMLTEST_CASES
+    // is the comma-separated indexes of this one's; unset, all of them.
+    // NOTCHD_QMLTEST_ONLY keeps those whose name contains it.
+    var picked = String(Quickshell.env("NOTCHD_QMLTEST_CASES") || "")
+    var only = String(Quickshell.env("NOTCHD_QMLTEST_ONLY") || "")
+    var indexes = picked ? picked.split(",").map(Number) : null
+    root.cases = all.filter(function(c, i) {
+      return (!indexes || indexes.indexOf(i) >= 0) && (!only || c.name.indexOf(only) >= 0)
+    })
+    warmup.start()
   }
+  // The offscreen windows take a moment to be exposed; pointer events sent
+  // before that are lost.
+  Timer { id: warmup; interval: 300; onTriggered: root.next() }
 
   // --------------------------------------------------------------- fakes
   // A compositor whose every screen shows workspace 4.
@@ -570,6 +613,15 @@ ShellRoot {
     notches: [{ id: "main", modules: ["activities"], position: { screen: "all" } },
               { id: "side", modules: [], position: { edge: "left" } }]
   })
+  // root.twoNotches loaded into the multi service, its copies made, focus on B.
+  function withTwoNotches(fn) {
+    twoScreens.focusedScreenName = "B"
+    multi.replaceConfig(root.twoNotches)
+    root.until(function() {
+      var main = multi.notchById("main"), side = multi.notchById("side")
+      return !!main && !!side && main.copies.length === 2 && side.copies.length === 1
+    }, fn)
+  }
   function push(id, peek) {
     return multi.moduleById("activities").push(JSON.stringify({ id: id, title: id, sticky: true, peek: peek }))
   }
@@ -670,36 +722,41 @@ ShellRoot {
   }
 
   function peekOnlyWhereShown() {
-    var side = multi.notchById("side")
-    root.check(!!side && side.copies.length === 1 && !side.everyScreen, "side should be one copy that moves")
-    root.push("test", true)
-    root.steps([[100, function() {}]], function() {
-      root.check(side.copies[0].mode === "rest", "a notch without the module shows " + side.copies[0].mode)
-      root.check(side.edge === "left", "side hangs from " + side.edge)
-      multi.dismissPeek(null)
-      root.done()
+    root.withTwoNotches(function() {
+      var side = multi.notchById("side")
+      root.check(!!side && side.copies.length === 1 && !side.everyScreen, "side should be one copy that moves")
+      root.push("test", true)
+      root.steps([[100, function() {}]], function() {
+        root.check(side.copies[0].mode === "rest", "a notch without the module shows " + side.copies[0].mode)
+        root.check(side.edge === "left", "side hangs from " + side.edge)
+        multi.dismissPeek(null)
+        root.done()
+      })
     })
   }
 
   // The notches, their copies and the modules are made once: a config edit
   // (a slider moving) must not make them again, losing what they show.
   function survivesConfigEdits() {
-    var main = multi.notchById("main")
-    var copy = main.copyOn("A")
-    var module = multi.moduleById("activities")
-    copy.open()
-    multi.setConfigValue("hoverOpenDelay", 50)
-    multi.setConfigValue("notches.0.position.edge", "bottom")
-    root.steps([[50, function() {}]], function() {
-      root.check(multi.notchById("main") === main, "the notch was made again")
-      root.check(main.copyOn("A") === copy, "the copy was made again")
-      root.check(copy.pinned, "the copy forgot it was pinned")
-      root.check(multi.moduleById("activities") === module, "the module was loaded again")
-      root.check(module.items.length > 0, "the module lost its activities")
-      root.check(main.edge === "bottom", "the edit did not apply: " + main.edge)
-      copy.close()
-      module.clear("")
-      root.done()
+    root.withTwoNotches(function() {
+      var main = multi.notchById("main")
+      var copy = main.copyOn("A")
+      var module = multi.moduleById("activities")
+      root.push("edit", false)
+      copy.open()
+      multi.setConfigValue("hoverOpenDelay", 50)
+      multi.setConfigValue("notches.0.position.edge", "bottom")
+      root.steps([[50, function() {}]], function() {
+        root.check(multi.notchById("main") === main, "the notch was made again")
+        root.check(main.copyOn("A") === copy, "the copy was made again")
+        root.check(copy.pinned, "the copy forgot it was pinned")
+        root.check(multi.moduleById("activities") === module, "the module was loaded again")
+        root.check(module.items.length > 0, "the module lost its activities")
+        root.check(main.edge === "bottom", "the edit did not apply: " + main.edge)
+        copy.close()
+        module.clear("")
+        root.done()
+      })
     })
   }
 
@@ -1077,30 +1134,32 @@ ShellRoot {
   }
 
   function navigationOpen() {
-    var main = multi.notchById("main")
-    var side = multi.notchById("side")
-    if (!root.check(!!main && !!side, "the two notches did not load")) { root.done(); return }
-    main.open()
-    root.check(main.copyOn("B").pinned, "main did not open (test setup)")
-    multi.navigate()
-    root.check(multi.navSelected === 0, "navigation did not start on the open notch")
-    multi.navKey("next")
-    root.check(main.copyOn("B").mode !== "expanded", "the pinned notch stayed open with another one selected")
-    multi.navKey("previous")
-    multi.navKey("leave")
-    root.check(main.copyOn("B").pinned && main.copyOn("B").mode === "expanded", "Escape did not open the pinned notch again")
-    multi.navigate()
-    multi.navKey("next")
-    multi.navKey("open")
-    root.check(!multi.navigating, "Enter did not end navigation")
-    root.check(side.copies[0].pinned, "Enter did not pin the selected notch")
-    root.check(!main.copyOn("B").pinned, "Enter left the other notch open")
-    side.close()
-    multi.navigate()
-    main.copyOn("B").togglePinned("")
-    root.check(!multi.navigating, "a click that pinned a notch left navigation on")
-    main.close()
-    root.done()
+    root.withTwoNotches(function() {
+      var main = multi.notchById("main")
+      var side = multi.notchById("side")
+      if (!root.check(!!main && !!side, "the two notches did not load")) { root.done(); return }
+      main.open()
+      root.check(main.copyOn("B").pinned, "main did not open (test setup)")
+      multi.navigate()
+      root.check(multi.navSelected === 0, "navigation did not start on the open notch")
+      multi.navKey("next")
+      root.check(main.copyOn("B").mode !== "expanded", "the pinned notch stayed open with another one selected")
+      multi.navKey("previous")
+      multi.navKey("leave")
+      root.check(main.copyOn("B").pinned && main.copyOn("B").mode === "expanded", "Escape did not open the pinned notch again")
+      multi.navigate()
+      multi.navKey("next")
+      multi.navKey("open")
+      root.check(!multi.navigating, "Enter did not end navigation")
+      root.check(side.copies[0].pinned, "Enter did not pin the selected notch")
+      root.check(!main.copyOn("B").pinned, "Enter left the other notch open")
+      side.close()
+      multi.navigate()
+      main.copyOn("B").togglePinned("")
+      root.check(!multi.navigating, "a click that pinned a notch left navigation on")
+      main.close()
+      root.done()
+    })
   }
 
   function navigationTabs() {
@@ -1163,62 +1222,66 @@ ShellRoot {
   // Moving the selected notch (m): arrows for the edge, Shift along it, Tab
   // the screen, live; Enter keeps it, Escape or the shortcut puts it back.
   function navigationMove() {
-    var side = multi.notchById("side")
-    if (!root.check(!!side, "the side notch did not load")) { root.done(); return }
-    twoScreens.focusedScreenName = "B"
-    multi.navigate()
-    multi.navKey("2")
-    multi.navKey("move")
-    root.check(multi.navMode === "move", "m did not start moving: " + multi.navMode)
-    multi.navKey("down")
-    root.check(side.placement.edge === "bottom", "down put it on " + side.placement.edge)
-    multi.navKey("slideOn")
-    root.check(Math.abs(side.placement.offset - 0.55) < 1e-9, "Shift+→ slid it to " + side.placement.offset)
-    multi.navKey("leave")
-    root.check(multi.navigating && multi.navMode === "select", "Escape while moving left navigation")
-    root.check(side.placement.edge === "left" && side.placement.offset === 0.5, "Escape did not put it back: "
-               + side.placement.edge + " " + side.placement.offset)
-    root.check(JSON.stringify(multi.configValue("notches.1.position")) === JSON.stringify({ edge: "left" }),
-               "the config after Escape: " + JSON.stringify(multi.configValue("notches.1.position")))
-    multi.navKey("move")
-    multi.navKey("up")
-    multi.navKey("open")
-    root.check(multi.navigating && multi.navMode === "select", "Enter while moving left navigation")
-    root.check(side.placement.edge === "top", "Enter did not keep it on top: " + side.placement.edge)
-    multi.navKey("move")
-    multi.navKey("nextTab")
-    root.check(side.placement.screen === "A", "Tab took it to '" + side.placement.screen + "', not A")
-    multi.navKey("leave")
-    root.check(side.placement.screen === "", "Escape left it on " + side.placement.screen)
-    multi.navKey("move")
-    multi.navKey("next")
-    multi.navigate()
-    root.check(!multi.navigating && side.placement.edge === "top", "the shortcut while moving left it on " + side.placement.edge)
-    multi.replaceConfig(root.twoNotches)
-    root.done()
+    root.withTwoNotches(function() {
+      var side = multi.notchById("side")
+      if (!root.check(!!side, "the side notch did not load")) { root.done(); return }
+      twoScreens.focusedScreenName = "B"
+      multi.navigate()
+      multi.navKey("2")
+      multi.navKey("move")
+      root.check(multi.navMode === "move", "m did not start moving: " + multi.navMode)
+      multi.navKey("down")
+      root.check(side.placement.edge === "bottom", "down put it on " + side.placement.edge)
+      multi.navKey("slideOn")
+      root.check(Math.abs(side.placement.offset - 0.55) < 1e-9, "Shift+→ slid it to " + side.placement.offset)
+      multi.navKey("leave")
+      root.check(multi.navigating && multi.navMode === "select", "Escape while moving left navigation")
+      root.check(side.placement.edge === "left" && side.placement.offset === 0.5, "Escape did not put it back: "
+                 + side.placement.edge + " " + side.placement.offset)
+      root.check(JSON.stringify(multi.configValue("notches.1.position")) === JSON.stringify({ edge: "left" }),
+                 "the config after Escape: " + JSON.stringify(multi.configValue("notches.1.position")))
+      multi.navKey("move")
+      multi.navKey("up")
+      multi.navKey("open")
+      root.check(multi.navigating && multi.navMode === "select", "Enter while moving left navigation")
+      root.check(side.placement.edge === "top", "Enter did not keep it on top: " + side.placement.edge)
+      multi.navKey("move")
+      multi.navKey("nextTab")
+      root.check(side.placement.screen === "A", "Tab took it to '" + side.placement.screen + "', not A")
+      multi.navKey("leave")
+      root.check(side.placement.screen === "", "Escape left it on " + side.placement.screen)
+      multi.navKey("move")
+      multi.navKey("next")
+      multi.navigate()
+      root.check(!multi.navigating && side.placement.edge === "top", "the shortcut while moving left it on " + side.placement.edge)
+      multi.replaceConfig(root.twoNotches)
+      root.done()
+    })
   }
 
   // Bug: a notch pinned open on the screen without focus closed at once:
   // on demand, Hyprland gave its keyboard back to the focused screen. It
   // stays exclusive there, on demand once its screen has focus.
   function keyboardOnOtherScreen() {
-    var side = multi.notchById("side")
-    if (!root.check(!!side, "the side notch did not load")) { root.done(); return }
-    var copy = side.copies[0]
-    multi.setConfigValue("notches.1.position.screen", "A")
-    twoScreens.focusedScreenName = "B"
-    root.steps([[200, function() {
-      root.check(copy.screenName === "A", "the side notch is on " + copy.screenName + ", not A (test setup)")
-      side.open()
-      copy.windowKeyboard(true)
-      root.check(copy.pinned && copy.keyboardFocus === "exclusive", "held on the screen without focus, it asks for " + copy.keyboardFocus)
-      twoScreens.focusedScreenName = "A"
-      root.check(copy.keyboardFocus === "ondemand", "its screen focused, it asks for " + copy.keyboardFocus)
-    }]], function() {
-      side.close()
+    root.withTwoNotches(function() {
+      var side = multi.notchById("side")
+      if (!root.check(!!side, "the side notch did not load")) { root.done(); return }
+      var copy = side.copies[0]
+      multi.setConfigValue("notches.1.position.screen", "A")
       twoScreens.focusedScreenName = "B"
-      multi.setConfigValue("notches.1.position.screen", undefined)
-      root.done()
+      root.steps([[200, function() {
+        root.check(copy.screenName === "A", "the side notch is on " + copy.screenName + ", not A (test setup)")
+        side.open()
+        copy.windowKeyboard(true)
+        root.check(copy.pinned && copy.keyboardFocus === "exclusive", "held on the screen without focus, it asks for " + copy.keyboardFocus)
+        twoScreens.focusedScreenName = "A"
+        root.check(copy.keyboardFocus === "ondemand", "its screen focused, it asks for " + copy.keyboardFocus)
+      }]], function() {
+        side.close()
+        twoScreens.focusedScreenName = "B"
+        multi.setConfigValue("notches.1.position.screen", undefined)
+        root.done()
+      })
     })
   }
 
@@ -1343,6 +1406,7 @@ ShellRoot {
   // Ctrl+Escape closes it too, as on any notch (a pinned one has the
   // keyboard: State.wantsKeyboard).
   function escapeCloses() {
+    root.activate(keys)
     root.steps([[500, function() {
       if (!root.check(!!escapeModule.field, "the field did not load")) return
       escapeModule.field.forceActiveFocus()
@@ -1478,6 +1542,7 @@ ShellRoot {
     var copy = svc.notches[0].copies[0]
     var argsFile = root.dir + "/" + id + "-args"
     var first = null, pid = ""
+    root.activate(keys)
     svc.open()
     root.steps([
       [900, function() {

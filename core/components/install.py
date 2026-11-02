@@ -575,7 +575,10 @@ def run(cmd, progress, env=None):
 
 # ----------------------------------------------------------------- LocalAI
 
+# A job is polled every JOB_POLL seconds, sooner at first: one that ends at
+# once (a backend already downloaded) is not held for a whole interval.
 JOB_POLL = 0.5
+JOB_FIRST_POLL = 0.02
 
 
 def job_failure(job):
@@ -599,6 +602,7 @@ def gallery_job(server_url, kind, request, progress, label):
     if not uuid:
         raise Failed("%s: LocalAI did not start the installation." % label)
     url = "%s/%s/jobs/%s" % (server_url, kind, uuid)
+    wait = JOB_FIRST_POLL
     while True:
         try:
             check_cancel()
@@ -624,7 +628,8 @@ def gallery_job(server_url, kind, request, progress, label):
             progress.set("downloading", detail=label, done=int(job.get("current_bytes") or 0), total=int(total))
         else:
             progress.set("installing", detail=label)
-        time.sleep(JOB_POLL)
+        time.sleep(wait)
+        wait = min(wait * 2, JOB_POLL)
 
 
 def watch_growth(c, progress, stop):

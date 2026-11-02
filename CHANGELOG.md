@@ -51,6 +51,7 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ### Changed
 
+- Installing a voice: each step LocalAI does is checked sooner at first (from 20 ms, up to every half second), so one that ends at once, such as a backend already there, no longer waits half a second.
 - The expanded notch has no gear any more. In Omarchy the settings open from the notchd button in the bar; anywhere, with the `settings` IPC method.
 - At either end of its edge the notch sits flush in the corner, square against the screen's side (or the bar), instead of short of it by its shoulder.
 - Notches that come within a few pixels of each other on one edge (or are dropped near one) join flush into one shape, as deep as the deepest of them. One that opens grows from where it is and pushes the others aside, evenly in the middle of the edge and away from the screen's side against it, instead of hiding them.

@@ -484,6 +484,7 @@ class FakeLocalAI(BaseHTTPRequestHandler):
 
 class Bridge(unittest.TestCase):
     """The whole bridge, with fakes. Every run is bounded by `timeout -k`."""
+    tier = "integration"  # the bridge as a process, a fake LocalAI server
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="notchd-ll-test-")
@@ -672,7 +673,10 @@ class Bridge(unittest.TestCase):
         self.assertEqual(self.ai.requests, [])
 
     def test_the_voice_of_the_chosen_language_is_the_one_that_speaks(self):
-        for code in Voices.languages:
+        # Which voice each language and engine gets is Voices' rule, over every
+        # language; here, one that is not the default proves the bridge passes
+        # --voice-lang and --voice-engine to it.
+        for code in [c for c in Voices.languages if c != live.DEFAULT_LANGUAGE][:1]:
             piper, pocket = (next(v for v in live.known_voices() if v["language"] == code and v["engine"] == e) for e in ("piper", "pocket"))
             self.ai.models = [piper["model"], pocket["model"], "voice-pt_BR-faber-medium"]
             self.ai.requests = []

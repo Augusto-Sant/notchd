@@ -158,6 +158,8 @@ class FakeLocalAI(BaseHTTPRequestHandler):
 
 
 class Case(unittest.TestCase):
+    tier = "integration"  # install.py as a process, a download server and a fake LocalAI
+
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="notchd-components-test.")
         self.data = os.path.join(self.dir, "data")

@@ -126,6 +126,7 @@ class EchoBranch(unittest.TestCase):
     """Bug: the echo's appsrc had caps without a layout, not fixed, and the
     first voice pushed into it ended the session ("Internal data stream
     error"). The branch as the bridge builds it takes the voice."""
+    tier = "integration"  # a real GStreamer pipeline
 
     def test_the_voice_goes_into_the_echo_canceller(self):
         Gst = gstreamer()

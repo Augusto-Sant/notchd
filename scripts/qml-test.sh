@@ -3,47 +3,108 @@
 # the desktop session (isolated.sh), with the service's config in a scratch
 # dir. Fails on a FAIL line, a missing DONE, or any QML warning. Needs
 # quickshell and dbus-run-session; no display, no running shell.
+#
+# The cases are mostly waits on timers, so they run in QMLTEST_JOBS shards at
+# once (default: the CPUs, at most 8), each its own Quickshell and scratch
+# dir, longest first by the last run's times (build/times/qml.tsv, which this
+# writes). QMLTEST_ONLY=<text> runs only the cases whose name contains it;
+# QMLTEST_VERBOSE=1 lists the cases that passed too.
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+times="$root/build/times/qml.tsv"
 
 command -v quickshell >/dev/null 2>&1 || { echo "quickshell is required" >&2; exit 1; }
 
+jobs=${QMLTEST_JOBS:-$(( $(nproc) < 8 ? $(nproc) : 8 ))}
+[[ -n ${QMLTEST_ONLY:-} ]] && jobs=1
+
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/notchd-qmltest.XXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
-mkdir -- "$scratch/config" "$scratch/data" "$scratch/runtime"
-ln -s -- "$root/core" "$scratch/config/core"
-ln -s -- "$root/hosts" "$scratch/config/hosts"
-ln -s -- "$root/tests/qml/shell.qml" "$scratch/config/shell.qml"
-ln -s -- "$root/tests/qml/fixtures" "$scratch/config/fixtures"
 
-# Fake `claude` and `codex` terminal UIs (tests/qml/fixtures/bin), state,
-# data, cache and Claude Code's dir in the scratch dir; a fake live bridge and
-# a fake components installer.
-NOTCHD_QMLTEST_DIR="$scratch/data" XDG_STATE_HOME="$scratch/data/state" XDG_DATA_HOME="$scratch/data/share" XDG_CACHE_HOME="$scratch/data/cache" \
-  CLAUDE_CONFIG_DIR="$scratch/data/claude" \
-  NOTCHD_LIVE_BRIDGE="$root/tests/qml/fixtures/bin/codex-live" NOTCHD_FAKE_LIVE_ARGS="$scratch/data/live-args" \
-  NOTCHD_LOCAL_LIVE_BRIDGE="$root/tests/qml/fixtures/bin/local-live" NOTCHD_FAKE_LOCAL_LIVE_ARGS="$scratch/data/local-live-args" \
-  NOTCHD_COMPONENTS_INSTALLER="$root/tests/qml/fixtures/bin/components" NOTCHD_FAKE_COMPONENTS_DIR="$scratch/data/components" \
-  PATH="$root/tests/qml/fixtures/bin:$PATH" \
-  NOTCHD_FAKE_CLAUDE_ARGS="$scratch/data/claude-args" NOTCHD_FAKE_CODEX_ARGS="$scratch/data/codex-args" "$root/scripts/isolated.sh" "$scratch/runtime" \
-  timeout 90 quickshell -p "$scratch/config" --no-color > "$scratch/log" 2>&1 || true
+# One line per shard: the indexes of its cases. Longest first, each to the
+# shard with the least to do; a case not timed yet counts as 2 s.
+python3 - "$root/tests/qml/shell.qml" "$times" "$jobs" > "$scratch/shards" <<'EOF'
+import re, sys
+qml, times, jobs = sys.argv[1], sys.argv[2], int(sys.argv[3])
+names = [m.replace('\\"', '"') for m in re.findall(r'^\s*\{ name: "(.*)", run: root\.\w+ \},?$', open(qml).read(), re.M)]
+last = {}
+try:
+    for line in open(times):
+        secs, name = line.rstrip("\n").split("\t", 1)
+        last[name] = float(secs)
+except (OSError, ValueError):
+    pass
+shards = [[0.0, []] for _ in range(jobs)]
+for i in sorted(range(len(names)), key=lambda i: -last.get(names[i], 2.0)):
+    s = min(shards, key=lambda s: s[0])
+    s[0] += last.get(names[i], 2.0)
+    s[1].append(i)
+for _, idx in shards:
+    if idx:
+        print(",".join(map(str, sorted(idx))))
+EOF
 
-grep -oE '(PASS|FAIL|NOTE) .*' "$scratch/log" || true
+run_shard() {
+  local dir=$1 cases=$2
+  mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime"
+  ln -s -- "$root/core" "$dir/config/core"
+  ln -s -- "$root/hosts" "$dir/config/hosts"
+  ln -s -- "$root/tests/qml/shell.qml" "$dir/config/shell.qml"
+  ln -s -- "$root/tests/qml/fixtures" "$dir/config/fixtures"
+  # Fake `claude` and `codex` terminal UIs (tests/qml/fixtures/bin), state,
+  # data, cache and Claude Code's dir in the scratch dir; a fake live bridge
+  # and a fake components installer.
+  NOTCHD_QMLTEST_CASES="$cases" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
+    NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
+    CLAUDE_CONFIG_DIR="$dir/data/claude" \
+    NOTCHD_LIVE_BRIDGE="$root/tests/qml/fixtures/bin/codex-live" NOTCHD_FAKE_LIVE_ARGS="$dir/data/live-args" \
+    NOTCHD_LOCAL_LIVE_BRIDGE="$root/tests/qml/fixtures/bin/local-live" NOTCHD_FAKE_LOCAL_LIVE_ARGS="$dir/data/local-live-args" \
+    NOTCHD_COMPONENTS_INSTALLER="$root/tests/qml/fixtures/bin/components" NOTCHD_FAKE_COMPONENTS_DIR="$dir/data/components" \
+    PATH="$root/tests/qml/fixtures/bin:$PATH" \
+    NOTCHD_FAKE_CLAUDE_ARGS="$dir/data/claude-args" NOTCHD_FAKE_CODEX_ARGS="$dir/data/codex-args" "$root/scripts/isolated.sh" "$dir/runtime" \
+    timeout -k 5 90 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
+}
 
-# The offscreen backend's lack of window masks is expected (the pointer
-# tests use a window).
-problems=$(grep -E '^\s*(WARN|ERROR)' "$scratch/log" | grep -vE 'window masks' || true)
-if [[ -n $problems ]]; then
-  echo "QML warnings during the tests:" >&2
-  echo "$problems" >&2
-  exit 1
+n=0
+pids=()
+while IFS= read -r cases; do
+  run_shard "$scratch/$n" "$cases" &
+  pids+=("$!")
+  n=$((n + 1))
+done < "$scratch/shards"
+wait "${pids[@]}"
+
+status=0
+for ((i = 0; i < n; i++)); do
+  log="$scratch/$i/log"
+  if [[ -n ${QMLTEST_VERBOSE:-} ]]; then
+    grep -oE '(PASS|FAIL|NOTE) .*' "$log" || true
+  else
+    grep -oE '(FAIL|NOTE) .*' "$log" || true
+  fi
+  # The offscreen backend's lack of window masks is expected (the pointer
+  # tests use a window).
+  problems=$(grep -E '^\s*(WARN|ERROR)' "$log" | grep -vE 'window masks' || true)
+  if [[ -n $problems ]]; then
+    echo "QML warnings during the tests (shard $i):" >&2
+    echo "$problems" >&2
+    status=1
+  fi
+  grep -qE 'FAIL ' "$log" && status=1
+  if ! grep -qE 'DONE$' "$log"; then
+    echo "the QML tests did not finish (shard $i); log:" >&2
+    cat "$log" >&2
+    status=1
+  fi
+done
+
+# What each case cost, for the next run's shards and scripts/test-times.py.
+if [[ -z ${QMLTEST_ONLY:-} ]]; then
+  mkdir -p -- "$(dirname -- "$times")"
+  cat "$scratch"/*/log | sed -nE 's/.*TIME ([0-9]+) (.*)$/\1\t\2/p' \
+    | awk -F'\t' '{ printf "%.3f\t%s\n", $1 / 1000, $2 }' | sort -rn > "$times.new"
+  mv -- "$times.new" "$times"
 fi
-if grep -qE 'FAIL ' "$scratch/log"; then
-  exit 1
-fi
-if ! grep -qE 'DONE$' "$scratch/log"; then
-  echo "the QML tests did not finish; log:" >&2
-  cat "$scratch/log" >&2
-  exit 1
-fi
+echo "qml: $(cat "$scratch"/*/log | grep -cE 'PASS ' || true) passed on $n shard(s)"
+exit $status

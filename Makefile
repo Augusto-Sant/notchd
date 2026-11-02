@@ -1,5 +1,13 @@
-# Development entry points. `make check` is the gate: run it before every
-# commit. See DEVELOPMENT.md.
+# Development entry points. See DEVELOPMENT.md, "Tests".
+#
+# The tests are a pyramid: many cheap ones at the bottom, few costly ones on
+# top, the costly ones run less often.
+#   make test         unit: pure rules, seconds. After every change.
+#   make integration  bridges and installer as processes, with fakes.
+#   make qmltest      QML behaviour, offscreen.
+#   make visual       offscreen renders.
+#   make check        all of it, the cheap layers first: before every commit.
+#   make times        what each layer and test cost in its last run.
 
 QMLLINT ?= $(firstword $(wildcard /usr/lib/qt6/bin/qmllint /usr/lib64/qt6/bin/qmllint) \
 	$(shell command -v qmllint6 2>/dev/null) $(shell command -v qmllint 2>/dev/null))
@@ -14,28 +22,49 @@ LINT_FILES = shell.qml core/*.qml core/settings/*.qml core/settings/previews/*.q
 # Dev config for `make dev`, so it never touches ~/.config/notchd.
 DEV_CONFIG ?= $(CURDIR)/build/dev-config.json
 
-.PHONY: check test qmltest visual hero icons bench lint validate dev restart deps clean
+# Each layer records what it cost in build/times/ (scripts/timed.py).
+TIMED = scripts/timed.py
 
-check: test qmltest lint validate visual
+.PHONY: check test integration qmltest visual times hero icons bench lint lint-run validate dev restart deps clean
 
-# Node tests of the pure-JS rules (core/*.js, core/settings/*.js), the live
-# bridges' that need no GStreamer, and the components' installer (fake
-# pacman, uv and downloads from a local server: nothing real is installed).
+# The cheap layers first, one after another: a broken rule fails in seconds,
+# before anything costly starts. Then the costly ones at once.
+check: lint validate test
+	@$(MAKE) --no-print-directory -j3 -O integration qmltest visual
+
+# Unit layer: the pure-JS rules (core/*.js, core/settings/*.js) in Node, and
+# the Python bridges' and installer's rules as functions (tests/*_test.py,
+# every TestCase without `tier = "integration"`). No processes, no servers.
 test:
-	node --test tests/*.test.mjs
-	python3 tests/codex_live_test.py
-	python3 tests/local_live_test.py
-	python3 tests/components_test.py
+	@mkdir -p build/times
+	@$(TIMED) node node --test --test-reporter=dot --test-reporter-destination=stdout \
+	  --test-reporter=./scripts/node-times.mjs --test-reporter-destination=build/times/node.tsv \
+	  tests/*.test.mjs
+	@$(TIMED) py-unit scripts/pytests.py unit
 
-# QML behaviour tests (tests/qml/shell.qml), offscreen: bindings, signals
-# and animations the Node tests can't reach. Regression tests live here.
+# Integration layer: the live bridges and the components' installer run as
+# processes against fakes (a fake LocalAI, pacman, downloads from a local
+# server: nothing real is installed), on parallel workers. TestCases with
+# `tier = "integration"`.
+integration:
+	@$(TIMED) py-integration scripts/pytests.py integration
+
+# QML behaviour tests (tests/qml/shell.qml), offscreen, in parallel shards:
+# bindings, signals and animations the Node tests can't reach. Regression
+# tests live here. QMLTEST_ONLY=<part of a name> runs only those cases.
 qmltest:
-	scripts/qml-test.sh
+	@$(TIMED) qml scripts/qml-test.sh
 
 # Renders the settings window offscreen into build/visual/; fails on any QML
 # warning, so it also proves the core loads.
 visual:
-	scripts/visual-test.sh
+	@$(TIMED) visual scripts/visual-test.sh
+
+# The pyramid from the last run of each layer: tests, wall and CPU time per
+# layer, the slowest tests and those over their layer's budget. Also in
+# build/test-times.md.
+times:
+	@scripts/test-times.py
 
 # The README image, docs/images/hero.webp: the real notch offscreen, with a
 # demo media player on a private D-Bus, over Omarchy's Gruvbox wallpaper
@@ -61,6 +90,9 @@ bench:
 # The filtered line is a qmllint false positive: it ignores a qmldir without
 # a `module` line when linting the singleton itself.
 lint:
+	@$(TIMED) lint $(MAKE) -s --no-print-directory lint-run
+
+lint-run:
 	@test -x "$(QMLLINT)" || { echo "Qt 6 qmllint not found" >&2; exit 1; }
 	@out=$$("$(QMLLINT)" --unqualified disable $(LINT_FILES) 2>&1 \
 	  | grep -v 'Type Theme not declared as singleton in qmldir'); \
@@ -78,7 +110,7 @@ lint:
 
 # The repo root is the Omarchy plugin.
 validate:
-	omarchy plugin validate .
+	@$(TIMED) validate omarchy plugin validate .
 
 # The standalone host (shell.qml) against a scratch config; hot-reloads.
 dev:

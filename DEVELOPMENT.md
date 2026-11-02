@@ -83,8 +83,10 @@ assets/icons/         the app icon: hicolor/scalable/apps/notchd.svg is the sour
                       hicolor/symbolic/apps/notchd-symbolic.svg is the one-color mark on the Omarchy bar button
 scripts/              qml-test.sh, visual-test.sh, hero.sh, icons.sh, isolated.sh (runs them cut off from the session),
                       with-demo-player.sh (isolated.sh plus the demo media player)
+                      pytests.py (the Python tests of one layer, in parallel), timed.py and test-times.py
+                      (what each layer cost: `make times`), node-times.mjs (the Node tests' times)
                       bench.sh (`make bench`: what the notch costs, on your display)
-build/                generated (visual PNGs, dev config); ignored
+build/                generated (visual PNGs, dev config, test times); ignored
 ```
 
 ## Running it
@@ -117,14 +119,22 @@ qs -p . ipc call notchd settings
 
 ## The gate
 
-Run `make check` before every commit. It is everything below:
+The tests are a pyramid: many cheap ones at the bottom, few costly ones on top, and the costly ones run less often. While you work, run `make test` after every change (about a second) and the layer that covers what you touched; run `make check`, every layer, before every commit.
 
-| Target | What it does |
-|---|---|
-| `make test` | Node tests of `core/*.js` and `core/settings/*.js`; `tests/codex_live_test.py`, the live bridge without Codex; `tests/local_live_test.py`, the local voice with a fake LocalAI, voxtype, pacat, codex and claude; `tests/components_test.py`, the components' installer with fake `pacman`, `pkexec`, `yay`, a fake LocalAI and downloads from a server on 127.0.0.1 (every process under `timeout -k`; after a run check `ps` for `install.py` and leftovers) |
-| `make lint` | `qmllint` over `shell.qml` and the core; fails on any warning. Also checks that `codex-live.py` and `local-live.py` parse |
-| `make validate` | `omarchy plugin validate .` |
-| `make visual` | renders the settings window and the notch on each edge (the real modules, the media one playing the demo player's track) offscreen into `build/visual/`; fails on any QML warning, so it also proves the core loads |
+| Layer | Target | What it does | Run it |
+|---|---|---|---|
+| unit | `make test` | Node tests of `core/*.js` and `core/settings/*.js`; the Python rules of the live bridges and the components' installer as functions (`tests/*_test.py`, every TestCase without `tier = "integration"`). No processes, no servers | after every change |
+| integration | `make integration` | `tests/codex_live_test.py`'s echo canceller on real GStreamer; `tests/local_live_test.py`, the whole local voice bridge with a fake LocalAI, voxtype, pacat, codex and claude; `tests/components_test.py`, the components' installer with fake `pacman`, `pkexec`, `yay`, a fake LocalAI and downloads from a server on 127.0.0.1. On parallel workers, each in its own process group, killed with what it left behind (every process is also under `timeout -k`) | after a change to `core/live/` or `core/components/` |
+| qml | `make qmltest` | the QML behaviour tests, in parallel shards (below) | after a QML change |
+| visual | `make visual` | renders the settings window and the notch on each edge (the real modules, the media one playing the demo player's track) offscreen into `build/visual/`; fails on any QML warning, so it also proves the core loads | after a visual change, and look at the PNGs |
+| static | `make lint` | `qmllint` over `shell.qml` and the core; fails on any warning. Also checks that the Python bridges and installer parse | after a QML change |
+| static | `make validate` | `omarchy plugin validate .` | before a commit |
+
+`make check` runs lint, validate and the unit layer first, one after another, so a broken rule fails in seconds; then integration, qml and visual at once.
+
+**What it costs.** Every layer records its wall-clock and CPU time, and each test's seconds, in `build/times/`. `make times` prints the pyramid from the last run of each layer: tests, wall and CPU per layer, the slowest tests, and those over their layer's budget (0.1 s for a unit test: one that takes longer is not a unit test, make it cheaper or move it up; 5 s for an integration test or a QML case). The same report lands in `build/test-times.md`. Check it after adding costly tests.
+
+**Where a test goes.** As low as it can: a rule over a whole range (every language, every order) is a unit test of the function; the layer above proves the wiring once, with one value from that range. A Python TestCase that starts a process or a server says `tier = "integration"` (on a base class it covers the subclasses); `scripts/pytests.py unit|integration [file ...]` runs one layer, and fails if a layer has no tests.
 
 The Omarchy host's QML imports `qs.Commons`/`qs.Ui`, which only exist inside the Omarchy shell, so lint skips it; after changing it, `make restart` and read the log.
 
@@ -152,7 +162,9 @@ Objects and arrays built inside the vm have their own prototypes; compare them t
 
 ### QML behaviour tests
 
-`tests/qml/shell.qml`, run by `make qmltest` (part of `make check`): cases that need real bindings, signals or animations, such as a list that stops being an `Array` after a `var` signal, or a height measured halfway through a transition. Each case is a function in the `cases` list that checks with `root.check(cond, why)` and ends with `root.done()`; `root.steps([[ms, fn], ...], last)` waits between steps. They run offscreen through `scripts/isolated.sh`, with the service's config in a scratch dir. For hover, clicks and drags, the `pointer` TestCase (QtTest, running no tests of its own) sends real pointer events to a card in a window: `pointer.mouseMove(item, x, y)`, `mousePress`, `mouseRelease`, `mouseClick`. Keys go to a TestCase's own window, so the `keys` TestCase sits inside the window of the card it types into: `keys.keyClick(Qt.Key_Escape)`. A test module the real hosts don't ship goes in `tests/qml/fixtures/`, loaded through a test service's `hostModules`. A case that guards a bug says which one in a comment.
+`tests/qml/shell.qml`, run by `make qmltest` (part of `make check`): cases that need real bindings, signals or animations, such as a list that stops being an `Array` after a `var` signal, or a height measured halfway through a transition. Each case is a function in the `cases` list that checks with `root.check(cond, why)` and ends with `root.done()`; `root.steps([[ms, fn], ...], last)` waits between steps, and `root.until(pred, fn)` waits for something to load (prefer it to a fixed wait: it costs only what it takes).
+
+**Every case stands alone.** `scripts/qml-test.sh` runs the cases in parallel shards (`QMLTEST_JOBS`, default the CPUs up to 8), each its own Quickshell, longest first by the last run's times, so a case can run first, alone, or after any other. It sets up what it needs: `root.withTwoNotches(fn)` for the multi-notch service, `root.activate(keys)` for the window its keys go to. `QMLTEST_ONLY=<part of a name> make qmltest` runs just those cases; `QMLTEST_VERBOSE=1` lists the passes as well as the failures. They run offscreen through `scripts/isolated.sh`, with the service's config in a scratch dir. For hover, clicks and drags, the `pointer` TestCase (QtTest, running no tests of its own) sends real pointer events to a card in a window: `pointer.mouseMove(item, x, y)`, `mousePress`, `mouseRelease`, `mouseClick`. Keys go to a TestCase's own window, so the `keys` TestCase sits inside the window of the card it types into: `keys.keyClick(Qt.Key_Escape)`. A test module the real hosts don't ship goes in `tests/qml/fixtures/`, loaded through a test service's `hostModules`. A case that guards a bug says which one in a comment.
 
 ### Visual scenarios
 
