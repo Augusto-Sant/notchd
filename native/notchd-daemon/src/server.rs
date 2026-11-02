@@ -13,7 +13,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -62,6 +62,11 @@ impl Server {
         Arc::clone(&self.hub)
     }
 
+    /// Runs the user modules in `modules_dir`, logging to `log_dir`.
+    pub fn start_modules(&self, modules_dir: &Path, log_dir: &Path) {
+        self.hub.start_modules(modules_dir, log_dir);
+    }
+
     /// Accepts forever.
     pub fn serve(self) {
         let hub = Arc::clone(&self.hub);
@@ -72,10 +77,12 @@ impl Server {
             let path = self.path.clone();
             thread::spawn(move || {
                 if let Ok(true) = connection(stream, &hub) {
-                    // `shutdown`: the reply is flushed. Stop the ticker,
-                    // free the socket and exit. (Module processes are not
-                    // hosted by the daemon yet; the host stops its own.)
+                    // `shutdown`: the reply is flushed. Stop the ticker and
+                    // the user modules (`stop`, then SIGTERM and SIGKILL;
+                    // none is left when it returns), free the socket and
+                    // exit.
                     hub.stop();
+                    hub.stop_modules();
                     let _ = fs::remove_file(&path);
                     std::process::exit(0);
                 }
@@ -186,5 +193,50 @@ fn serve_lines(stream: UnixStream, hub: &Hub, id: u64) -> std::io::Result<bool> 
         if matches!(&msg, ToDaemon::Ipc(r) if r.method == "shutdown") {
             return Ok(true);
         }
+    }
+}
+
+/// The user modules' folder: `modules/` next to the config file
+/// (`~/.config/notchd/modules/`).
+pub fn modules_dir(config: &Path) -> PathBuf {
+    config
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("modules")
+}
+
+/// Where module logs go: `$XDG_STATE_HOME/notchd/logs`, else
+/// `~/.local/state/notchd/logs`; `None` without either variable.
+pub fn log_dir(get: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let nonempty = |k: &str| get(k).filter(|v| !v.is_empty());
+    let base = match nonempty("XDG_STATE_HOME") {
+        Some(x) => PathBuf::from(x),
+        None => Path::new(&nonempty("HOME")?).join(".local/state"),
+    };
+    Some(base.join("notchd").join("logs"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_module_and_log_folders_follow_the_config_and_the_state_home() {
+        assert_eq!(
+            modules_dir(Path::new("/h/.config/notchd/config.json")),
+            Path::new("/h/.config/notchd/modules")
+        );
+        let env = |k: &str| match k {
+            "XDG_STATE_HOME" => Some("/s".to_string()),
+            "HOME" => Some("/h".to_string()),
+            _ => None,
+        };
+        assert_eq!(log_dir(&env), Some("/s/notchd/logs".into()));
+        let home_only = |k: &str| (k == "HOME").then(|| "/h".to_string());
+        assert_eq!(
+            log_dir(&home_only),
+            Some("/h/.local/state/notchd/logs".into())
+        );
+        assert_eq!(log_dir(&|_: &str| None), None);
     }
 }

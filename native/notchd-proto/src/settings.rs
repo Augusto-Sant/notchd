@@ -103,6 +103,10 @@ pub struct Field {
     /// text, buttons as action ids). Free-form in v1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row: Option<Value>,
+    /// For `moduleCatalog`: which list of the Modules page (`notch`,
+    /// `agent`, `terminal` or `standalone`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
 }
 
 /// A field as a module's `module.json` (or a built-in module's JSON) writes it.

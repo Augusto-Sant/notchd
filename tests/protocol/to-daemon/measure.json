@@ -1,0 +1,11 @@
+{
+ "message": "measure",
+ "valid": [
+  {"t":"measure","notch":"main","screen":"DP-1","rest":6,"compact":34,"baseline":30},
+  {"t":"measure","notch":"side","screen":"","rest":4.5,"compact":0,"baseline":0}
+ ],
+ "invalid": [
+  {"why":"compact missing","json":{"t":"measure","notch":"main","screen":"DP-1","rest":6,"baseline":30}},
+  {"why":"rest is not a number","json":{"t":"measure","notch":"main","screen":"DP-1","rest":"6","compact":0,"baseline":0}}
+ ]
+}

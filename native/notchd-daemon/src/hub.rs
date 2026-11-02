@@ -10,19 +10,28 @@
 //! write, never runs under it: each connection has its own channel and writer
 //! thread, and the hub only pushes onto the channel.
 //!
+//! User modules (`modhost`) run as processes under a [`ModHost`]; its events
+//! reach the hub on a thread of their own (the sink only forwards into a
+//! channel), and apply under the same lock as any other change.
+//!
 //! One ticker thread sleeps until the store's next timer (or the next poll of
 //! the config file, 100 ms) and wakes early when a change moves it.
 
+use crate::modhost::{ModEvent, ModHost};
+use crate::modstate::Mods;
 use crate::router;
-use notchd_core::store::{Changes, Store};
+use notchd_core::store::{Changes, DEFAULT_MODULES, Store};
+use notchd_proto::module::ModuleEvent;
 use notchd_proto::ui::Welcome;
 use notchd_proto::version::PROTO;
-use notchd_proto::{ToDaemon, ToUi, Token};
-use serde_json::Value;
+use notchd_proto::{ToDaemon, ToModule, ToUi, Token};
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -74,10 +83,16 @@ struct Inner {
     /// applied again as an edit from outside.
     last_text: Option<String>,
     stop: bool,
+    /// The user modules the host reported.
+    mods: Mods,
+    /// What the host was last told per module: enabled, and its config.
+    host_told: BTreeMap<String, (bool, Value)>,
 }
 
 pub struct Hub {
     inner: Mutex<Inner>,
+    /// The module host, once started ([`Hub::start_modules`]).
+    modhost: Mutex<Option<Arc<ModHost>>>,
     wake: Condvar,
     clock: Clock,
     pub instance: String,
@@ -134,6 +149,9 @@ impl Inner {
         if let Some(e) = changes.config_error {
             self.broadcast(&ToUi::ConfigError(e));
         }
+        if let Some(s) = changes.schema {
+            self.broadcast(&ToUi::Schema(s));
+        }
         if let Some(s) = changes.state {
             self.broadcast(&ToUi::State(s));
         }
@@ -150,7 +168,10 @@ impl Hub {
                 next_client: 1,
                 last_text: None,
                 stop: false,
+                mods: Mods::new(),
+                host_told: BTreeMap::new(),
             }),
+            modhost: Mutex::new(None),
             wake: Condvar::new(),
             clock: Clock::new(),
             instance: instance.to_string(),
@@ -200,7 +221,13 @@ impl Hub {
             }
         }
         let changes = g.store.take_changes(self.clock.now());
+        // A config that changed may enable or disable a module or change its
+        // settings' values.
+        let config_changed = changes.config.is_some();
         g.announce(changes);
+        if config_changed {
+            self.sync_host(g);
+        }
         result
     }
 
@@ -258,8 +285,14 @@ impl Hub {
                 ToUi::ConfigError(notchd_proto::ui::ConfigError { message }),
             );
         }
+        if let Some(schema) = g.store.schema() {
+            g.send_to(client, ToUi::Schema(schema));
+        }
         let state = g.store.state();
         g.send_to(client, ToUi::State(state));
+        for m in g.mods.snapshot() {
+            g.send_to(client, m);
+        }
         if let Some(c) = g.clients.iter_mut().find(|c| c.id == client) {
             c.subscribed = true;
         }
@@ -271,6 +304,14 @@ impl Hub {
     /// connection and announces what changed to every UI.
     pub fn handle(&self, client: u64, msg: &ToDaemon) {
         let mut g = self.lock();
+        // A primitive's action in a user module's view goes to the module;
+        // `restart` (the error row's button) restarts it.
+        if let ToDaemon::Event(e) = msg {
+            if g.mods.knows(&e.module) {
+                self.module_event(&e.module, e);
+            }
+            return;
+        }
         let mut replies = router::route(&mut g.store, msg, self.clock.now());
         if let Err(e) = self.publish(&mut g) {
             for r in &mut replies {
@@ -295,6 +336,117 @@ impl Hub {
         drop(g);
         self.wake.notify_all();
         r
+    }
+
+    // ------------------------------------------------------ user modules
+
+    fn host(&self) -> Option<Arc<ModHost>> {
+        self.modhost
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Runs the user modules of `modules_dir` (a folder each, docs/
+    /// architecture.md "Protocol: core to module"), logging to `log_dir`.
+    /// Their events apply under the hub's lock; stop them with
+    /// [`Hub::stop_modules`].
+    pub fn start_modules(self: &Arc<Hub>, modules_dir: &Path, log_dir: &Path) {
+        let (tx, rx) = channel::<ModEvent>();
+        let host = Arc::new(ModHost::new(modules_dir, log_dir, move |e| {
+            let _ = tx.send(e);
+        }));
+        *self.modhost.lock().unwrap_or_else(|p| p.into_inner()) = Some(host);
+        let weak = Arc::downgrade(self);
+        thread::Builder::new()
+            .name("notchd-modules".into())
+            .spawn(move || {
+                for ev in rx {
+                    match weak.upgrade() {
+                        Some(hub) => hub.on_mod_event(ev),
+                        None => break,
+                    }
+                }
+            })
+            .expect("spawn the module event thread");
+        // Modules found before the host was stored.
+        let mut g = self.lock();
+        self.sync_host(&mut g);
+    }
+
+    /// One event of the host: the store and the UIs follow.
+    fn on_mod_event(&self, ev: ModEvent) {
+        let mut g = self.lock();
+        let now = self.clock.now();
+        let Inner { mods, store, .. } = &mut *g;
+        let msgs = mods.apply(store, ev, now);
+        for m in &msgs {
+            g.broadcast(m);
+        }
+        self.sync_host(&mut g);
+        let _ = self.publish(&mut g);
+        drop(g);
+        self.wake.notify_all();
+    }
+
+    /// Tells the host what each known module should do: run when a notch
+    /// lists it (a standalone one: unless switched off) and the config does
+    /// not disable it (`"<id>": {"enabled": false}`), and its settings'
+    /// values (the config's `"<id>"` object). Only what changed is sent.
+    fn sync_host(&self, g: &mut Inner) {
+        let Some(host) = self.host() else { return };
+        let cfg = g.store.config().clone();
+        let listed: Vec<String> = notchd_core::config::notches(&cfg, &DEFAULT_MODULES)
+            .into_iter()
+            .flat_map(|n| n.module_ids)
+            .collect();
+        for id in g.mods.ids() {
+            let off = notchd_core::config::value_at(&cfg, &format!("{id}.enabled"))
+                == Some(&Value::Bool(false));
+            let enabled = !off && (g.mods.standalone(&id) || listed.contains(&id));
+            let config = match notchd_core::config::value_at(&cfg, &id) {
+                Some(v @ Value::Object(_)) => v.clone(),
+                _ => json!({}),
+            };
+            let told = g.host_told.get(&id);
+            if told.map(|t| t.0) != Some(enabled) {
+                host.set_enabled(&id, enabled);
+            }
+            if told.map(|t| &t.1) != Some(&config) {
+                host.set_config(&id, config.clone());
+            }
+            g.host_told.insert(id, (enabled, config));
+        }
+    }
+
+    /// A UI's `event` for a user module's view.
+    fn module_event(&self, module: &str, e: &notchd_proto::ui::Event) {
+        let Some(host) = self.host() else { return };
+        if e.action == "restart" {
+            host.restart(module);
+            return;
+        }
+        host.send(
+            module,
+            ToModule::Event(ModuleEvent {
+                slot: e.slot,
+                action: e.action.clone(),
+                value: e.value.clone(),
+            }),
+        );
+    }
+
+    /// `stop` to every module and waits until no process is left (the
+    /// shutdown path). Safe to call twice, or without a host.
+    pub fn stop_modules(&self) {
+        let host = self
+            .modhost
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some(host) = host {
+            host.stop_all();
+        }
     }
 
     // ----------------------------------------------------------- ticker

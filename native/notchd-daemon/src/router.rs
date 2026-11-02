@@ -35,6 +35,9 @@ pub fn route(store: &mut Store, msg: &ToDaemon, now: u64) -> Vec<ToUi> {
         ToDaemon::Key(k) => store.key(&k.key, &k.mods, now),
         ToDaemon::Tab(t) => store.tab(&t.notch, &t.screen, &t.module, now),
         ToDaemon::Settings(s) => store.settings(s.open, s.page.clone()),
+        ToDaemon::Measure(m) => {
+            store.measure(&m.notch, &m.screen, m.rest.0, m.compact.0, m.baseline.0)
+        }
         ToDaemon::Drag(d) => store.drop_notch(
             &d.notch,
             &d.screen,
@@ -81,8 +84,8 @@ pub fn route(store: &mut Store, msg: &ToDaemon, now: u64) -> Vec<ToUi> {
                 Err((code, message)) => err(Some(r.id), code, message),
             }];
         }
-        // Module events, the reserve ack and surfaces wait for the module
-        // host and the UI-side reserve work.
+        // A module's `event` goes to the module (the hub); the reserve ack is
+        // not needed (the shrink delay runs in the core); surfaces wait.
         ToDaemon::Hello(_)
         | ToDaemon::Event(_)
         | ToDaemon::ReserveApplied(_)

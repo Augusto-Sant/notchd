@@ -96,6 +96,8 @@ pub enum ToDaemon {
     Settings(SettingsOpen),
     #[serde(rename = "reserve-applied")]
     ReserveApplied(ReserveApplied),
+    #[serde(rename = "measure")]
+    Measure(Measure),
     #[serde(rename = "set")]
     Set(Set),
     #[serde(rename = "edit")]
@@ -120,6 +122,7 @@ impl ToDaemon {
         "tab",
         "settings",
         "reserve-applied",
+        "measure",
         "set",
         "edit",
         "ipc",
@@ -347,4 +350,22 @@ pub struct ReserveApplied {
     pub screen: String,
     pub edge: Edge,
     pub depth: Num,
+}
+
+/// The depths the UI measured for one notch copy, which the core cannot know
+/// (`ReservedSpace.qml`'s inputs): the core turns them into `state.reserve`
+/// with `State.reservedSpace`, `reserveStep` and `reserveZones`. Sent when a
+/// depth changes. `screen` is as in `pointer`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Measure {
+    pub notch: String,
+    pub screen: String,
+    /// The rest lip's depth in px (`NotchCard.restDepth`).
+    pub rest: Num,
+    /// The depth of the compact view now shown, 0 when none
+    /// (`NotchCard.compactDepth`); the core keeps the deepest seen.
+    pub compact: Num,
+    /// The least depth reserved for a compact view (`compactBaseline`: the
+    /// card's padding and a media view's height; 0 on a side edge).
+    pub baseline: Num,
 }

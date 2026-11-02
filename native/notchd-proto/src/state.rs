@@ -14,6 +14,11 @@ pub struct State {
     pub notches: Vec<Notch>,
     pub reserve: Vec<Reserve>,
     pub standalone: Vec<Standalone>,
+    /// The visitor (`NotchService.visitor`): the default notch, a copy per
+    /// screen at the top, hidden until it shows a peek where no notch with
+    /// that module does. Its copies are named by the notch id `""` in
+    /// `pointer`, `key` and `tab`.
+    pub visitor: Vec<StandaloneCopy>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,8 +92,11 @@ pub struct Standalone {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StandaloneCopy {
     pub screen: String,
     pub mode: Mode,
     pub peek: Option<Peek>,
+    /// `State.needsWindow` for a guest: only while open and for 5 s after.
+    pub needs_window: bool,
 }

@@ -10,6 +10,7 @@ pub mod navigate;
 pub mod peek;
 pub mod position;
 pub mod resources;
+pub mod schema;
 pub mod settings;
 pub mod state;
 pub mod store;
