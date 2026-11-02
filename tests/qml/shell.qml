@@ -1188,7 +1188,10 @@ ShellRoot {
     root.go(function*() {
       // The daemon may still be answering the case before: its settings
       // (the schema, the catalog) are in once it has answered a request.
+      // The default config, whatever case ran before on this service.
+      multi.replaceConfig({})
       yield root.settle(multi)
+      yield root.waitFor(function() { return !!multi.moduleById("activities") && multi.moduleById("timer") === null })
       root.check(multi.moduleById("timer") === null, "timer is loaded (test setup)")
       var fields = multi.settingsSchema.filter(function(f) { return f.page === "modules/timer" })
       root.check(fields.some(function(f) { return f.key === "timer.focus" }), "timer fields: " + JSON.stringify(fields.map(function(f) { return f.key })))
