@@ -236,8 +236,16 @@ fn ipc_set_navigate_and_state_work_over_the_socket() {
     };
     let v: Value = serde_json::from_str(&o.result.unwrap()).unwrap();
     assert_eq!(v["notches"][0]["id"], "main");
+    // `live` belongs to the daemon's modules now: a module the config does
+    // not load answers in words, and one that does not exist says so.
     let id = ui.ipc("live", &["codex-live", "toggle"]);
-    assert!(matches!(replied(&mut ui, id), ToUi::Err(e) if e.code == "method"));
+    assert!(
+        matches!(replied(&mut ui, id), ToUi::Ok(o) if o.result.as_deref() == Some("codex-live module not loaded"))
+    );
+    let id = ui.ipc("live", &["nope", "toggle"]);
+    assert!(
+        matches!(replied(&mut ui, id), ToUi::Ok(o) if o.result.as_deref().unwrap_or("").starts_with("no live module nope"))
+    );
 }
 
 #[test]

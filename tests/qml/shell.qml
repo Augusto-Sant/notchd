@@ -5,6 +5,7 @@ import Quickshell.Io
 import "core"
 import "core/settings"
 import "core/Position.js" as Position
+import "core/settings/Settings.js" as Settings
 
 // Behaviour tests that need the QML runtime: bindings, signals, animations.
 // Rules that are plain JS belong in the Node tests instead. Most cases here
@@ -2401,7 +2402,8 @@ ShellRoot {
       return f.options.map(function(o) { return o.disabled === true })
     }
     function voiceRows() {
-      return componentSvc.settingsSchema.filter(function(f) { return f.type === "component" && f.page === "modules/local-live" && f.component.indexOf("voice-") === 0 })
+      // What the window shows: the schema without the rows whose `when` fails.
+      return Settings.shownFields(componentSvc.settingsSchema, componentSvc.configValue).filter(function(f) { return f.type === "component" && f.page === "modules/local-live" && f.component.indexOf("voice-") === 0 })
         .map(function(f) { return f.component })
     }
     root.check(componentSvc.settingsPages.some(function(p) { return p.id === "components" }), "no Components page")
@@ -2513,7 +2515,9 @@ ShellRoot {
         liveSvc.notchIpc("live", ["codex-live", "mute"])
       }],
       [500, function() {
-        root.check(root.liveTexts().indexOf("Muted") !== -1, "the bridge didn't say muted: " + root.liveTexts())
+        // The fake bridge keeps "speaking", which the status line prefers to
+        // "Muted"; the microphone button is what says it.
+        root.check(JSON.stringify(liveSvc.client.view("codex-live", "expanded")).indexOf("Unmute the microphone") !== -1, "the bridge didn't say muted: " + root.liveTexts())
         liveSvc.notchIpc("live", ["codex-live", "stop"])
       }],
       [800, function() {
