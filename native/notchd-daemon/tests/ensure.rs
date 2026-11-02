@@ -19,6 +19,20 @@ const BIN: &str = env!("CARGO_BIN_EXE_notchd");
 struct Reaper(PathBuf);
 
 impl Reaper {
+    /// The pids once the log has at least `n` of them (bounded). `--ensure`
+    /// returns as soon as the socket answers; the daemon writes its line just
+    /// after binding, so a quick read may come before it (it did on CI).
+    fn wait_pids(&self, n: usize) -> Vec<u32> {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let pids = self.pids();
+            if pids.len() >= n || Instant::now() >= deadline {
+                return pids;
+            }
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     fn pids(&self) -> Vec<u32> {
         let text = std::fs::read_to_string(&self.0).unwrap_or_default();
         text.lines()
@@ -66,7 +80,7 @@ fn ensure_starts_a_detached_daemon_and_a_second_one_reuses_it() {
 
     // Detached: it logs to the state dir and leads its own session, and it
     // is still there now that `--ensure` has exited.
-    let pids = reaper.pids();
+    let pids = reaper.wait_pids(1);
     assert_eq!(pids.len(), 1, "one daemon in the log");
     let stat = std::fs::read_to_string(format!("/proc/{}/stat", pids[0])).expect("daemon alive");
     let after_comm = stat.rsplit(')').next().unwrap();
@@ -85,7 +99,7 @@ fn shutdown_replies_then_the_daemon_exits_and_frees_its_socket() {
     let env = TestEnv::new("shut");
     let reaper = Reaper(log_of(&env));
     assert_eq!(ensure(&env).0, Some(0));
-    let pid = reaper.pids()[0];
+    let pid = reaper.wait_pids(1)[0];
     let mut cmd = Command::new(BIN);
     env.apply(&mut cmd);
     cmd.args(["ipc", "shutdown"]);
@@ -148,7 +162,7 @@ fn a_daemon_of_another_version_is_stopped_and_replaced() {
         welcome_version(&env.socket("default")),
         env!("CARGO_PKG_VERSION")
     );
-    assert_eq!(reaper.pids().len(), 1, "a new daemon was started");
+    assert_eq!(reaper.wait_pids(1).len(), 1, "a new daemon was started");
 }
 
 #[test]
