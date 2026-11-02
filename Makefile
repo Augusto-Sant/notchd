@@ -32,7 +32,8 @@ TIMED = scripts/timed.py
 check: lint validate test
 	@$(MAKE) --no-print-directory -j3 -O integration qmltest visual
 
-# Unit layer: the pure-JS rules (core/*.js, core/settings/*.js) in Node, and
+# Unit layer: the pure-JS rules (core/*.js, core/settings/*.js) in Node, their
+# Rust ports (native/, cargo test), and
 # the Python bridges' and installer's rules as functions (tests/*_test.py,
 # every TestCase without `tier = "integration"`). No processes, no servers.
 test:
@@ -41,6 +42,7 @@ test:
 	  --test-reporter=./scripts/node-times.mjs --test-reporter-destination=build/times/node.tsv \
 	  tests/*.test.mjs
 	@$(TIMED) py-unit scripts/pytests.py unit
+	@$(TIMED) rust cargo test --manifest-path native/Cargo.toml --quiet
 
 # Integration layer: the live bridges and the components' installer run as
 # processes against fakes (a fake LocalAI, pacman, downloads from a local
