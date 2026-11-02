@@ -1185,19 +1185,23 @@ ShellRoot {
   // A module's settings were read from the loaded module, so one no notch
   // showed had no page and no gear. They come from its JSON file now.
   function unloadedModuleSettings() {
-    root.check(multi.moduleById("timer") === null, "timer is loaded (test setup)")
-    var fields = multi.settingsSchema.filter(function(f) { return f.page === "modules/timer" })
-    root.check(fields.some(function(f) { return f.key === "timer.focus" }), "timer fields: " + JSON.stringify(fields.map(function(f) { return f.key })))
-    root.check(multi.settingsPages.some(function(p) { return p.id === "modules/timer" && p.label === "Timer" }), "no page for timer")
-    root.check(multi.moduleSetting("timer", "focus") === 25, "default: " + multi.moduleSetting("timer", "focus"))
-    multi.setConfigValue("timer.focus", 50)
-    root.check(multi.moduleSetting("timer", "focus") === 50, "set: " + multi.moduleSetting("timer", "focus"))
-    var media = multi.moduleCatalog.filter(function(m) { return m.moduleId === "media" })[0]
-    root.check(!!media && media.title === "Now playing", "media: " + JSON.stringify(media))
-    var activities = multi.moduleById("activities")
-    root.check(!!activities && activities.title === "Activities", "loaded title: " + (activities ? activities.title : ""))
-    multi.replaceConfig({})
-    root.done()
+    root.go(function*() {
+      // The daemon may still be answering the case before: its settings
+      // (the schema, the catalog) are in once it has answered a request.
+      yield root.settle(multi)
+      root.check(multi.moduleById("timer") === null, "timer is loaded (test setup)")
+      var fields = multi.settingsSchema.filter(function(f) { return f.page === "modules/timer" })
+      root.check(fields.some(function(f) { return f.key === "timer.focus" }), "timer fields: " + JSON.stringify(fields.map(function(f) { return f.key })))
+      root.check(multi.settingsPages.some(function(p) { return p.id === "modules/timer" && p.label === "Timer" }), "no page for timer")
+      root.check(multi.moduleSetting("timer", "focus") === 25, "default: " + multi.moduleSetting("timer", "focus"))
+      multi.setConfigValue("timer.focus", 50)
+      root.check(multi.moduleSetting("timer", "focus") === 50, "set: " + multi.moduleSetting("timer", "focus"))
+      var media = multi.moduleCatalog.filter(function(m) { return m.moduleId === "media" })[0]
+      root.check(!!media && media.title === "Now playing", "media: " + JSON.stringify(media))
+      var activities = multi.moduleById("activities")
+      root.check(!!activities && activities.title === "Activities", "loaded title: " + (activities ? activities.title : ""))
+      multi.replaceConfig({})
+    })
   }
 
   TestService {
@@ -2585,8 +2589,9 @@ ShellRoot {
   function codexIdle() {
     if (root.noTerminal(codexSvc)) return
     root.go(function*() {
-      // 0.02 min: 1.2 s.
-      codexSvc.replaceConfig({ codex: { directory: root.dir, idleMinutes: 0.02 } })
+      // 0.04 min: 2.4 s. Wide enough that a loaded machine, slow to run the
+      // `kill -0` below, still looks while the program is within it.
+      codexSvc.replaceConfig({ codex: { directory: root.dir, idleMinutes: 0.04 } })
       var argsFile = root.dir + "/codex-args"
       var pid = ""
       // The last case's view is still closing.
@@ -2599,8 +2604,11 @@ ShellRoot {
       yield root.wait(700)
       yield root.runAndWait(["kill", "-0", pid])
       root.check(shellCmd.code === 0, "it stopped before idleMinutes")
-      yield root.wait(1200)
-      yield root.runAndWait(["kill", "-0", pid])
+      // It stops once the idle time is up: polled, not a fixed wait.
+      for (var tries = 0; tries < 40 && shellCmd.code === 0; tries++) {
+        yield root.wait(200)
+        yield root.runAndWait(["kill", "-0", pid])
+      }
       root.check(shellCmd.code !== 0, "closed and idle, it kept running")
       codexSvc.open()
       yield root.waitFor(function() { return !!root.terminalIn(codexCard) && root.terminalIn(codexCard).title !== "" }, 5000)
@@ -3136,7 +3144,8 @@ ShellRoot {
               // (Array.isArray false), so a hand-written `notches` or `modules`
               // was read as no list: one notch, the default modules.
               daemonFile.setText("{ \"hoverOpenDelay\": 778, \"notches\": [ { \"id\": \"one\", \"modules\": [\"activities\"] }, { \"id\": \"two\", \"modules\": [] } ] }\n")
-              root.until(function() { return s.hoverOpenDelay === 778 }, function() {
+              // The notch list follows the config in the daemon's next message: wait for both.
+              root.until(function() { return s.hoverOpenDelay === 778 && s.notchIds.length === 2 }, function() {
                 root.check(s.notchSpecs.length === 2 && s.notchSpecs[0].id === "one", "the notches of the file: " + JSON.stringify(s.notchSpecs.map(function(n) { return n.id })))
                 root.check(s.moduleIds.indexOf("activities") !== -1 && Array.isArray(s.config.notches), "the lists of the file are not lists: " + JSON.stringify(s.moduleIds))
                 root.check(s.notchIds.length === 2, "the daemon's notches: " + JSON.stringify(s.notchIds))
