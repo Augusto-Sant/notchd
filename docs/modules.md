@@ -48,7 +48,9 @@ The timer, activities, resources, media, OSD, the voice (`codex-live`, `local-li
 
 To move a module to the daemon: write `native/notchd-modules/src/<id>.rs` implementing `CoreModule` (`facts`, `view(slot, now)`, and as needed `config`, `command` for IPC, `event`, `tick`/`next_due`, `feed` for a provider's data, `take_effects` for peeks and notifications), add it to `IDS` and `create` in `lib.rs` and, if it has IPC methods, to `METHODS` in `notchd-daemon/src/corehost.rs`; add its JSON file to `native/notchd-modules/modules/` and to `INFO` in `notchd-modules/src/lib.rs` (no QML file, no UI list to edit). Settings defaults are read from that JSON file (`tree::Settings`). Test it as values in Rust (every slot builds a valid tree), and the QML behaviour with the helpers `root.ask`, `root.texts` of `tests/qml/shell.qml`. A module that needs demo data offscreen implements `demo` (the test hook `test-<id>`, only with `NOTCHD_TEST_HOOKS=1`).
 
-A tree draws like the QML it replaced where a few general properties say so: `width`, `height`, `minWidth` (and a row's or column's `maxWidth`) fix a size, `fill` takes the rest of a row, and glyphs that need a size are `text` nodes (`size: "body"`), which draw the same Nerd Font.
+A tree draws like the QML it replaced where a few general properties say so: `width`, `height`, `minWidth` (and a row's or column's `maxWidth`) fix a size, `fill` takes the rest of a row, and an `icon`'s `size` is design pixels or a text size name (`"body"`).
+
+Icons: an `icon` (and a `button`) takes a `name`, a `glyph`, or both. `name` is a named icon the UI draws with its own symbols (`media-playback-start`, `window-close`, `list-add`...; the list is "Named icons" in `docs/architecture.md`), which is what makes a view look right on a desktop without Nerd Fonts. `glyph` is a Nerd Font codepoint (`String.fromCodePoint(0xF051B)`) and is what a UI draws when it does not know the `name`, or when you send no name. A name nobody knows is not an error, it falls back to `glyph`, so send both when you want a known look everywhere; a node with neither is invalid.
 
 ## User modules
 
