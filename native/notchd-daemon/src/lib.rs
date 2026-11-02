@@ -6,5 +6,6 @@ pub mod hub;
 pub mod instance;
 pub mod ipc;
 pub mod modhost;
+pub mod modstate;
 pub mod router;
 pub mod server;

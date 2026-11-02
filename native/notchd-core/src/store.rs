@@ -16,6 +16,7 @@ use crate::config::{self, NotchSpec};
 use crate::navigate::{self, Action, KeyName, NavMode, SHIFT, StepState};
 use crate::peek::{self, CopyPeek, Missed};
 use crate::position;
+use crate::schema;
 use crate::settings;
 use crate::state::{
     self, KeyboardContext, ModeContext, ModuleInfo, ScreenContext, ScreenState, WorkspaceKey,
@@ -24,7 +25,7 @@ use crate::timers::Timers;
 use notchd_proto::Num;
 use notchd_proto::common::{Edge, Mode, Slot};
 use notchd_proto::state as ps;
-use notchd_proto::ui::{ConfigError, ConfigUpdate, Modifier, PointerEv, Screens};
+use notchd_proto::ui::{ConfigError, ConfigUpdate, Modifier, PointerEv, Schema, Screens};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -33,6 +34,14 @@ pub const DEFAULT_MODULES: [&str; 2] = ["media", "activities"];
 /// `navSettleTimer`: how long after navigation ends a lost keyboard is asked
 /// for again instead of closing the notch.
 pub const NAV_SETTLE_MS: u64 = 600;
+/// `NotchCopy.windowLinger`: how long a guest's window stays after it closes.
+pub const WINDOW_LINGER_MS: u64 = 5000;
+/// `ReservedSpace.shrinkDelay`: NotchCard's depth animation (380 ms), plus a
+/// little.
+pub const RESERVE_SHRINK_MS: u64 = 400;
+/// The key of the visitor's copies (no module id or notch id can start with
+/// `#`).
+const VISITOR_KEY: &str = "#visitor";
 
 /// A module's facts as the store needs them: the rules' view of it
 /// ([`ModuleInfo`], `id` is its module id) and what only placing it needs.
@@ -84,6 +93,26 @@ struct CopyState {
     peek: Option<PeekState>,
     missed: Vec<Missed>,
     was_open: bool,
+    /// `NotchCopy.lingering`: closed less than `window_linger` ms ago.
+    lingering: bool,
+    /// What the UI measured, once it has (`measure`).
+    measure: Option<Measure>,
+    /// `ReservedSpace.deepestCompact`: the deepest compact view seen.
+    deepest: f64,
+    /// The edge's orientation at the last measure (`onVerticalChanged`).
+    vertical: bool,
+    /// `ReservedSpace.space` as held now; `None` before the first target.
+    space: Option<f64>,
+    /// The target `space` last followed, so a timer is only (re)started when
+    /// the target moves (`onTargetChanged`).
+    target: Option<f64>,
+}
+
+/// The depths of one copy the UI reported.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Measure {
+    rest: f64,
+    baseline: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +120,10 @@ enum Timer {
     Open(Key),
     Close(Key),
     Peek(Key),
+    /// `lingerTimer`.
+    Linger(Key),
+    /// `ReservedSpace.shrinkTimer`.
+    Shrink(Key),
     NavSettle,
 }
 
@@ -116,6 +149,7 @@ pub struct Changes {
     pub config: Option<ConfigUpdate>,
     pub config_error: Option<ConfigError>,
     pub state: Option<ps::State>,
+    pub schema: Option<Schema>,
 }
 
 /// A notch as the rules see it right now, derived from config and modules.
@@ -125,6 +159,8 @@ struct NotchView {
     /// Its place in the config; `None` for a standalone module's.
     index: Option<usize>,
     guest: bool,
+    /// The visitor, a guest that is no standalone module's.
+    visitor: bool,
     spec: Option<NotchSpec>,
     pos: position::Position,
     every: bool,
@@ -175,7 +211,15 @@ pub struct Store {
     nav_settling: bool,
     pub settings_open: bool,
     pub settings_page: String,
+    /// The notch the settings window edits, by index (`settingsNotch`).
+    settings_notch: usize,
+    /// The modules' `{ moduleId, title, settings, standalone }`, as their
+    /// JSON files give them (`moduleCatalog`), for the schema.
+    module_defs: BTreeMap<String, Value>,
+    schema_rev: u64,
+    last_schema: Option<Schema>,
 
+    window_linger: u64,
     timers: Timers<Timer>,
     state_rev: u64,
     last_state: Option<ps::State>,
@@ -252,6 +296,7 @@ impl Store {
         Store {
             config: json!({}),
             settings_page: "general".into(),
+            window_linger: WINDOW_LINGER_MS,
             ..Store::default()
         }
     }
@@ -435,6 +480,7 @@ impl Store {
                 id: spec.id.clone(),
                 index: Some(spec.index),
                 guest: false,
+                visitor: false,
                 tabs: spec.tabs,
                 module_ids,
                 compact,
@@ -459,6 +505,7 @@ impl Store {
                 id: id.clone(),
                 index: None,
                 guest: true,
+                visitor: false,
                 spec: None,
                 pos: self.standalone_position(id),
                 every: true,
@@ -470,6 +517,29 @@ impl Store {
                 copy_screens: screens.clone(),
             });
         }
+        // The visitor (`Notch.qml`, `visitor: true`): every module that is
+        // no standalone one, a copy per screen, its position the default.
+        out.push(NotchView {
+            key: VISITOR_KEY.into(),
+            id: String::new(),
+            index: None,
+            guest: true,
+            visitor: true,
+            spec: None,
+            pos: position::resolve(&json!({"screen": position::ALL_SCREENS})),
+            every: true,
+            homed: false,
+            tabs: false,
+            module_ids: self
+                .modules
+                .iter()
+                .filter(|(_, f)| !f.standalone)
+                .map(|(id, _)| id.clone())
+                .collect(),
+            compact: Vec::new(),
+            expanded: Vec::new(),
+            copy_screens: screens,
+        });
         out
     }
 
@@ -583,6 +653,7 @@ impl Store {
         let views = self.notch_views();
         let mut notches = Vec::new();
         let mut standalone = Vec::new();
+        let mut visitor = Vec::new();
         let slot = |nv: &NotchView| {
             if nv.vertical() {
                 Slot::VerticalPeek
@@ -592,7 +663,7 @@ impl Store {
         };
         for nv in &views {
             let mut copies = Vec::new();
-            let mut open_copies = Vec::new();
+            let mut guest_copies = Vec::new();
             for cs in &nv.copy_screens {
                 let view = self.copy_view(nv, cs);
                 let st = self.copies.get(&(nv.key.clone(), cs.clone()));
@@ -601,11 +672,21 @@ impl Store {
                     view: slot(nv),
                     until: p.until,
                 });
+                let lingering = st.is_some_and(|c| c.lingering);
+                // `State.needsWindow`: a notch of the config always has its
+                // window; a guest's only while open and for `windowLinger`
+                // ms after (`NotchCopy.lingering`).
+                let needs_window = state::needs_window(&state::WindowContext {
+                    guest: nv.guest,
+                    open: view.open(),
+                    lingering,
+                });
                 if nv.guest {
-                    open_copies.push(ps::StandaloneCopy {
+                    guest_copies.push(ps::StandaloneCopy {
                         screen: view.screen,
                         mode: to_mode(view.mode),
                         peek,
+                        needs_window,
                     });
                     continue;
                 }
@@ -617,19 +698,18 @@ impl Store {
                     peek,
                     shown: view.shown,
                     covered: view.covered,
-                    // A notch of the config always has its window.
-                    needs_window: state::needs_window(&state::WindowContext {
-                        guest: false,
-                        open: false,
-                        lingering: false,
-                    }),
+                    needs_window,
                     keyboard: view.keyboard,
                 });
+            }
+            if nv.visitor {
+                visitor = guest_copies;
+                continue;
             }
             if nv.guest {
                 standalone.push(ps::Standalone {
                     id: nv.id.clone(),
-                    copies: open_copies,
+                    copies: guest_copies,
                 });
                 continue;
             }
@@ -670,11 +750,9 @@ impl Store {
             navigation,
             settings_open: self.settings_open,
             notches,
-            // Reserve depths are measured by the UI (`ReservedSpace.qml`); the
-            // protocol has no way to report them yet, so nothing is reserved
-            // from here.
-            reserve: Vec::new(),
+            reserve: self.reserve_state(&views),
             standalone,
+            visitor,
         }
     }
 
@@ -699,6 +777,20 @@ impl Store {
                 .config_error
                 .clone()
                 .map(|message| ConfigError { message });
+        }
+        let schema = self.compute_schema();
+        if self.last_schema.as_ref().is_none_or(|last| {
+            let mut a = last.clone();
+            a.rev = 0;
+            a != schema
+        }) {
+            self.schema_rev += 1;
+            let sent = Schema {
+                rev: self.schema_rev,
+                ..schema
+            };
+            self.last_schema = Some(sent.clone());
+            out.schema = Some(sent);
         }
         let mut now_state = self.compute_state();
         let same = self.last_state.as_ref().is_some_and(|last| {
@@ -737,6 +829,12 @@ impl Store {
                         c.peek = None;
                     }
                 }
+                Timer::Linger(key) => {
+                    if let Some(c) = self.copies.get_mut(&key) {
+                        c.lingering = false;
+                    }
+                }
+                Timer::Shrink(key) => self.reserve_settle(&key),
                 Timer::NavSettle => self.nav_settling = false,
             }
             self.settle(now);
@@ -748,6 +846,7 @@ impl Store {
     /// peeks they could not show come now, and the screen the pointer opened
     /// them on is forgotten. A peek may open a copy, so it goes again.
     fn settle(&mut self, now: u64) {
+        self.reserve_follow(now);
         for _ in 0..4 {
             let views = self.notch_views();
             let focused = self.focused();
@@ -791,7 +890,11 @@ impl Store {
             for key in closed {
                 if let Some(c) = self.copies.get_mut(&key) {
                     c.open_screen.clear();
+                    // `onIsOpenChanged`: the window stays `windowLinger` ms.
+                    c.lingering = true;
                 }
+                self.timers
+                    .after(Timer::Linger(key.clone()), now, self.window_linger);
                 self.peek_missed(&key, now);
             }
         }
@@ -863,7 +966,9 @@ impl Store {
         let views = self.notch_views();
         let focused = self.focused();
         if facts.standalone {
-            if let Some(nv) = views.iter().find(|v| v.guest && v.id == module)
+            if let Some(nv) = views
+                .iter()
+                .find(|v| v.guest && !v.visitor && v.id == module)
                 && let Some(cs) = self.focused_copy_screen(nv, &focused).map(str::to_string)
             {
                 self.request_peek_on(&(nv.key.clone(), cs), module, ms, now);
@@ -886,15 +991,22 @@ impl Store {
                 peek::place(nv.homed, nv.every, &at)
             })
             .collect();
-        // The visitor (a copy of the default notch on every screen that only
-        // shows peeks) is not part of the `state` entity yet: its half of the
-        // routing decision is made and dropped.
         let route = peek::route(&places, &focused, facts.peek_on_focused_screen);
         for i in route.notches {
             let nv = owners[i];
             if let Some(cs) = self.focused_copy_screen(nv, &focused).map(str::to_string) {
                 self.request_peek_on(&(nv.key.clone(), cs), module, ms, now);
             }
+        }
+        // The visitor: a copy of the default notch on every screen that only
+        // shows peeks; its own `Notch.requestPeek` takes the module if it
+        // lists it (every module that is no standalone one).
+        if route.visitor
+            && let Some(nv) = views.iter().find(|v| v.visitor)
+            && nv.module_ids.iter().any(|m| m == module)
+            && let Some(cs) = self.focused_copy_screen(nv, &focused).map(str::to_string)
+        {
+            self.request_peek_on(&(nv.key.clone(), cs), module, ms, now);
         }
         self.settle(now);
     }
@@ -1030,10 +1142,19 @@ impl Store {
         self.settle(now);
     }
 
+    /// `onSettingsPageChanged`: showing a notch's page picks the notch the
+    /// window edits.
+    fn show_settings_page(&mut self, page: String) {
+        if let Ok(i) = usize::try_from(settings::notch_index_of_page(&page)) {
+            self.settings_notch = i;
+        }
+        self.settings_page = page;
+    }
+
     pub fn open_settings(&mut self, page: Option<String>) {
         self.settings_open = true;
         if let Some(p) = page {
-            self.settings_page = p;
+            self.show_settings_page(p);
         }
     }
 
@@ -1042,7 +1163,7 @@ impl Store {
     pub fn settings(&mut self, open: bool, page: Option<String>) {
         self.settings_open = open;
         if let Some(p) = page {
-            self.settings_page = p;
+            self.show_settings_page(p);
         }
     }
 
@@ -1488,6 +1609,198 @@ impl Store {
         }
     }
 
+    // ------------------------------------------------------------ reserve
+
+    /// The depths the UI measured for a copy (`measure`). The deepest compact
+    /// view seen restarts when the baseline or the edge's orientation
+    /// changes (`ReservedSpace.onCompactBaselineChanged`,
+    /// `onVerticalChanged`) and grows with the compact depth shown
+    /// (`onCompactDepthChanged`).
+    pub fn measure(&mut self, notch: &str, screen: &str, rest: f64, compact: f64, baseline: f64) {
+        let views = self.notch_views();
+        let Some(nv) = Self::find_view(&views, notch) else {
+            return;
+        };
+        let key = Self::key_of(nv, screen);
+        let vertical = nv.vertical();
+        let c = self.copies.entry(key).or_default();
+        let next = Measure { rest, baseline };
+        if c.measure.is_some_and(|m| m.baseline != baseline) || c.vertical != vertical {
+            c.deepest = 0.0;
+        }
+        c.vertical = vertical;
+        if compact > c.deepest {
+            c.deepest = compact;
+        }
+        c.measure = Some(next);
+    }
+
+    /// `NotchCopy.reservedScreens`: the screens a copy keeps windows clear
+    /// on. A guest reserves nowhere; a copy on its own screen there while it
+    /// may hang there; the one copy as `State.reserveScreens` says.
+    fn reserved_screens(&self, nv: &NotchView, cs: &str) -> Vec<String> {
+        if nv.guest {
+            return Vec::new();
+        }
+        let workspaces = nv.spec.as_ref().and_then(|s| s.workspaces.clone());
+        let states = self.screen_states(&workspaces);
+        if !cs.is_empty() {
+            return if states.iter().any(|s| s.name == cs && s.allowed) {
+                vec![cs.to_string()]
+            } else {
+                Vec::new()
+            };
+        }
+        let home = if nv.pos.screen == position::ALL_SCREENS {
+            cs
+        } else {
+            &nv.pos.screen
+        };
+        state::reserve_screens(&states, home)
+    }
+
+    /// `ReservedSpace.target`: `State.reservedSpace` over what the UI
+    /// measured; `None` while it has not.
+    fn reserve_target(&self, nv: &NotchView, cs: &str) -> Option<f64> {
+        let c = self.copies.get(&(nv.key.clone(), cs.to_string()))?;
+        let m = c.measure?;
+        Some(state::reserved_space(&state::ReserveContext {
+            enabled: nv.spec.as_ref().is_some_and(|s| s.reserve_space),
+            compact: !nv.compact.is_empty(),
+            baseline: m.baseline,
+            tallest: c.deepest,
+            rest: m.rest,
+        }))
+    }
+
+    /// `ReservedSpace.follow`, for every copy whose target moved: `reserveStep`
+    /// says grow now, shrink after `RESERVE_SHRINK_MS`, or nothing (which
+    /// also cancels a pending shrink). The first target is taken at once
+    /// (`Component.onCompleted`).
+    fn reserve_follow(&mut self, now: u64) {
+        let views = self.notch_views();
+        let mut moves: Vec<(Key, f64)> = Vec::new();
+        for nv in views.iter().filter(|v| !v.guest) {
+            for cs in &nv.copy_screens {
+                if let Some(t) = self.reserve_target(nv, cs) {
+                    let key = (nv.key.clone(), cs.clone());
+                    if self.copies.get(&key).is_some_and(|c| c.target != Some(t)) {
+                        moves.push((key, t));
+                    }
+                }
+            }
+        }
+        for (key, target) in moves {
+            let Some(c) = self.copies.get_mut(&key) else {
+                continue;
+            };
+            c.target = Some(target);
+            let Some(held) = c.space else {
+                c.space = Some(target);
+                continue;
+            };
+            match state::reserve_step(held, target) {
+                state::ReserveStep::Later => {
+                    self.timers
+                        .after(Timer::Shrink(key), now, RESERVE_SHRINK_MS);
+                }
+                state::ReserveStep::None => {
+                    self.timers.cancel(&Timer::Shrink(key));
+                }
+                state::ReserveStep::Now => {
+                    self.timers.cancel(&Timer::Shrink(key.clone()));
+                    if let Some(c) = self.copies.get_mut(&key) {
+                        c.space = Some(target);
+                    }
+                }
+            }
+        }
+    }
+
+    /// `shrinkTimer.onTriggered`: `space = target`.
+    fn reserve_settle(&mut self, key: &Key) {
+        let views = self.notch_views();
+        let target = views
+            .iter()
+            .find(|v| v.key == key.0)
+            .and_then(|nv| self.reserve_target(nv, &key.1));
+        if let (Some(t), Some(c)) = (target, self.copies.get_mut(key)) {
+            c.space = Some(t);
+        }
+    }
+
+    /// `state.reserve`: `State.reserveZones` over every copy's space, on the
+    /// screens it keeps clear, along its notch's edge.
+    fn reserve_state(&self, views: &[NotchView]) -> Vec<ps::Reserve> {
+        let mut reserves = Vec::new();
+        for nv in views.iter().filter(|v| !v.guest) {
+            for cs in &nv.copy_screens {
+                let space = self
+                    .copies
+                    .get(&(nv.key.clone(), cs.clone()))
+                    .and_then(|c| c.space);
+                reserves.push(space.map(|space| state::Reserve {
+                    screens: self.reserved_screens(nv, cs),
+                    edge: nv.pos.edge.clone(),
+                    space,
+                }));
+            }
+        }
+        state::reserve_zones(&reserves)
+            .into_iter()
+            .filter_map(|(zone, depth)| {
+                let (screen, edge) = zone.rsplit_once('|')?;
+                Some(ps::Reserve {
+                    screen: screen.to_string(),
+                    edge: to_edge(edge),
+                    depth: Num(depth),
+                })
+            })
+            .collect()
+    }
+
+    /// How long a guest's window lingers after it closes (5000 ms; tests and
+    /// the daemon's own tests shorten it).
+    pub fn set_window_linger(&mut self, ms: u64) {
+        self.window_linger = ms;
+    }
+
+    // ----------------------------------------------------------- schema
+
+    /// A module's settings descriptor, as its JSON file or `module.json`
+    /// gives it: `{ moduleId, title, settings, standalone }`.
+    pub fn set_module_def(&mut self, def: Value) {
+        if let Some(id) = def.get("moduleId").and_then(Value::as_str) {
+            self.module_defs.insert(id.to_string(), def.clone());
+        }
+    }
+
+    /// The schema as last sent (what a UI that just connected gets).
+    pub fn schema(&self) -> Option<Schema> {
+        self.last_schema.clone()
+    }
+
+    pub fn remove_module_def(&mut self, id: &str) {
+        self.module_defs.remove(id);
+    }
+
+    /// The `schema` for the config, screens and modules now (rev 0: the
+    /// rev is given as it is sent).
+    pub fn compute_schema(&self) -> Schema {
+        let notches = config::notches(&self.config, &DEFAULT_MODULES);
+        let catalog: Vec<Value> = self.module_defs.values().cloned().collect();
+        let screens: Vec<String> = self.screen_names();
+        schema::build(&schema::Inputs {
+            config: &self.config,
+            notches: &notches,
+            settings_notch: self.settings_notch,
+            screens: &screens,
+            supports_workspaces: self.screens.as_ref().is_some_and(|s| s.supports_workspaces),
+            catalog: &catalog,
+            default_modules: &DEFAULT_MODULES,
+        })
+    }
+
     // -------------------------------------------------------------- ipc
 
     /// IPC `state` (docs/ipc.md): the JSON string.
@@ -1534,7 +1847,7 @@ impl Store {
             .collect();
         let standalone: Vec<Value> = views
             .iter()
-            .filter(|v| v.guest)
+            .filter(|v| v.guest && !v.visitor)
             .map(|nv| {
                 let copies: Vec<Value> = nv
                     .copy_screens
@@ -1551,6 +1864,24 @@ impl Store {
                 })
             })
             .collect();
+        // The visitor's copies that show something (`NotchService.state`).
+        let visitor: Vec<Value> = views
+            .iter()
+            .filter(|v| v.visitor)
+            .flat_map(|nv| {
+                nv.copy_screens.iter().filter_map(|cs| {
+                    let v = self.copy_view(nv, cs);
+                    let peek = self
+                        .copies
+                        .get(&(nv.key.clone(), cs.clone()))
+                        .and_then(|c| c.peek.as_ref())
+                        .map_or(Value::Null, |p| json!(p.module));
+                    v.open().then(
+                        || json!({"screen": v.screen, "mode": to_mode_str(v.mode), "peek": peek}),
+                    )
+                })
+            })
+            .collect();
         let modules: Vec<Value> = self
             .modules
             .values()
@@ -1559,7 +1890,7 @@ impl Store {
         json!({
             "navigation": selected_id.map(|id| json!({"notch": id})).unwrap_or(Value::Null),
             "notches": notches,
-            "visitor": [],
+            "visitor": visitor,
             "standalone": standalone,
             "modules": modules,
         })

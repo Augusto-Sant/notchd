@@ -721,3 +721,344 @@ fn wire_keys_read_as_navigate_key_names() {
     assert_eq!(wire_key("F13", &[]), KeyName::Other);
     assert_eq!(wire_key("Return", &[]), KeyName::Open);
 }
+
+// ------------------------------------------------------------------ visitor
+
+fn visitor_store() -> Store {
+    let mut s = Store::new();
+    s.set_config(json!({
+        "modules": ["media"], "position": {"screen": "DP-2"},
+        "hoverOpenDelay": 100, "hoverCloseDelay": 200
+    }));
+    s.set_screens(screens(&["DP-1", "DP-2"], "DP-1"));
+    s.set_module(module("media", 50.0));
+    s.take_changes(0);
+    s
+}
+
+#[test]
+fn a_peek_that_no_notch_shows_on_the_focused_screen_goes_to_the_visitor() {
+    // `NotchService.requestPeek`: the notch is kept on DP-2, you work on DP-1.
+    let mut s = visitor_store();
+    assert!(
+        s.state().visitor.iter().all(|c| c.mode == Mode::Rest),
+        "a copy per screen, closed"
+    );
+    s.request_peek("media", Some(1000.0), 0);
+    let st = s.take_changes(0).state.unwrap();
+    let modes: Vec<_> = st
+        .visitor
+        .iter()
+        .map(|c| (c.screen.as_str(), c.mode))
+        .collect();
+    assert_eq!(modes, [("DP-1", Mode::Peek), ("DP-2", Mode::Rest)]);
+    let peek = st.visitor[0].peek.as_ref().unwrap();
+    assert_eq!((peek.module.as_str(), peek.until), ("media", 1000));
+    assert!(
+        st.notches[0].copies[0].peek.is_some(),
+        "and the notch itself"
+    );
+    let ipc: Value = serde_json::from_str(&s.ipc_state()).unwrap();
+    assert_eq!(
+        ipc["visitor"],
+        json!([{"screen": "DP-1", "mode": "peek", "peek": "media"}]),
+        "ipc state lists the copies that show something"
+    );
+    s.advance(1000);
+    let ipc: Value = serde_json::from_str(&s.ipc_state()).unwrap();
+    assert_eq!(ipc["visitor"], json!([]));
+}
+
+#[test]
+fn no_visitor_peek_while_a_notch_peeks_on_the_focused_screen() {
+    let mut s = visitor_store();
+    s.set_screens(screens(&["DP-1", "DP-2"], "DP-2"));
+    s.request_peek("media", Some(1000.0), 0);
+    let st = s.take_changes(0).state.unwrap();
+    assert!(st.visitor.iter().all(|c| c.mode == Mode::Rest));
+    // With the focused screen unknown the visitor is never needed either.
+    let mut s = visitor_store();
+    s.set_screens(screens(&["DP-1", "DP-2"], ""));
+    s.request_peek("media", Some(1000.0), 0);
+    assert!(s.state().visitor.iter().all(|c| c.mode == Mode::Rest));
+}
+
+#[test]
+fn a_focused_screen_peek_with_no_notch_there_only_peeks_in_the_visitor() {
+    let mut s = visitor_store();
+    let mut m = module("media", 50.0);
+    m.peek_on_focused_screen = true;
+    s.set_module(m);
+    s.request_peek("media", Some(1000.0), 0);
+    let st = s.take_changes(0).state.unwrap();
+    assert_eq!(st.visitor[0].mode, Mode::Peek);
+    assert!(st.notches[0].copies[0].peek.is_none(), "once, not twice");
+}
+
+#[test]
+fn a_standalone_module_never_goes_to_the_visitor() {
+    let mut s = visitor_store();
+    let mut osd = ModuleFacts::new("osd");
+    osd.standalone = true;
+    osd.info.peek = true;
+    s.set_module(osd);
+    s.request_peek("osd", Some(1000.0), 0);
+    let st = s.take_changes(0).state.unwrap();
+    assert!(st.visitor.iter().all(|c| c.mode == Mode::Rest));
+    assert_eq!(st.standalone[0].id, "osd");
+}
+
+// ------------------------------------------------------------------- linger
+
+#[test]
+fn a_guests_window_lingers_after_it_closes_then_drops() {
+    // `NotchCopy.windowLinger`: a guest has a window while open and 5 s after.
+    let mut s = visitor_store();
+    let needs = |s: &Store| {
+        s.state()
+            .visitor
+            .iter()
+            .map(|c| c.needs_window)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(needs(&s), [false, false], "closed, never open: no window");
+    s.request_peek("media", Some(1000.0), 0);
+    s.take_changes(0);
+    assert_eq!(needs(&s), [true, false], "open");
+    s.advance(1000);
+    s.take_changes(1000);
+    assert_eq!(s.state().visitor[0].mode, Mode::Rest);
+    assert_eq!(needs(&s), [true, false], "closed, lingering");
+    s.advance(5999);
+    assert_eq!(needs(&s), [true, false]);
+    s.advance(6000);
+    assert_eq!(needs(&s), [false, false], "5000 ms after it closed");
+    assert!(
+        s.state().notches[0].copies.iter().all(|c| c.needs_window),
+        "a notch of the config always has its window"
+    );
+}
+
+#[test]
+fn a_standalone_copy_lingers_too_and_a_reopen_restarts_it() {
+    let mut s = store(cfg());
+    let mut osd = ModuleFacts::new("osd");
+    osd.standalone = true;
+    osd.info.peek = true;
+    s.set_module(osd);
+    s.set_window_linger(300);
+    s.request_peek("osd", Some(400.0), 0);
+    s.take_changes(0);
+    assert!(s.state().standalone[0].copies[0].needs_window);
+    s.advance(400);
+    s.request_peek("osd", Some(400.0), 500);
+    s.advance(900);
+    s.take_changes(900);
+    assert!(
+        s.state().standalone[0].copies[0].needs_window,
+        "second close at 900"
+    );
+    s.advance(1199);
+    assert!(s.state().standalone[0].copies[0].needs_window);
+    s.advance(1200);
+    assert!(!s.state().standalone[0].copies[0].needs_window);
+}
+
+// ------------------------------------------------------------------ reserve
+
+fn reserve_store(cfg: Value) -> Store {
+    let mut s = Store::new();
+    s.set_config(cfg);
+    s.set_screens(screens(&["DP-1"], "DP-1"));
+    s.set_module(module("media", 50.0));
+    s.take_changes(0);
+    s
+}
+
+fn depth(s: &Store) -> Option<f64> {
+    s.state().reserve.first().map(|r| r.depth.0)
+}
+
+#[test]
+fn nothing_is_reserved_until_the_ui_measures_and_not_without_reserve_space() {
+    let mut s = reserve_store(json!({"modules": ["media"], "reserveSpace": true}));
+    assert!(s.state().reserve.is_empty());
+    s.measure("main", "", 6.0, 0.0, 30.0);
+    s.take_changes(0);
+    assert_eq!(depth(&s), Some(30.0), "a compact module: baseline");
+    let r = &s.state().reserve[0];
+    assert_eq!((r.screen.as_str(), r.edge), ("DP-1", Edge::Top));
+
+    let mut s = reserve_store(json!({"modules": ["media"]}));
+    s.measure("main", "", 6.0, 0.0, 30.0);
+    s.take_changes(0);
+    assert!(s.state().reserve.is_empty(), "reserveSpace is off");
+}
+
+#[test]
+fn the_rest_lip_is_reserved_without_a_compact_view_rounded_up() {
+    let mut s = reserve_store(json!({"modules": ["media"], "reserveSpace": true}));
+    let mut m = module("media", 50.0);
+    m.info.active = false;
+    s.set_module(m);
+    s.measure("main", "", 5.2, 0.0, 30.0);
+    s.take_changes(0);
+    assert_eq!(depth(&s), Some(6.0), "ceil(rest)");
+}
+
+#[test]
+fn the_tallest_compact_view_counts_and_the_space_grows_at_once_and_shrinks_later() {
+    let mut s = reserve_store(json!({"modules": ["media"], "reserveSpace": true}));
+    s.measure("main", "", 6.0, 0.0, 30.0);
+    s.take_changes(0);
+    s.measure("main", "", 6.0, 44.5, 30.0);
+    s.take_changes(1000);
+    assert_eq!(depth(&s), Some(45.0), "grows at once");
+    // The compact view is shallower again: the tallest seen is kept.
+    s.measure("main", "", 6.0, 20.0, 30.0);
+    s.take_changes(2000);
+    assert_eq!(depth(&s), Some(45.0));
+    // The baseline moving (the theme rescaled) forgets the tallest.
+    s.measure("main", "", 6.0, 20.0, 28.0);
+    s.take_changes(3000);
+    assert_eq!(s.next_due(), Some(3400), "shrinks after the animation");
+    assert_eq!(depth(&s), Some(45.0), "held until then");
+    s.advance(3399);
+    assert_eq!(depth(&s), Some(45.0));
+    s.advance(3400);
+    s.take_changes(3400);
+    assert_eq!(depth(&s), Some(28.0));
+}
+
+#[test]
+fn a_module_ending_as_another_starts_moves_windows_once() {
+    // `reserveStep`: a shrink waits, and a target back at the held depth
+    // cancels it.
+    let mut s = reserve_store(json!({"modules": ["media"], "reserveSpace": true}));
+    s.measure("main", "", 6.0, 0.0, 30.0);
+    s.take_changes(0);
+    let mut off = module("media", 50.0);
+    off.info.active = false;
+    s.set_module(off);
+    s.take_changes(1000);
+    assert_eq!(depth(&s), Some(30.0), "the rest lip is shallower: waits");
+    assert_eq!(s.next_due(), Some(1400));
+    s.set_module(module("media", 50.0));
+    s.take_changes(1100);
+    assert_eq!(
+        s.next_due(),
+        None,
+        "back at the held depth: the shrink is cancelled"
+    );
+    assert_eq!(depth(&s), Some(30.0));
+    // Gone altogether: not a shrink but nothing to keep, now.
+    let mut s2 = reserve_store(json!({"modules": ["media"], "reserveSpace": true}));
+    s2.measure("main", "", 6.0, 0.0, 30.0);
+    s2.take_changes(0);
+    s2.set_value("reserveSpace", Some(&json!(false)));
+    s2.take_changes(10);
+    assert!(s2.state().reserve.is_empty(), "dropped at once");
+}
+
+#[test]
+fn notches_on_one_edge_do_not_add_up_and_a_notch_on_its_home_screen_reserves_there_only() {
+    let mut s = Store::new();
+    s.set_config(json!({"reserveSpace": true, "notches": [
+        {"id": "a", "modules": ["media"], "position": {"screen": "DP-1"}},
+        {"id": "b", "modules": ["media"], "position": {"screen": "DP-2"}},
+        {"id": "c", "modules": ["media"], "position": {"screen": "DP-2", "edge": "left"}}
+    ]}));
+    s.set_screens(screens(&["DP-1", "DP-2"], "DP-1"));
+    s.set_module(module("media", 50.0));
+    s.measure("a", "", 6.0, 0.0, 30.0);
+    s.measure("b", "", 6.0, 0.0, 40.0);
+    s.measure("c", "", 6.0, 0.0, 22.0);
+    s.take_changes(0);
+    let got: Vec<_> = s
+        .state()
+        .reserve
+        .iter()
+        .map(|r| (r.screen.clone(), r.edge, r.depth.0))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("DP-1".to_string(), Edge::Top, 30.0),
+            ("DP-2".to_string(), Edge::Left, 22.0),
+            ("DP-2".to_string(), Edge::Top, 40.0),
+        ]
+    );
+}
+
+#[test]
+fn a_copy_per_screen_reserves_on_its_own_screen() {
+    let mut s = Store::new();
+    s.set_config(
+        json!({"reserveSpace": true, "modules": ["media"], "position": {"screen": "all"}}),
+    );
+    s.set_screens(screens(&["DP-1", "DP-2"], "DP-1"));
+    s.set_module(module("media", 50.0));
+    s.measure("main", "DP-1", 6.0, 0.0, 30.0);
+    s.measure("main", "DP-2", 6.0, 0.0, 34.0);
+    s.take_changes(0);
+    let got: Vec<_> = s
+        .state()
+        .reserve
+        .iter()
+        .map(|r| (r.screen.clone(), r.depth.0))
+        .collect();
+    assert_eq!(
+        got,
+        [("DP-1".to_string(), 30.0), ("DP-2".to_string(), 34.0)]
+    );
+}
+
+#[test]
+fn a_measure_for_no_notch_is_ignored() {
+    let mut s = reserve_store(json!({"modules": ["media"], "reserveSpace": true}));
+    s.measure("zzz", "", 6.0, 0.0, 30.0);
+    s.take_changes(0);
+    assert!(s.state().reserve.is_empty());
+}
+
+// ------------------------------------------------------------------- schema
+
+#[test]
+fn the_schema_rev_moves_only_when_the_schema_changes() {
+    let mut s = store(cfg());
+    // `store()` took the first changes (and with them the first schema).
+    assert!(s.take_changes(1).schema.is_none());
+    s.set_value("hoverOpenDelay", Some(&json!(300)));
+    let next = s.take_changes(2).schema.expect("a value changed");
+    assert!(next.rev > 0);
+    let f = next
+        .fields
+        .iter()
+        .find(|f| f.key.as_deref() == Some("hoverOpenDelay"))
+        .unwrap();
+    assert_eq!(f.value, json!(300));
+    assert!(s.take_changes(3).schema.is_none());
+    // A module's page appears with its definition and goes with it.
+    s.set_module_def(json!({"moduleId": "weather", "title": "Weather",
+        "settings": [{"key": "city", "type": "string", "label": "City", "default": "Berlin"}]}));
+    let with = s.take_changes(4).schema.expect("a page");
+    assert!(with.pages.iter().any(|p| p.id == "modules/weather"));
+    assert!(with.rev > next.rev);
+    s.remove_module_def("weather");
+    let without = s.take_changes(5).schema.expect("gone");
+    assert!(!without.pages.iter().any(|p| p.id == "modules/weather"));
+}
+
+#[test]
+fn showing_a_notchs_page_picks_the_notch_the_schema_edits() {
+    let mut s = store(json!({"notches": [{"id": "a", "modules": ["media"]}, {"id": "b"}]}));
+    s.settings(true, Some("notch/1".into()));
+    let schema = s.compute_schema();
+    assert!(
+        schema
+            .fields
+            .iter()
+            .any(|f| f.key.as_deref() == Some("notches.1.id"))
+    );
+    assert!(schema.pages.iter().any(|p| p.id == "notch/1"));
+}

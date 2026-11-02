@@ -153,13 +153,18 @@ Entities and their messages:
    "copies":[{"screen":"DP-1","mode":"compact","pinned":false,"tab":"media",
               "peek":null,"shown":["media"],"covered":false,"needsWindow":true,"keyboard":false}]}],
  "reserve":[{"screen":"DP-1","edge":"top","depth":34}],
- "standalone":[{"id":"osd","copies":[{"screen":"DP-1","mode":"rest","peek":null}]}]}
+ "standalone":[{"id":"osd","copies":[{"screen":"DP-1","mode":"rest","peek":null,"needsWindow":false}]}],
+ "visitor":[{"screen":"DP-1","mode":"rest","peek":null,"needsWindow":false}]}
 ```
 ```json
 {"t":"module","id":"media","rev":7,"title":"Now playing","priority":50,"active":true,"icon":"","attention":false,
  "expandedWidth":400,"urgentPeek":false,"peekOnFocusedScreen":false,"error":null}
 ```
 `mode` is `rest | compact | peek | expanded` (`State.mode`). `navigation` is `null`, or `{"mode":"select|move|remove","selected":0,"tab":""}` (`Navigate.step`'s state: the selected notch's index and the tab it shows, `""` for its own). `peek` is `{"module":"media","view":"peek","until":1730000000000}` (`view` is a slot name, `until` epoch milliseconds); the UI shows the module's `peek` view while it is set. The UI derives nothing from time: the core clears `peek`.
+
+`reserve` is the depth to keep free per screen edge: `State.reserveZones` over every copy of a notch with `reserveSpace` (the deepest wins where notches share an edge). The core cannot measure a card, so the UI reports the depths with `measure` (below) and the core applies `State.reservedSpace` (the rest lip, or a compact view's depth, the deepest seen and never under the baseline) and `State.reserveStep` (grow at once, shrink 400 ms later, in the core: `reserve-applied` is not needed). `reserve` is empty until a UI has measured.
+
+`standalone` and `visitor` hold the guest notches: a standalone module's own, and the visitor (`NotchService.visitor`), the default notch that peeks at the top of the focused screen when no notch showing the module is there. Both list a copy per screen, with `needsWindow` as `State.needsWindow` says for a guest: true while the copy is open and for 5000 ms after it closes (the window linger), so a UI keeps a window only while it is true. The visitor's copies are named by the notch id `""` in `pointer`, `key` and `tab`. `ipc state` lists the visitor's copies that show something, as `NotchService.state()` does.
 
 ### View
 
@@ -193,6 +198,7 @@ Sent on hello and on any change. This is the adapter contract of `GenericComposi
 {"t":"tab","notch":"main","screen":"DP-1","module":"timer"}
 {"t":"settings","open":true,"page":"modules/media"}
 {"t":"reserve-applied","screen":"DP-1","edge":"top","depth":34}
+{"t":"measure","notch":"main","screen":"DP-1","rest":6,"compact":34,"baseline":30}
 ```
 
 - `pointer`: raw facts; the core owns `hoverOpenDelay`, `hoverCloseDelay` and decides `mode`. `press` pins (`State`'s click rule).
@@ -200,7 +206,8 @@ Sent on hello and on any change. This is the adapter contract of `GenericComposi
 - `drag`: `ev` is only `drop` in v1. The UI computes the drop (`Position.dragTarget`, `screenAt`) and reports the result; the core stores `position` (config edit, never writes a default). While dragging the UI shows its own preview; the core's mode does not change until the drop.
 - `key`: while a notch holds the keyboard. `key` is a normalized name (`"a"`, `"Escape"`, `"Tab"`, `"Left"`, `"Return"`, `"1"`); `mods` from `shift|ctrl|alt|meta`. In navigation and while a module with a text field is focused the core replies by changing `state`; keys the core does not use come back as nothing.
 - `event`: a primitive's `action` fired. `value` is always present: `null`, a number (a `progress` seek, as a fraction), a string, or a boolean; never an object or array.
-- `reserve-applied`: optional ack for `reserve`, to let the core run `reserveStep`'s "shrink 400 ms after collapse" against what is actually mapped.
+- `measure`: the depths the UI measured for one notch copy (`screen` as in `pointer`: `""` for the one that moves): `rest`, the rest lip's depth (`restDepth`); `compact`, the compact view shown now, 0 when none (`compactDepth`; the core keeps the deepest seen, and forgets it when `baseline` or the edge's orientation changes); `baseline`, the least depth reserved for a compact view (`compactBaseline`, 0 on a side edge). Sent when one changes. The core answers with `state.reserve`.
+- `reserve-applied`: optional ack for `reserve`. The daemon ignores it: the shrink delay runs in the core.
 
 ### Requests (UI, CLI, scripts)
 
@@ -234,7 +241,7 @@ The schema is core-built; the settings window is a UI.
             "min":0,"max":2000,"step":20,"unit":"ms","default":120,"value":120,"visible":true,"locked":null}]}
 ```
 
-Field types are the existing ones ([settings.md](settings.md); each is one control plus one case in `SettingRow.qml`): `choice`, `integer`, `number`, `boolean`, `string`, `color`, `modules`, `workspaces`, `notches`, `moduleCatalog`, `component`, `components` and `note`. A field also carries, when set, `help`, `options` (`[{value,label,preview?,disabled?}]`, `disabled` being `needs` resolved), `display` (`cards|chips|percent`), `when` (`{key,is}`), and for a `component` its `component` id and the `row` the core computes (free-form in v1); `key` is absent on a `note` and a `component` row. `match`/`by` and `needs` are resolved by the core and never reach the UI. A `null` `default` or `value` is left out. `value` is current, `default` from the schema, `visible` is `Settings.shownFields`'s answer, `locked` is `Components.lock`'s reason or `null`. The UI sends `set` or `edit` and waits for the next `schema`. Component rows (`type: "component"`) carry the view `Components.view` computes (title, status, size text, buttons as action ids), and a button press is `{"t":"ipc","method":"component","args":["install","voice-piper-pt-br"]}`; progress arrives as `schema` updates, read by the core from the installer's state files, as `ComponentStore.qml` does today.
+Field types are the existing ones ([settings.md](settings.md); each is one control plus one case in `SettingRow.qml`): `choice`, `integer`, `number`, `boolean`, `string`, `color`, `modules`, `workspaces`, `notches`, `moduleCatalog`, `component`, `components` and `note`. The `schema` is sent after `config` and again whenever the config, the screens or a module's page change it; it holds the pages with a field (the core's, a page per notch, and a user module's own from its `module.json` `settings`) and the fields with their current `value` and `visible`. A `moduleCatalog` field carries `part` (`notch`, `agent`, `terminal` or `standalone`), the list of the Modules page it stands for. (Not in it yet: the Components page and the built-in modules' pages, which stay in QML.) A field also carries, when set, `help`, `options` (`[{value,label,preview?,disabled?}]`, `disabled` being `needs` resolved), `display` (`cards|chips|percent`), `when` (`{key,is}`), and for a `component` its `component` id and the `row` the core computes (free-form in v1); `key` is absent on a `note` and a `component` row. `match`/`by` and `needs` are resolved by the core and never reach the UI. A `null` `default` or `value` is left out. `value` is current, `default` from the schema, `visible` is `Settings.shownFields`'s answer, `locked` is `Components.lock`'s reason or `null`. The UI sends `set` or `edit` and waits for the next `schema`. Component rows (`type: "component"`) carry the view `Components.view` computes (title, status, size text, buttons as action ids), and a button press is `{"t":"ipc","method":"component","args":["install","voice-piper-pt-br"]}`; progress arrives as `schema` updates, read by the core from the installer's state files, as `ComponentStore.qml` does today.
 
 Theme is **not** in the protocol. Each UI maps the token set to its own source and applies it (`Theme.provider` today).
 
@@ -458,7 +465,7 @@ How a host finds and launches the daemon (options considered):
 
 Rule for every phase: **Linux behaviour is identical at its end and `make check` passes** (all layers, CLAUDE.md). The strategy is a strangler: the Rust core grows a slice at a time behind a feature the QML reads through `DaemonClient`; the QML rules it replaces are deleted only after the slice's QML tests pass against the daemon.
 
-**Status.** Tasks 0.1 and 0.2 are done: all six crates exist under `native/` (`native/Cargo.toml`, `native/rust-toolchain.toml`), `make rust` runs, and `notchd-proto` has every type of this protocol with fixtures (`tests/protocol/`: `to-ui/`, `to-daemon/`, `to-module/`, `from-module/`, `tree/`, `canvas/`, `provider/`, `manifest/`, one file per message). Phase 1's ports ran ahead of 0.3: every rule file in the inventory is in `notchd-core`, with the `position` config half, and JS semantics live once in `native/notchd-core/src/js.rs`. The shared `tests/vectors/rules/` check JS and Rust against the same cases (`knownDiff` marks the accepted differences). Phase 2.1 to 2.5 are done (2.5: `scripts/ensure-daemon.sh`, `core/client/DaemonLauncher.qml`, see [hosts.md](hosts.md#the-daemon)): the QML client, the daemon core loop deciding in shadow (`store`, `peek`, `timers`, `hub`), and the user-module host.
+**Status.** Tasks 0.1 and 0.2 are done: all six crates exist under `native/` (`native/Cargo.toml`, `native/rust-toolchain.toml`), `make rust` runs, and `notchd-proto` has every type of this protocol with fixtures (`tests/protocol/`: `to-ui/`, `to-daemon/`, `to-module/`, `from-module/`, `tree/`, `canvas/`, `provider/`, `manifest/`, one file per message). Phase 1's ports ran ahead of 0.3: every rule file in the inventory is in `notchd-core`, with the `position` config half, and JS semantics live once in `native/notchd-core/src/js.rs`. The shared `tests/vectors/rules/` check JS and Rust against the same cases (`knownDiff` marks the accepted differences). Phase 2.1 to 2.5 are done (2.5: `scripts/ensure-daemon.sh`, `core/client/DaemonLauncher.qml`, see [hosts.md](hosts.md#the-daemon)): the QML client, the daemon core loop deciding in shadow (`store`, `peek`, `timers`, `hub`), and the user-module host. The daemon's shadow `state` has the visitor, the reserve (from the UI's `measure`) and the guests' window linger, sends the `schema`, and runs the user modules of `<config dir>/modules/` (logs in `$XDG_STATE_HOME/notchd/logs`): a module's facts and peeks reach the store, its views and an error row reach the UIs as `module` and `view`, a UI `event` goes to it (`restart` restarts it), and `shutdown` stops every module process before the daemon exits. A user module runs while a notch lists it (or it is standalone) and the config does not disable it. Built-in modules stay QML in this phase.
 
 A new `make rust` (`cargo fmt --all --check`, `clippy -D warnings`, `cargo test --workspace`) joins `make test`'s unit layer and `make check`. Every Rust test is hermetic (temp `XDG_*`, `NOTCHD_CONFIG`, random socket names under a temp dir).
 
