@@ -919,6 +919,10 @@ ShellRoot {
       root.check(visitor.copies.every(function(c) { return !c.needsWindow }),
                  "a closed visitor copy wants a window: " + visitor.copies.map(function(c) { return c.mode }))
       root.check(multi.notches[0].copies.every(function(c) { return c.needsWindow }), "a notch of the config lost its window")
+      // The module's peek view is the daemon's, and Activities has none until
+      // something is pushed: a peek of an empty one is no peek.
+      root.push("linger", false)
+      yield root.settle(multi)
       multi.requestPeek(multi.moduleById("activities"), 400)
       yield root.settle(multi)
       var copy = visitor.copyOn("B")
@@ -929,6 +933,7 @@ ShellRoot {
       yield root.waitFor(function() { return !copy.needsWindow })
       root.check(!copy.needsWindow, "the window stayed after the linger")
       yield root.nested(function(resume) { multi.client.ipc("test-linger", ["5000"], function() { resume() }) })
+      root.clearActivities(multi)
       multi.replaceConfig(saved)
     })
   }
