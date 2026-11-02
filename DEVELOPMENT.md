@@ -16,6 +16,7 @@ Working on notchd itself. For using it, see the [README](README.md); for the rul
 | Omarchy 4 | | the Omarchy host, `make validate`, `make restart` |
 | `qmltermwidget` (optional) | `qmltermwidget` | the Linux UI's terminal view for `claude`, `codex` and your terminals (`make deps`); without it their QML tests only check the message that asks for it |
 | `curl` | `curl` | the daemon's plan-usage requests (tests use a fake network) |
+| GNOME Shell (optional) | `gnome-shell`, `mutter-devkit`, `python-gobject`; `podman` for GNOME 46 | the GNOME extension (`hosts/gnome/`): `make gnome-dev`, `make gnome-test`, and the `-46` ones. Not needed for `make check`; your session stays what it is |
 | The voice modules' parts (optional) | none to develop: Settings › Components installs them (table below). Tests use fakes (a fake bridge, a fake LocalAI and `voxtype`, fake `pacman` and a local download server), so `make check` needs none | Voice, Codex Live |
 
 ## Optional components
@@ -146,6 +147,18 @@ qs -p . ipc call notchd settings
 ```
 
 `make dev` builds the daemon and runs it as its own `dev` instance (`NOTCHD_INSTANCE`, the dev config), never the `default` one a real shell uses; a dev daemon of an earlier build is stopped first, since the daemon outlives the shell. It hot-reloads on every QML change, core included (a Rust change needs `make dev` again). Next to the Omarchy host it draws a second notch, on IPC target `notchd`. The daemon's own commands: `native/target/release/notchd ipc <method>`, `notchd attach term:<id>`; with `NOTCHD_INSTANCE=dev NOTCHD_CONFIG=build/dev-config.json` they reach the dev instance.
+
+The GNOME extension (`hosts/gnome/`, work in progress: docs/architecture.md, "GNOME UI") runs in a GNOME session inside a window of your desktop, whatever it is:
+
+```sh
+make gnome-dev                # gnome-shell --devkit, its own daemon, config, D-Bus and runtime dir
+make gnome-test               # the extension in a headless GNOME Shell, two monitors, the real daemon
+make gnome-zip                # build/gnome-ext/: the folder and the zip for extensions.gnome.org
+make gnome-dev-46             # GNOME 46 (Ubuntu 24.04) from a podman image, in an X11 window (Xwayland)
+make gnome-test-46            # the headless tests on GNOME 46, in that image
+```
+
+`make gnome-dev` prints the session's socket: `NOTCHD_SOCKET=<it> native/target/release/notchd ipc push '{...}'` drives its daemon. Extensions do not hot-reload: close the window and run it again. `scripts/gnome-build.sh` assembles the extension, copying the UI-side `core/` files into `lib/` as ES modules.
 
 ## The gate
 

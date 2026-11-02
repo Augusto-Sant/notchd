@@ -1,0 +1,8 @@
+{
+  "uuid": "notchd@eryk-vieira.github.io",
+  "name": "notchd",
+  "description": "A notch at the top of the screen that shows what your system is doing: media, timers, activities, agents. Needs the notchd daemon.",
+  "shell-version": ["46", "47", "48", "49", "50", "51"],
+  "url": "https://github.com/eryk-vieira/notchd",
+  "version-name": "0.4.0"
+}
