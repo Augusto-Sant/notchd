@@ -7,7 +7,7 @@ use crate::num::Num;
 use crate::request::{Edit, ErrReply, EventValue, Ipc, OkReply, Set};
 use crate::settings::{Field, Page};
 use crate::state::State;
-use crate::surface::{SurfaceMsg, SurfaceOpen, SurfaceRef};
+use crate::surface::{Attach, SurfaceMsg, SurfaceOpen, SurfaceRef};
 use crate::tree::Node;
 use crate::version::{MAX_VIEW_BYTES, PROTO};
 use serde::{Deserialize, Serialize};
@@ -121,7 +121,7 @@ pub enum ToDaemon {
     #[serde(rename = "surface")]
     Surface(SurfaceMsg),
     #[serde(rename = "attach")]
-    Attach(SurfaceRef),
+    Attach(Attach),
 }
 
 impl ToDaemon {
@@ -195,6 +195,10 @@ pub struct Welcome {
     pub config: String,
     /// The theme token set the UI maps to its own source.
     pub tokens: Vec<String>,
+    /// The daemon's own binary, for a UI that draws a terminal with a widget
+    /// that only runs programs (`notchd attach`, see the free surface).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
 }
 
 /// The resolved config: `cfg` as in the file, `resolved` with defaults filled

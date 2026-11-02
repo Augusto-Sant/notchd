@@ -113,7 +113,7 @@ function modulePageId(moduleId) { return "modules/" + moduleId }
 // a place of its own), whether it is an `agent` (a coding agent in a
 // terminal: `"agent": { "command": ... }`, which brings the fields every
 // agent has, agentSettings; `"usage"` there names where its plan usage
-// comes from, core/Usage.js, as `usage`) and whether it is `live` (a spoken
+// comes from, native/notchd-core/src/usage.rs, as `usage`) and whether it is `live` (a spoken
 // conversation with an agent: `"live": { "command": ... }`, which brings
 // liveSettings). Anything malformed is dropped, so a bad file
 // costs the module its page and nothing else; `error` says why.
@@ -264,7 +264,7 @@ function localLiveSettings(name, next) {
   ]
 }
 
-// The fields of a program in a terminal (TerminalModule), an agent or one
+// The fields of a program in a terminal (native/notchd-modules/src/term.rs), an agent or one
 // of your own: folder, command (`command` its default), when it stops,
 // size, font. `name` names it in the texts; `emptyDir` says where it
 // starts without a folder, `idle` what stopping when idle does.

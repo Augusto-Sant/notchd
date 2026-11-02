@@ -50,6 +50,8 @@ NotchModule {
   // slot's Component changes, so a new tree must not make a new one.
   component SlotView: ViewTree {
     property string slot: ""
+    // What a surface (a terminal) in the view asks its daemon of: the service.
+    readonly property var surfaceHost: module.notch
     tree: module.tree(slot)
     onAction: (actionId, value) => { if (module.daemon) module.daemon.event(module.moduleId, slot, actionId, value) }
   }

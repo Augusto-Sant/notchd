@@ -9,7 +9,9 @@ pub mod local_live;
 pub mod media;
 pub mod module;
 pub mod osd;
+pub mod plan;
 pub mod resources;
+pub mod term;
 pub mod terminal;
 pub mod timer;
 pub mod tree;
@@ -18,12 +20,14 @@ pub use module::{CoreModule, Ctx, Effect, Facts};
 
 /// The ids of the modules that live in the daemon. A module moves here (and
 /// out of the UI's own list of built-ins) when its logic is ported.
-pub const IDS: &[&str] = &["activities", "osd", "resources", "timer"];
+pub const IDS: &[&str] = &["activities", "claude", "codex", "osd", "resources", "timer"];
 
 /// A fresh instance of a module of [`IDS`].
 pub fn create(id: &str) -> Option<Box<dyn CoreModule>> {
     Some(match id {
         "activities" => Box::new(activities::Activities::new()),
+        "claude" => Box::new(claude::new()),
+        "codex" => Box::new(codex::new()),
         "osd" => Box::new(osd::Osd::new()),
         "resources" => Box::new(resources::Resources::new()),
         "timer" => Box::new(timer::Timer::new()),
@@ -35,6 +39,8 @@ pub fn create(id: &str) -> Option<Box<dyn CoreModule>> {
 pub fn title(id: &str) -> &'static str {
     match id {
         "activities" => "Activities",
+        "claude" => "Claude",
+        "codex" => "Codex",
         "osd" => "OSD",
         "resources" => "Resources",
         "timer" => "Timer",

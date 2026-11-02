@@ -1,7 +1,8 @@
 {
  "message": "attach",
  "valid": [
-  {"t":"attach","ref":"term:claude"}
+  {"t":"attach","ref":"term:claude"},
+  {"t":"attach","ref":"term:claude","cols":100,"rows":30}
  ],
  "invalid": [
   {"why":"ref missing","json":{"t":"attach"}}

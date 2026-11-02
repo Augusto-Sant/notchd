@@ -8,13 +8,20 @@
 //! the hub owns the lock, the clock and the providers.
 
 use crate::modstate::Mods;
+use crate::ptyhost::{Note, PtyHost, Session};
 use notchd_core::store::Store;
+use notchd_modules::module::PtyCmd;
+use notchd_modules::plan::Ask;
 use notchd_modules::{CoreModule, Ctx, Effect};
 use notchd_proto::common::Mode;
 use notchd_proto::{EventValue, Slot, ToUi};
 use notchd_providers::notifications::Notifier;
-use serde_json::Value;
-use std::collections::BTreeMap;
+use notchd_providers::pty::PtySpec;
+use notchd_providers::usage::{self as usage_provider, Curl, Http};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
 /// The IPC methods a module of the daemon answers, by module. A method of
 /// one that is not loaded is answered `<id> module not loaded`.
@@ -23,7 +30,16 @@ const METHODS: &[(&str, &str)] = &[
     ("clear", "activities"),
     ("timer", "timer"),
     ("osd", "osd"),
+    ("claude", "claude"),
+    ("codex", "codex"),
 ];
+
+/// The agents `agent <id> ...` takes, in the order they are listed.
+const AGENTS: &[&str] = &["claude", "codex"];
+
+/// How the daemon reads its environment: a closure, so tests give it their
+/// own (a scratch `HOME`, no real login).
+pub type Env = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// The module that owns an IPC method.
 pub fn owner(method: &str) -> Option<&'static str> {
@@ -41,6 +57,14 @@ pub struct CoreHost {
     /// The system's readings feed `resources`; off once a test hook gave it
     /// demo values.
     pub sampling: bool,
+    /// The programs of the terminal modules, and what they (and the plan
+    /// usage's requests) tell their modules.
+    ptys: PtyHost,
+    notes: Option<Sender<Note>>,
+    env: Env,
+    http: Arc<dyn Http>,
+    /// Some UI can draw a terminal (`surfaces` of its `hello`).
+    terminal_ui: bool,
 }
 
 impl Default for CoreHost {
@@ -56,7 +80,52 @@ impl CoreHost {
             due: BTreeMap::new(),
             notifier,
             sampling: true,
+            ptys: PtyHost::default(),
+            notes: None,
+            env: Arc::new(|k| std::env::var(k).ok()),
+            http: Arc::new(Curl),
+            terminal_ui: false,
         }
+    }
+
+    /// The environment the terminals' programs and the usage requests read
+    /// (`HOME`, `CLAUDE_CONFIG_DIR`, `NOTCHD_OFFLINE`).
+    pub fn with_env(mut self, env: Env) -> CoreHost {
+        self.env = env;
+        self
+    }
+
+    /// What asks the network for the plan usage.
+    pub fn with_http(mut self, http: Arc<dyn Http>) -> CoreHost {
+        self.http = http;
+        self
+    }
+
+    /// Where the modules' terminals and usage requests report to: the hub
+    /// feeds each note to its module.
+    pub fn set_notes(&mut self, notes: Sender<Note>) {
+        self.ptys.set_notes(notes.clone());
+        self.notes = Some(notes);
+    }
+
+    /// Some UI connected can (not) draw a terminal.
+    pub fn set_terminal_ui(&mut self, on: bool) {
+        self.terminal_ui = on;
+    }
+
+    /// The session of a terminal module, for a view to attach to.
+    pub fn session(&self, id: &str) -> Option<Arc<Session>> {
+        self.ptys.session(id)
+    }
+
+    /// The size a program starts at: the first view's.
+    pub fn set_size_hint(&mut self, cols: u16, rows: u16) {
+        self.ptys.hint = (cols, rows);
+    }
+
+    /// Stops every terminal's program (the daemon is going).
+    pub fn stop_terminals(&mut self) {
+        self.ptys.stop_all();
     }
 
     pub fn has(&self, id: &str) -> bool {
@@ -102,35 +171,53 @@ impl CoreHost {
             .flat_map(|n| n.module_ids)
             .collect();
         let mut out = Vec::new();
-        for id in notchd_modules::IDS {
-            let Some(probe) = self
-                .loaded
-                .get(id)
-                .map(|m| m.standalone())
-                .or_else(|| notchd_modules::create(id).map(|m| m.standalone()))
-            else {
-                continue;
-            };
+        // The modules of the daemon, and a terminal for each entry of the
+        // config's `terminals`; one that left the config is unloaded.
+        let dynamic: Vec<&'static str> = notchd_modules::terminal::ids(&cfg)
+            .iter()
+            .map(|i| notchd_modules::terminal::intern(i))
+            .collect();
+        let mut candidates: BTreeSet<&'static str> = notchd_modules::IDS.iter().copied().collect();
+        candidates.extend(dynamic.iter().copied());
+        candidates.extend(self.loaded.keys().copied());
+        let make = |id: &str| -> Option<Box<dyn CoreModule>> {
+            notchd_modules::create(id).or_else(|| {
+                dynamic
+                    .contains(&id)
+                    .then(|| Box::new(notchd_modules::terminal::new(id)) as Box<dyn CoreModule>)
+            })
+        };
+        for id in candidates {
+            let known = notchd_modules::IDS.contains(&id) || dynamic.contains(&id);
+            let probe = known
+                && self
+                    .loaded
+                    .get(id)
+                    .map(|m| m.standalone())
+                    .or_else(|| make(id).map(|m| m.standalone()))
+                    .unwrap_or(false);
             let off = notchd_core::config::value_at(&cfg, &format!("{id}.enabled"))
                 == Some(&Value::Bool(false));
             // A standalone module belongs to a host (the OSD to the one that
             // forwards its IPC target): it runs once the host declares it.
-            let wanted = if probe {
-                !off && store.ui_declares(id)
-            } else {
-                listed.iter().any(|l| l == id)
-            };
+            let wanted = known
+                && if probe {
+                    !off && store.ui_declares(id)
+                } else {
+                    listed.iter().any(|l| l == id)
+                };
             if wanted && !self.loaded.contains_key(id) {
-                if let Some(m) = notchd_modules::create(id) {
+                if let Some(m) = make(id) {
                     self.loaded.insert(id, m);
                 }
             } else if !wanted && self.loaded.remove(id).is_some() {
                 self.due.remove(id);
+                // Its program goes with it, as its terminal did.
+                self.ptys.stop(id);
+                store.set_module_extra(id, None);
                 out.extend(mods.apply(
                     store,
-                    crate::modhost::ModEvent::Removed {
-                        module: (*id).into(),
-                    },
+                    crate::modhost::ModEvent::Removed { module: id.into() },
                     now,
                 ));
             }
@@ -157,8 +244,12 @@ impl CoreHost {
             Some(at) => self.due.insert(m.id(), at),
             None => self.due.remove(m.id()),
         };
-        let title = notchd_modules::title(id);
-        let out = mods.set_builtin(store, id, title, m.standalone(), &facts, views);
+        let title = m
+            .title()
+            .unwrap_or_else(|| notchd_modules::title(id).to_string());
+        let standalone = m.standalone();
+        store.set_module_extra(id, m.state_extra());
+        let out = mods.set_builtin(store, id, &title, standalone, &facts, views);
         for e in effects {
             match e {
                 Effect::Peek(ms) => store.request_peek(id, Some(f64::from(ms)), now),
@@ -168,9 +259,65 @@ impl CoreHost {
                         n.notify(&title, &body);
                     }
                 }
+                Effect::Pty(cmd) => self.pty_command(id, cmd),
+                Effect::Usage(ask) => self.ask_usage(id, ask),
+                Effect::Notch(op) => store.module_op(id, op, now),
             }
         }
         out
+    }
+
+    /// What a terminal module asked of its program.
+    fn pty_command(&mut self, id: &str, cmd: PtyCmd) {
+        match cmd {
+            PtyCmd::Start(s) => {
+                let home = (self.env)("HOME").unwrap_or_default();
+                let spec = PtySpec {
+                    program: s.program,
+                    args: s.args,
+                    cwd: Some(notchd_core::terminal::expand_home(Some(&s.dir), &home)),
+                    env: vec![("TERM".into(), "xterm-256color".into())],
+                    cols: 0,
+                    rows: 0,
+                };
+                self.ptys.start(id, s.run, spec);
+            }
+            PtyCmd::Stop => self.ptys.stop(id),
+            PtyCmd::Write(bytes) => self.ptys.write(id, &bytes),
+        }
+    }
+
+    /// Asks the plan usage on a thread of its own, so a slow network never
+    /// holds the hub; the answer comes back as a note. Offscreen runs and
+    /// tests (`NOTCHD_OFFLINE`) never ask.
+    fn ask_usage(&self, id: &str, ask: Ask) {
+        if (self.env)("NOTCHD_OFFLINE").as_deref() == Some("1") {
+            return;
+        }
+        let Some(notes) = self.notes.clone() else {
+            return;
+        };
+        let (env, http, id) = (
+            Arc::clone(&self.env),
+            Arc::clone(&self.http),
+            id.to_string(),
+        );
+        let _ = std::thread::Builder::new()
+            .name("notchd-usage".into())
+            .spawn(move || {
+                let mut data = usage_provider::fetch(
+                    ask.provider,
+                    ask.unless_login_is,
+                    usage_provider::epoch_ms(),
+                    &*env,
+                    &*http,
+                );
+                data["id"] = json!(id);
+                let _ = notes.send(Note {
+                    provider: "usage",
+                    data,
+                });
+            });
     }
 
     /// An IPC method of a module of the daemon: the answer and what changed.
@@ -183,8 +330,38 @@ impl CoreHost {
         args: &[String],
         now: u64,
     ) -> Option<(String, Vec<ToUi>)> {
-        let id = owner(method)?;
-        let ctx = Self::ctx(store, id);
+        let id = match method {
+            // `agent <id> ...` and `terminal <id> ...` name the module in
+            // their first argument.
+            "agent" => {
+                let want = args.first().map_or("", String::as_str);
+                match AGENTS.iter().find(|a| **a == want) {
+                    Some(a) => *a,
+                    None => {
+                        return Some((
+                            format!("no agent {want}; agents: {}", AGENTS.join(", ")),
+                            Vec::new(),
+                        ));
+                    }
+                }
+            }
+            "terminal" => {
+                let want = args.first().map_or("", String::as_str);
+                let list = notchd_modules::terminal::ids(store.config());
+                if !list.iter().any(|t| t == want) {
+                    let named = if list.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; terminals: {}", list.join(", "))
+                    };
+                    return Some((format!("no terminal {want}{named}"), Vec::new()));
+                }
+                notchd_modules::terminal::intern(want)
+            }
+            _ => owner(method)?,
+        };
+        let mut ctx = Self::ctx(store, id);
+        ctx.terminal_ui = self.terminal_ui;
         let Some(m) = self.loaded.get_mut(id) else {
             return Some((format!("{id} module not loaded"), Vec::new()));
         };
@@ -228,6 +405,38 @@ impl CoreHost {
             out.extend(self.settle(store, mods, id, now));
         }
         out
+    }
+
+    /// What happened to one module's terminal or usage request (`pty`,
+    /// `usage`): fed to that module alone.
+    pub fn feed_to(
+        &mut self,
+        store: &mut Store,
+        mods: &mut Mods,
+        id: &str,
+        provider: &str,
+        data: &Value,
+        now: u64,
+    ) -> Vec<ToUi> {
+        let Some(m) = self.loaded.get_mut(id) else {
+            return Vec::new();
+        };
+        m.feed(provider, data, now);
+        self.settle(store, mods, id, now)
+    }
+
+    /// The views attached to a terminal module's session are `n` now (the
+    /// first one starts the program).
+    pub fn pty_views(
+        &mut self,
+        store: &mut Store,
+        mods: &mut Mods,
+        id: &str,
+        n: usize,
+        now: u64,
+    ) -> Vec<ToUi> {
+        let data = json!({"id": id, "event": "views", "n": n});
+        self.feed_to(store, mods, id, "pty", &data, now)
     }
 
     /// Runs the modules whose time has come.

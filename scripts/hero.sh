@@ -34,7 +34,7 @@ cp -- "$root/tests/qml/TestService.qml" "$scratch/config/TestService.qml"
 
 # Cut off from the session, with the demo player as the only MPRIS player,
 # and the demo `claude` and `codex` (tests/visual/bin), state in the scratch dir.
-NOTCHD_TEST_DAEMON="$root/native/target/release/notchd" NOTCHD_TEST_SOCKETS="$scratch/sock" \
+NOTCHD_TEST_DAEMON="$root/native/target/release/notchd" NOTCHD_TEST_SOCKETS="$scratch/sock" NOTCHD_TEST_HOOKS=1 \
   NOTCHD_VISUAL_DIR="$scratch/out" NOTCHD_HERO_FILE="$scratch/out/hero.png" \
   XDG_STATE_HOME="$scratch/out/state" CLAUDE_CONFIG_DIR="$scratch/out/claude" \
   PATH="$root/tests/visual/bin:$PATH" \

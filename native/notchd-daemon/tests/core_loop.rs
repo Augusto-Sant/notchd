@@ -236,7 +236,7 @@ fn ipc_set_navigate_and_state_work_over_the_socket() {
     };
     let v: Value = serde_json::from_str(&o.result.unwrap()).unwrap();
     assert_eq!(v["notches"][0]["id"], "main");
-    let id = ui.ipc("agent", &["claude", "toggle"]);
+    let id = ui.ipc("live", &["codex-live", "toggle"]);
     assert!(matches!(replied(&mut ui, id), ToUi::Err(e) if e.code == "method"));
 }
 

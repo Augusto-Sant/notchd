@@ -142,6 +142,11 @@ impl FakeUi {
 
     /// Connects and sends `hello` with this proto.
     pub fn connect_with_proto(socket: &Path, proto: u32) -> FakeUi {
+        FakeUi::connect_with_surfaces(socket, proto, &[])
+    }
+
+    /// Connects and sends `hello` saying which free surfaces it can draw.
+    pub fn connect_with_surfaces(socket: &Path, proto: u32, surfaces: &[&str]) -> FakeUi {
         let mut ui = FakeUi::connect(socket);
         ui.send(&ToDaemon::Hello(Hello {
             proto,
@@ -150,7 +155,7 @@ impl FakeUi {
             instance: "default".into(),
             caps: Caps {
                 primitives: ["row", "column", "text"].map(String::from).to_vec(),
-                surfaces: Vec::new(),
+                surfaces: surfaces.iter().map(|s| s.to_string()).collect(),
                 webview: false,
                 canvas: false,
             },

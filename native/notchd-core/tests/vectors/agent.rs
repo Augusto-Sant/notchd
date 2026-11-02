@@ -1,4 +1,4 @@
-//! `core/Agent.js` against `notchd_core::agent`. A missing title is `""`.
+//! `agent.json` (from the removed `core/Agent.js`) against `notchd_core::agent`. A missing title is `""`.
 use super::*;
 use notchd_core::agent as g;
 

@@ -8,11 +8,8 @@ export const SOURCES = {
   'config.json': 'core/Config.js',
   'settings.json': 'core/settings/Settings.js',
   'position.json': 'core/Position.js',
-  'usage.json': 'core/Usage.js',
-  'agent.json': 'core/Agent.js',
   'live.json': 'core/Live.js',
-  'components.json': 'core/Components.js',
-  'terminal.json': 'core/Terminal.js'
+  'components.json': 'core/Components.js'
 };
 
 // `{"$undefined": true}` stands for JS `undefined`, as an argument and as a result.

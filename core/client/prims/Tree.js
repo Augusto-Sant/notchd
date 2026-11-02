@@ -66,3 +66,15 @@ function check(node, depth) {
   }
   return ""
 }
+
+// The `surfaceHost` of the nearest ancestor that has one (the ViewTree a
+// module's slot is drawn in, which CoreModule gives its service), or null.
+function hostOf(item) {
+  var p = item.parent
+  while (p) {
+    var found = p.surfaceHost
+    if (found !== undefined && found !== null) return found
+    p = p.parent
+  }
+  return null
+}

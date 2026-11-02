@@ -204,6 +204,8 @@ impl CopyView {
 #[derive(Debug, Default)]
 pub struct Store {
     config: Value,
+    /// What a module adds to its entry of `state` (an agent's plan usage).
+    module_extras: BTreeMap<String, Value>,
     config_loaded: bool,
     config_rev: u64,
     config_dirty: bool,
@@ -415,7 +417,17 @@ impl Store {
 
     pub fn remove_module(&mut self, id: &str) {
         self.modules.remove(id);
+        self.module_extras.remove(id);
         self.dismiss_peek(id);
+    }
+
+    /// What a module adds to its entry of the IPC `state` (`usage`, an
+    /// agent's plan limits); `None` takes it away.
+    pub fn set_module_extra(&mut self, id: &str, extra: Option<Value>) {
+        match extra {
+            Some(v) => self.module_extras.insert(id.to_string(), v),
+            None => self.module_extras.remove(id),
+        };
     }
 
     pub fn module(&self, id: &str) -> Option<&ModuleFacts> {
@@ -2091,7 +2103,13 @@ impl Store {
         let modules: Vec<Value> = self
             .modules
             .values()
-            .map(|m| json!({"id": m.info.id, "active": m.info.active, "priority": Num(m.info.priority)}))
+            .map(|m| {
+                let mut o = json!({"id": m.info.id, "active": m.info.active, "priority": Num(m.info.priority)});
+                if let Some(u) = self.module_extras.get(&m.info.id) {
+                    o["usage"] = u.clone();
+                }
+                o
+            })
             .collect();
         json!({
             "navigation": selected_id.map(|id| json!({"notch": id})).unwrap_or(Value::Null),

@@ -1,5 +1,5 @@
-//! Port of `core/Agent.js` (tests: the agent ones in `tests/agent.test.mjs`;
-//! its Terminal ones belong to `terminal.rs`).
+//! The rules of the coding agents' modules (ported from `core/Agent.js`, gone
+//! with 3.5; its tests live on as `tests/vectors/rules/agent.json`).
 //!
 //! Coding agents in the notch, each in its own terminal UI. What the closed
 //! notch shows comes from the terminal's title, which the agent sets itself.

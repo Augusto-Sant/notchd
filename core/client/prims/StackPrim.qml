@@ -20,10 +20,13 @@ PrimBase {
 
   Repeater {
     id: layers
-    model: stack.node.children
+    // The count, not the list: a new list of the same shape (every `view` is one)
+    // must not remake the children, or a terminal in one would start over.
+    model: stack.node.children ? stack.node.children.length : 0
     delegate: ViewTree {
-      required property var modelData
-      tree: modelData
+      required property int index
+      readonly property var child: stack.node.children[index]
+      tree: child
       depth: stack.depth + 1
       x: stack.start ? 0 : stack.end ? stack.width - width : (stack.width - width) / 2
       y: stack.start ? 0 : stack.end ? stack.height - height : (stack.height - height) / 2

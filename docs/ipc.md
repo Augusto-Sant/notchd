@@ -22,7 +22,7 @@ Every host exposes the same methods on its `ipcTarget`. The CLI depends on the h
 | `settings` | open or close the settings window |
 | `recenter` | put every notch back in the middle of the top edge, following focus (removes each `position`) |
 | `set <key> <json>` | change one config key, as the settings window does; an empty value resets it |
-| `state` | as JSON: `navigation` (the notch selected while navigating, else null), `notches`, each with its id, reserved space, workspaces, position (where it is), whether it can be dragged, its modules and its `copies` (screen, mode and current peek of each); each `standalone` module's place and the copies that show it; and every loaded module, with an agent's plan `usage` (its limits, whether they are stale and why) |
+| `state` | as JSON: `navigation` (the notch selected while navigating, else null), `notches`, each with its id, reserved space, workspaces, position (where it is), whether it can be dragged, its modules and its `copies` (screen, mode and current peek of each); each `standalone` module's place and the copies that show it; and every loaded module, with an agent's plan `usage` (its limits, whether they are stale and why; only `notchd ipc state` has it, not the host's own target) |
 | `shutdown` | the daemon only (`notchd ipc shutdown`; the QML service has no such target): the daemon replies `ok`, closes its socket and exits. What `notchd daemon --ensure` uses to replace a daemon of another version |
 
 ```sh
@@ -125,7 +125,7 @@ omarchy-shell eryk.notchd agent claude "ask what does EXDEV mean?"
 omarchy-shell eryk.notchd agent codex "ask explain: $(wl-paste --primary)"   # the selected text, as one line
 ```
 
-It answers `ok`, `no notch shows <id>`, `the terminal needs the qmltermwidget package`, the usage, `<id> module not loaded` when no notch lists it, or `no agent <id>` with the agents there are.
+It answers `ok`, `the terminal needs the qmltermwidget package` (no UI connected can draw a terminal), the usage, `<id> module not loaded` when no notch lists it, or `no agent <id>` with the agents there are. The agents live in the daemon, which answers: `notchd ipc agent claude ...` prints those. The shell's own target (`omarchy-shell eryk.notchd agent ...`) cannot wait for the daemon and answers `ok` once it has sent the command (it still answers `no agent <id>` and `<id> module not loaded`, which it knows). The program runs in the daemon, so an agent keeps running through a shell reload (`make restart`) and the notch comes back to the same session.
 
 ## Live
 
@@ -154,4 +154,4 @@ bind = SUPER ALT, B, exec, omarchy-shell eryk.notchd terminal btop toggle
 omarchy-shell eryk.notchd terminal shell "ask git status"
 ```
 
-It answers as `agent` does, with `no terminal <id>` and the terminals there are for an unknown one.
+It answers as `agent` does, with `no terminal <id>` and the terminals there are for an unknown one. A terminal's program also lives in the daemon and survives a shell reload; `notchd attach term:<id>` shows it on your terminal, which is how the notch's view is made on Linux ([architecture.md](architecture.md#free-surface-tier-3)).

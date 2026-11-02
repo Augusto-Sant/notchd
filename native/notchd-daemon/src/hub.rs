@@ -26,6 +26,7 @@
 use crate::corehost::CoreHost;
 use crate::modhost::{ModEvent, ModHost};
 use crate::modstate::Mods;
+use crate::ptyhost::{Attached, Note, Session};
 use crate::router;
 use notchd_core::store::{Changes, Store};
 use notchd_proto::module::ModuleEvent;
@@ -82,6 +83,15 @@ struct Client {
     tx: Sender<ToUi>,
     /// Said `hello`: gets the broadcasts. A CLI connection gets replies only.
     subscribed: bool,
+    /// Its `hello` said it can draw a terminal (`surfaces`).
+    terminals: bool,
+}
+
+/// What a view attaching to a terminal gets: its session, and the session's
+/// side of the attachment (the output so far and the queue of what follows).
+pub struct HubAttach {
+    pub session: Arc<Session>,
+    pub att: Attached,
 }
 
 struct Inner {
@@ -172,6 +182,14 @@ impl Inner {
 impl Hub {
     /// A hub reading the config at `config_path` now.
     pub fn new(instance: &str, config_path: &Path) -> Arc<Hub> {
+        Hub::with_core(instance, config_path, CoreHost::default())
+    }
+
+    /// A hub whose modules of the daemon run on `core` (tests give it a fake
+    /// environment and network).
+    pub fn with_core(instance: &str, config_path: &Path, mut core: CoreHost) -> Arc<Hub> {
+        let (notes_tx, notes_rx) = channel::<Note>();
+        core.set_notes(notes_tx);
         let hub = Arc::new(Hub {
             inner: Mutex::new(Inner {
                 store: Store::new(),
@@ -180,7 +198,7 @@ impl Hub {
                 last_text: None,
                 stop: false,
                 mods: Mods::new(),
-                core: CoreHost::default(),
+                core,
                 host_told: BTreeMap::new(),
             }),
             modhost: Mutex::new(None),
@@ -193,7 +211,98 @@ impl Hub {
         hub.poll_config(&mut g);
         let _ = hub.publish(&mut g);
         drop(g);
+        // What the terminals and the usage requests report: fed to the
+        // module they belong to, on a thread of its own (the readers of the
+        // programs' output never take the hub's lock).
+        let weak = Arc::downgrade(&hub);
+        thread::Builder::new()
+            .name("notchd-notes".into())
+            .spawn(move || {
+                for note in notes_rx {
+                    match weak.upgrade() {
+                        Some(hub) => hub.on_note(&note),
+                        None => break,
+                    }
+                }
+            })
+            .expect("spawn the notes thread");
         hub
+    }
+
+    /// A terminal's or a usage request's report, for its module.
+    fn on_note(&self, note: &Note) {
+        let Some(id) = note.data.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        let mut g = self.lock();
+        let now = self.clock.now();
+        let Inner {
+            core, store, mods, ..
+        } = &mut *g;
+        let msgs = core.feed_to(store, mods, id, note.provider, &note.data, now);
+        self.announce_core(&mut g, msgs);
+        let _ = self.publish(&mut g);
+        drop(g);
+        self.wake.notify_all();
+    }
+
+    // ---------------------------------------------------------- terminals
+
+    /// A view attaches to the terminal `reference` (`term:<module id>`): the
+    /// module hears of it (the first view starts its program) and the view
+    /// gets the session. `cols` and `rows` are the size of the view, which the
+    /// program starts at.
+    pub fn pty_attach(
+        &self,
+        reference: &str,
+        cols: Option<u32>,
+        rows: Option<u32>,
+    ) -> Result<HubAttach, String> {
+        let id = reference
+            .strip_prefix("term:")
+            .ok_or_else(|| format!("no surface {reference}"))?;
+        let mut g = self.lock();
+        let now = self.clock.now();
+        if !g.core.has(id) {
+            return Err(format!("no terminal {id}: its module is not loaded"));
+        }
+        if let (Some(c), Some(r)) = (cols, rows) {
+            g.core
+                .set_size_hint(c.clamp(1, 1000) as u16, r.clamp(1, 1000) as u16);
+        }
+        let before = g.core.session(id).map_or(0, |s| s.views());
+        let Inner {
+            core, store, mods, ..
+        } = &mut *g;
+        let msgs = core.pty_views(store, mods, id, before + 1, now);
+        let session = g
+            .core
+            .session(id)
+            .ok_or_else(|| format!("no terminal {id}: it did not start"))?;
+        let att = session.attach();
+        self.announce_core(&mut g, msgs);
+        let _ = self.publish(&mut g);
+        drop(g);
+        self.wake.notify_all();
+        Ok(HubAttach { session, att })
+    }
+
+    /// The view is gone: its session stays.
+    pub fn pty_detach(&self, session: &Arc<Session>, sub: u64) {
+        session.detach(sub);
+        let mut g = self.lock();
+        let now = self.clock.now();
+        let id = session.id.clone();
+        // The module's current session, which may be a newer one.
+        let n = g.core.session(&id).map_or(0, |s| s.views());
+        let Inner {
+            core, store, mods, ..
+        } = &mut *g;
+        let msgs = core.pty_views(store, mods, &id, n, now);
+        self.announce_core(&mut g, msgs);
+        let _ = self.publish(&mut g);
+        drop(g);
+        self.wake.notify_all();
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -277,13 +386,31 @@ impl Hub {
             id,
             tx,
             subscribed: false,
+            terminals: false,
         });
         (id, rx)
     }
 
     /// Closes a connection's channel; its writer thread then ends.
     pub fn unregister(&self, client: u64) {
-        self.lock().clients.retain(|c| c.id != client);
+        let mut g = self.lock();
+        g.clients.retain(|c| c.id != client);
+        let any = g.clients.iter().any(|c| c.terminals);
+        g.core.set_terminal_ui(any);
+    }
+
+    /// The handshake's first half: what the UI can draw (a terminal needs the
+    /// UI's say so), then [`Hub::subscribe`].
+    pub fn hello(&self, client: u64, hello: &notchd_proto::ui::Hello) {
+        {
+            let mut g = self.lock();
+            if let Some(c) = g.clients.iter_mut().find(|c| c.id == client) {
+                c.terminals = hello.caps.surfaces.iter().any(|s| s == "terminal");
+            }
+            let any = g.clients.iter().any(|c| c.terminals);
+            g.core.set_terminal_ui(any);
+        }
+        self.subscribe(client);
     }
 
     pub fn send(&self, client: u64, msg: ToUi) {
@@ -302,6 +429,9 @@ impl Hub {
                 daemon: VERSION.into(),
                 instance: self.instance.clone(),
                 config: self.config_path.display().to_string(),
+                exe: std::env::current_exe()
+                    .ok()
+                    .map(|p| p.display().to_string()),
                 tokens: Token::ALL
                     .iter()
                     .filter_map(|t| serde_json::to_value(t).ok()?.as_str().map(String::from))
@@ -577,6 +707,8 @@ impl Hub {
         if let Some(host) = host {
             host.stop_all();
         }
+        // The terminals' programs end with the daemon.
+        self.lock().core.stop_terminals();
     }
 
     // ----------------------------------------------------------- ticker
@@ -616,6 +748,10 @@ impl Hub {
                 .unwrap_or_else(|p| p.into_inner())
                 .0;
         }
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.lock().stop
     }
 
     pub fn stop(&self) {

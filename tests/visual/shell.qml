@@ -200,16 +200,19 @@ ShellRoot {
       timerDoneSvc.requestPeek(timerDoneSvc.moduleById("timer"), 600000)
       claudeSvc.setConfigValue("claude.directory", root.outDir)
       claudeSvc.open()
-      // The plan's limits, by hand: offscreen nothing asks the network.
-      claudeSvc.moduleById("claude").usage.apply({ limits: [
+      // The agents live in the daemon: its test hooks (NOTCHD_TEST_HOOKS) give
+      // them a title and the plan's limits by hand (offscreen nothing asks
+      // the network).
+      var hook = function(svc, id, args) { svc.client.ipc("test-" + id, args, null) }
+      hook(claudeSvc, "claude", ["usage", JSON.stringify({ limits: [
         { kind: "session", group: "session", percent: 42, resets_at: new Date(Date.now() + 130 * 60000).toISOString() },
         { kind: "weekly_all", group: "weekly", percent: 83, resets_at: new Date(Date.now() + 3 * 86400000).toISOString() },
         { kind: "weekly_scoped", group: "weekly", percent: 5, resets_at: new Date(Date.now() + 3 * 86400000).toISOString(),
-          scope: { model: { display_name: "Fable" } } } ] })
-      claudeBusySvc.moduleById("claude").status = { working: true, title: "Convert HEIC photos to JPG" }
+          scope: { model: { display_name: "Fable" } } } ] })])
+      hook(claudeBusySvc, "claude", ["title", "◐ Convert HEIC photos to JPG"])
       codexSvc.setConfigValue("codex.directory", root.outDir)
       codexSvc.open()
-      codexBusySvc.moduleById("codex").status = { working: true, title: "Fix the flaky login test" }
+      hook(codexBusySvc, "codex", ["title", "⠹ Fix the flaky login test | proj"])
       liveSvc.open()
       // Talking, with no bridge: its state by hand.
       liveClosedSvc.moduleById("codex-live").conv = { status: "live", error: "", packages: [], warning: "",
@@ -220,12 +223,11 @@ ShellRoot {
         agents[a].setConfigValue("codex.directory", root.outDir)
       }
       agentsStackSvc.setConfigValue("tabs", false)
-      agentsClosedSvc.moduleById("claude").status = { working: true, title: "Convert HEIC photos to JPG" }
-      agentsClosedSvc.moduleById("codex").status = { working: false, title: "Fix the flaky login test" }
-      agentsClosedSvc.moduleById("codex").attention = true
+      hook(agentsClosedSvc, "claude", ["title", "◐ Convert HEIC photos to JPG"])
+      hook(agentsClosedSvc, "codex", ["title", "Fix the flaky login test | proj", "attention"])
       agentsSideSvc.setConfigValue("position", { edge: "right", offset: 0.5 })
-      agentsSideSvc.moduleById("claude").status = { working: true, title: "" }
-      agentsSideSvc.moduleById("codex").attention = true
+      hook(agentsSideSvc, "claude", ["title", "◐ Claude Code"])
+      hook(agentsSideSvc, "codex", ["title", "", "attention"])
       agentsTabsSvc.open()
       agentsStackSvc.open()
       navSvc.setConfigValue("notches", [{ id: "Main", modules: ["media"] }, { id: "Computer", modules: ["resources"] }])

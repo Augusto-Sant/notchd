@@ -15,8 +15,12 @@ PrimBase {
   implicitHeight: prim.px(prim.node.h, prim.node.size === undefined ? 38 : prim.node.size)
   readonly property real corner: prim.node.radius === "round" ? Theme.radius : prim.node.radius === "small" ? Theme.radiusSmall : 0
   readonly property bool shaders: GraphicsInfo.api !== GraphicsInfo.Software
+  // A picture that is contained (a logo) has no fill behind it.
+  readonly property color backdrop: prim.node.fit === "contain" ? "transparent" : Theme.selected
   readonly property string src: {
     var s = prim.node.src === undefined ? "" : String(prim.node.src)
+    // `asset:<file>`: a mark the UI bundles (core/modules/claude.svg).
+    if (s.indexOf("asset:") === 0) return String(Qt.resolvedUrl("../../modules/" + s.slice(6)))
     return s === "" || s.indexOf("://") > 0 ? s : "file://" + s
   }
 
@@ -26,11 +30,11 @@ PrimBase {
   }
   Component {
     id: rounded
-    ClippingRectangle { radius: prim.corner; color: Theme.selected; ImageContent {} }
+    ClippingRectangle { radius: prim.corner; color: prim.backdrop; ImageContent {} }
   }
   Component {
     id: square
-    Rectangle { color: Theme.selected; clip: true; ImageContent {} }
+    Rectangle { color: prim.backdrop; clip: true; ImageContent {} }
   }
 
   component ImageContent: Item {
