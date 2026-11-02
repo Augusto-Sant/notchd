@@ -11,6 +11,7 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ### Changed
 
+- The Voice disc moves smoothly with the voice: each level eases over 140 ms instead of 90, so the disc no longer stops between the levels that come about ten times a second.
 - The daemon now carries its own built-in modules' settings (titles, fields, defaults) and the Python files it runs for voice and the optional components, so a host (the Omarchy plugin, and any later UI) no longer sends them or tells the daemon where its `core/` folder is: the release is the one `notchd` binary, which writes those files under `~/.local/share/notchd/sidecars/` the first time it needs them. Nothing changes on screen. `coreDir` in the `catalog` message still works but is deprecated; `NOTCHD_CORE_DIR` points the daemon at a checkout's files for development.
 
 ## [0.4.0] — 2026-11-02

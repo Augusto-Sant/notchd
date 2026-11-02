@@ -3,7 +3,8 @@ import "../.."
 import ".."
 
 // The Voice disc (native/notchd-modules/src/voice.rs): a 96 px accent disc with a line
-// border that swells with the level, `1 + value * .35` over 90 ms, and its
+// border that swells with the level, `1 + value * .35` over 140 ms (longer than
+// the time between levels, so it never stops between steps), and its
 // `child` (the microphone glyph) centered inside. Plain rectangles, so it
 // needs no shader. It reserves the room of the fully swollen disc, so the
 // swell never covers its neighbors.
@@ -20,7 +21,7 @@ PrimBase {
     height: width
     radius: width / 2
     scale: 1 + prim.level * 0.35
-    Behavior on scale { NumberAnimation { duration: 90 } }
+    Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
     color: Theme.accent
     border.width: 1
     border.color: Theme.line
