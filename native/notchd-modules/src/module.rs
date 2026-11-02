@@ -138,6 +138,10 @@ pub struct Ctx {
     pub peeking: bool,
     /// Some notch lists this module (so opening one can show it).
     pub listed: bool,
+    /// Some notch shows this module's expanded view now. The notch state's
+    /// word, answered with the request that opened it; a terminal's view
+    /// attaching is a later, separate event.
+    pub visible: bool,
 }
 
 /// A module that lives in the daemon.

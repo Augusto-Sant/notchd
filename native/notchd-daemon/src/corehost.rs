@@ -199,6 +199,7 @@ impl CoreHost {
         }
         let mut ctx = Ctx {
             listed: st.notches.iter().any(|n| n.modules.iter().any(|m| m == id)),
+            visible: Self::shown_of(store, id).visible,
             ..Ctx::default()
         };
         for (mode, peek) in seen {

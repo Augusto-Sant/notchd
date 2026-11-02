@@ -332,7 +332,10 @@ impl TermModule {
         let cmd = agent::parse_command(text);
         match cmd.action {
             Action::Toggle => {
-                self.effects.push(Effect::Notch(if self.views > 0 {
+                // By the notch state, not by the views attached: a terminal
+                // attaches a moment after its notch opens, and a toggle in
+                // between must still close it.
+                self.effects.push(Effect::Notch(if ctx.visible {
                     ModuleOp::Close
                 } else {
                     ModuleOp::Open
@@ -1079,9 +1082,16 @@ mod tests {
         // toggle opens, then closes while a view shows it.
         assert_eq!(say(&mut m, "toggle"), "ok");
         assert_eq!(m.take_effects(), vec![Effect::Notch(ModuleOp::Open)]);
-        feed(&mut m, json!({"id": "claude", "event": "views", "n": 1}), 1);
-        m.take_effects();
-        assert_eq!(say(&mut m, "toggle"), "ok");
+        // The notch is open on it, though no view attached yet.
+        let shown = Ctx {
+            visible: true,
+            ..ctx()
+        };
+        assert_eq!(
+            m.command(&shown, "claude", &["toggle".to_string()], 0)
+                .unwrap(),
+            "ok"
+        );
         assert_eq!(m.take_effects(), vec![Effect::Notch(ModuleOp::Close)]);
         // new starts another.
         assert_eq!(say(&mut m, "new"), "ok");

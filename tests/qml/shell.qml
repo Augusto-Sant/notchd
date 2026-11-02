@@ -2052,13 +2052,11 @@ ShellRoot {
       root.check(claudeSvc.agentCommand("claude", "toggle") === "ok", "toggle failed")
       yield root.settle(claudeSvc)
       root.check(copy.pinned, "toggle did not open the notch")
-      // The module hears of its view (the terminal attaching) before the
-      // toggle can close it; without a terminal there is no view to hear of.
-      if (claudeSvc.terminalAvailable) yield root.waitFor(function() { return !!root.terminalIn(claudeCard) }, 5000)
-      if (claudeSvc.terminalAvailable) yield root.wait(400)
+      // At once, before any terminal attached: the toggle goes by the notch
+      // state, not by a view that reports a moment later.
       root.check(claudeSvc.agentCommand("claude", "toggle") === "ok", "toggle again failed")
       yield root.settle(claudeSvc)
-      root.check(!copy.pinned || !claudeSvc.terminalAvailable, "toggle did not close the notch")
+      root.check(!copy.pinned, "toggle did not close the notch")
       root.check(claudeSvc.agentCommand("nope", "toggle").indexOf("no agent nope") === 0, "an unknown agent did not say so")
       claudeSvc.close()
       yield root.settle(claudeSvc)
