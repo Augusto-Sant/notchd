@@ -7,6 +7,7 @@ pub mod config;
 pub mod countdown;
 pub mod live;
 pub mod navigate;
+pub mod position;
 pub mod resources;
 pub mod settings;
 pub mod state;
