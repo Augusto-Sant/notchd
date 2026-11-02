@@ -1198,6 +1198,8 @@ ShellRoot {
       root.check(multi.moduleSetting("timer", "focus") === 50, "set: " + multi.moduleSetting("timer", "focus"))
       var media = multi.moduleCatalog.filter(function(m) { return m.moduleId === "media" })[0]
       root.check(!!media && media.title === "Now playing", "media: " + JSON.stringify(media))
+      // A loaded module's title is the daemon's own message, after the config's.
+      yield root.waitFor(function() { var m = multi.moduleById("activities"); return !!m && m.title === "Activities" })
       var activities = multi.moduleById("activities")
       root.check(!!activities && activities.title === "Activities", "loaded title: " + (activities ? activities.title : ""))
       multi.replaceConfig({})
