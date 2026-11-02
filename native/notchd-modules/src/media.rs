@@ -9,7 +9,7 @@
 //! track. It holds the closed notch while playing and for a minute after
 //! pausing, so a short pause does not make it jump back to rest.
 
-use crate::module::{CoreModule, Effect, Facts};
+use crate::module::{CoreModule, Effect, Facts, Shown};
 use crate::tree::{Settings, column, glyph, icon, node, row, text, with};
 use notchd_proto::provider::{MediaData, Player};
 use notchd_proto::{EventValue, Node, Slot};
@@ -37,6 +37,9 @@ pub struct Media {
     recent: bool,
     grace_due: Option<u64>,
     peek_due: Option<u64>,
+    /// Its expanded view is on screen: the only time its clock (what changes
+    /// by the second) is worth ticking.
+    visible: bool,
     effects: Vec<Effect>,
 }
 
@@ -51,6 +54,7 @@ impl Media {
             recent: false,
             grace_due: None,
             peek_due: None,
+            visible: false,
             effects: Vec::new(),
         };
         m.key = m.track_key();
@@ -377,6 +381,10 @@ impl CoreModule for Media {
         self.effects.push(Effect::Media(command));
     }
 
+    fn shown(&mut self, shown: Shown, _now: u64) {
+        self.visible = shown.visible;
+    }
+
     fn tick(&mut self, now: u64) {
         if self.grace_due.is_some_and(|at| at <= now) {
             self.grace_due = None;
@@ -389,11 +397,12 @@ impl CoreModule for Media {
     }
 
     /// The pause grace, the delayed peek, and, while a track with a known
-    /// length plays, the moment the seconds on the clock change.
+    /// length plays and the expanded view is on screen, the moment the seconds
+    /// on the clock change (a closed notch costs no per-second work).
     fn next_due(&self, now: u64) -> Option<u64> {
         let clock = self
             .chosen()
-            .filter(|p| p.playing && Self::length(p) > 0.0)
+            .filter(|p| self.visible && p.playing && Self::length(p) > 0.0)
             .map(|p| {
                 let ms = (self.position(p, now) * 1000.0) as u64;
                 now + (1000 - ms % 1000).max(1)
@@ -594,11 +603,42 @@ mod tests {
     #[test]
     fn the_clock_is_due_when_its_seconds_change() {
         let mut m = fed(vec![player("a", "Song", true)], T0);
+        m.shown(open(), T0);
         m.tick(T0 + 300);
         // Read at 92.000 s: the next second is 1000 ms on.
         assert_eq!(m.next_due(T0), Some(T0 + 1000));
         assert_eq!(m.next_due(T0 + 300), Some(T0 + 1000));
         assert_eq!(m.next_due(T0 + 1000), Some(T0 + 2000));
+    }
+
+    fn open() -> Shown {
+        Shown {
+            open: true,
+            visible: true,
+        }
+    }
+
+    #[test]
+    fn a_closed_notch_has_no_clock_to_tick() {
+        let mut m = fed(vec![player("a", "Song", true)], T0);
+        // Playing, but no expanded view on screen: no per-second work.
+        m.tick(T0 + 300);
+        assert_eq!(m.next_due(T0 + 300), None);
+        assert_eq!(m.next_due(T0 + 5000), None);
+        // Shown: the clock runs; hidden again: it stops.
+        m.shown(open(), T0 + 5000);
+        assert_eq!(m.next_due(T0 + 5000), Some(T0 + 6000));
+        m.shown(Shown::default(), T0 + 6000);
+        assert_eq!(m.next_due(T0 + 6000), None);
+        // A hover shows without opening: visible alone is enough.
+        m.shown(
+            Shown {
+                open: false,
+                visible: true,
+            },
+            T0 + 6000,
+        );
+        assert_eq!(m.next_due(T0 + 6000), Some(T0 + 7000));
     }
 
     #[test]

@@ -42,6 +42,11 @@ const AGENTS: &[&str] = &["claude", "codex"];
 /// The spoken conversations `live <id> ...` takes.
 const LIVES: &[&str] = &["codex-live", "local-live"];
 
+/// The modules told how the notches show them (`CoreModule::shown`): the
+/// conversations follow their notch opening, media ticks its clock only while
+/// its expanded view is on screen.
+const SHOWN_AWARE: &[&str] = &["codex-live", "local-live", "media"];
+
 /// How often the installer is asked for its state while the settings are
 /// open and something installs.
 const COMPONENT_POLL_MS: u64 = 1000;
@@ -240,7 +245,7 @@ impl CoreHost {
         let ids: Vec<&'static str> = self.loaded.keys().copied().collect();
         let mut out = Vec::new();
         for id in ids {
-            if !LIVES.contains(&id) {
+            if !SHOWN_AWARE.contains(&id) {
                 continue;
             }
             let shown = Self::shown_of(store, id);
