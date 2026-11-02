@@ -3,14 +3,13 @@
 //! `coreSettingsSchema`, `settingsSchema`) over [`crate::settings`] (module
 //! pages and fields, `shownFields`, `visiblePages`).
 //!
-//! Not in it yet: the Components page (`Components.overviewFields` and
-//! `Components.decorate` need the installed-component scan, which the
-//! daemon does not do), a built-in module's own page (the built-in modules
-//! stay QML in this phase; a user module's page comes from its
-//! `module.json`), and the host's own pages (`hostSettingsSchema`). A
-//! `choice`'s edge-card `preview` is a QML file, so the UI keys its previews
-//! on the field instead.
+//! The Components page (`components::overview_fields`) and the rows and the
+//! locked choices of the module pages (`decorate`, `gate`) are in it, from the
+//! registry and what the installer last said (`Inputs::components`). Not in
+//! it: the host's own fields (`hostSettingsSchema`). A `choice`'s edge-card
+//! `preview` is a QML file, so the UI keys its previews on the field instead.
 
+use crate::components;
 use crate::config::{self, NotchSpec};
 use crate::js;
 use crate::settings;
@@ -31,6 +30,15 @@ pub struct Inputs<'a> {
     /// `moduleCatalog`: `{ moduleId, title, settings, standalone }` per module.
     pub catalog: &'a [Value],
     pub default_modules: &'a [&'a str],
+    /// The optional components: without them there is no Components page.
+    pub components: Option<Components<'a>>,
+}
+
+/// The registry and what the installer said of it.
+pub struct Components<'a> {
+    pub catalog: &'a [components::Component],
+    /// `None` until the installer has been asked: nothing is locked meanwhile.
+    pub states: Option<&'a std::collections::BTreeMap<String, components::ComponentState>>,
 }
 
 /// `corePages`: the sidebar, with the Nerd Font code point of each icon.
@@ -218,7 +226,7 @@ fn to_field(f: &Value, shown: bool, value_of: &dyn Fn(&str) -> Option<Value>) ->
                     value: o.get("value").cloned().unwrap_or(Value::Null),
                     label: o.get("label").map(js::string).unwrap_or_default(),
                     preview: text(o.get("preview")),
-                    disabled: None,
+                    disabled: o.get("disabled").and_then(Value::as_bool).filter(|d| *d),
                 })
                 .collect(),
         ),
@@ -262,6 +270,30 @@ fn to_field(f: &Value, shown: bool, value_of: &dyn Fn(&str) -> Option<Value>) ->
 pub fn build(i: &Inputs) -> Schema {
     let mut loose = core_fields(i);
     loose.extend(settings::module_fields(i.catalog, ""));
+    let empty = std::collections::BTreeMap::new();
+    let mut shared_of: Box<dyn Fn(&components::Component) -> bool> = Box::new(|_| false);
+    if let Some(c) = &i.components {
+        let states = c.states.unwrap_or(&empty);
+        loose.extend(components::overview_fields(c.catalog, states));
+        let titles: std::collections::HashMap<String, String> = i
+            .catalog
+            .iter()
+            .filter_map(|m| {
+                let id = m.get("moduleId")?.as_str()?;
+                Some((id.to_string(), settings::module_title(id, Some(m))))
+            })
+            .collect();
+        let installed: Option<Vec<String>> = c.states.map(components::installed_ids);
+        loose = components::decorate(&loose, c.catalog, installed.as_deref(), &titles);
+        // The choices that wait on the component of a field's value (the
+        // voice of the chosen language), by the config's value or the default.
+        let base = loose.clone();
+        let value_of = |k: &str| pick(i.config, k).cloned();
+        let effective = |k: &str| settings::effective_value(&base, k, value_of);
+        loose = components::gate(&loose, c.catalog, installed.as_deref(), &effective);
+        let list = installed.clone().unwrap_or_default();
+        shared_of = Box::new(move |comp| components::shares_backend(comp, c.catalog, &list));
+    }
 
     let mut pages: Vec<Value> = CORE_PAGES
         .iter()
@@ -288,7 +320,19 @@ pub fn build(i: &Inputs) -> Schema {
             if visible {
                 next += 1;
             }
-            to_field(f, visible, &value_of)
+            let mut field = to_field(f, visible, &value_of)?;
+            if field.r#type == FieldType::Component
+                && let Some(c) = &i.components
+                && let Some(comp) = field
+                    .component
+                    .as_deref()
+                    .and_then(|id| components::by_id(c.catalog, id))
+            {
+                let state = c.states.and_then(|s| s.get(&comp.id));
+                field.row =
+                    serde_json::to_value(components::view(comp, state, shared_of(comp))).ok();
+            }
+            Some(field)
         })
         .collect();
 
@@ -326,6 +370,7 @@ mod tests {
             supports_workspaces: false,
             catalog,
             default_modules: &["media", "activities"],
+            components: None,
         })
     }
 

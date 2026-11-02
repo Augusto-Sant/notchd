@@ -215,8 +215,8 @@ ShellRoot {
       hook(codexBusySvc, "codex", ["title", "⠹ Fix the flaky login test | proj"])
       liveSvc.open()
       // Talking, with no bridge: its state by hand.
-      liveClosedSvc.moduleById("codex-live").conv = { status: "live", error: "", packages: [], warning: "",
-        transcript: [], working: false, muted: false, level: -100 }
+      hook(liveClosedSvc, "codex-live", ["state", JSON.stringify({ status: "live", error: "", packages: [], warning: "",
+        transcript: [], working: false, muted: false, level: -100 })])
       var agents = [agentsTabsSvc, agentsStackSvc]
       for (var a = 0; a < agents.length; a++) {
         agents[a].setConfigValue("claude.directory", root.outDir)
@@ -539,7 +539,7 @@ ShellRoot {
   function next() {
     root.index++
     if (!root.scenario) { quitTimer.start(); return }
-    svc.components.refresh()  // the fake installer's canned state
+    svc.settingsOpen = !!root.scenario.page  // the daemon reads the fake installer's canned state while it is open
     Theme.provider = root.scenario.theme
     svc.setConfigValue("workspaces", root.scenario.bar ? [1, 2, 3] : undefined)
     svc.setConfigValue("osd.enabled", false)

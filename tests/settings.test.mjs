@@ -370,7 +370,6 @@ test('a terminal of your own: its entry\'s title and command, then the fields of
   assert.ok(fields.every((f) => f.page === 'modules/btop'));
 });
 
-const C = load('core/Components.js');
 const registry = JSON.parse(fs.readFileSync(new URL('../core/components/components.json', import.meta.url), 'utf8')).components;
 const voiceInfo = () => plain(Settings.parseModuleInfo(JSON.stringify({ title: 'Voice', live: { local: true } })));
 const voiceKey = 'local-live.voiceLanguage';
@@ -454,23 +453,6 @@ test('moduleFields puts the references to a module\'s own fields under its id, a
   }
 });
 
-test('the Voice page shows the voices of the chosen language only, and every language\'s on the components page', () => {
-  const base = plain(C.decorate(plain(Settings.moduleFields([{ moduleId: 'local-live', title: 'Voice', settings: voiceInfo().settings }], '')), registry, [], {}));
-  const voiceRows = (lang) => plain(Settings.shownFields(base, (k) => (k === voiceKey ? lang : undefined)))
-    .filter((f) => f.type === 'component' && registry.find((c) => c.id === f.component).engine).map((f) => f.component);
-  for (const code of [...new Set(registry.filter((c) => c.engine).map((c) => c.language))]) {
-    const want = registry.filter((c) => c.engine && c.language === code).map((c) => c.id);
-    assert.deepEqual(voiceRows(code), want, code);
-    assert.equal(want.length, 2);
-  }
-  assert.deepEqual(voiceRows(undefined), voiceRows('pt'));  // the default language
-  assert.deepEqual(voiceRows('xx'), []);
-  // the overview lists all of them, a section per language
-  const overview = plain(C.overviewFields(registry, {}));
-  assert.equal(overview.filter((f) => f.component && registry.find((c) => c.id === f.component).engine).length, registry.filter((c) => c.engine).length);
-  assert.ok(new Set(overview.map((f) => f.section)).size > 7);
-});
-
 // ------------------------------------------- the daemon's schema, put together
 const catalog = [{ moduleId: 'media', title: 'Now playing' }, { moduleId: 'btop', title: 'btop', terminal: true }];
 const daemonPages = [
@@ -481,17 +463,16 @@ const daemonPages = [
   { id: 'modules/weather', label: 'Weather', icon: '', sub: true },
 ];
 
-test('windowPages: the host core pages, the daemon notch pages, the QML module pages and the daemon user module pages', () => {
+test('windowPages: the host core pages, then the daemon\'s notch pages and module pages', () => {
   const pages = plain(Settings.windowPages(core, [], daemonPages, catalog));
   assert.deepEqual(pages.map((p) => p.id),
-    ['general', 'modules', 'notch/0', 'notch/1', 'modules/media', 'modules/btop', 'modules/weather']);
-  // a module the QML loads keeps its own page, not the daemon's copy
+    ['general', 'modules', 'notch/0', 'notch/1', 'modules/media', 'modules/weather']);
   assert.equal(pages.filter((p) => p.id === 'modules/media').length, 1);
   assert.equal(pages.find((p) => p.id === 'notch/1').label, 'side');
   assert.deepEqual(plain(Settings.windowPages(core, [], null, [])).map((p) => p.id), ['general', 'modules']);
 });
 
-test('windowFields: drops the built-in modules\' own fields and the daemon\'s resolved parts, previews the edge cards', () => {
+test('windowFields: drops the daemon\'s resolved parts, previews the edge cards', () => {
   const edge = { page: 'notch/0', key: 'position.edge', type: 'choice', display: 'cards', value: 'top', visible: true, locked: null,
     options: [{ value: 'top', label: 'Top' }, { value: 'left', label: 'Left' }] };
   const other = { page: 'general', key: 'hoverOpenDelay', type: 'integer', default: 120, value: 120, visible: true, locked: null };
@@ -499,9 +480,9 @@ test('windowFields: drops the built-in modules\' own fields and the daemon\'s re
   const weather = { page: 'modules/weather', key: 'weather.city', type: 'string' };
   const nested = { page: 'notch/1', key: 'notches.1.position.edge', type: 'choice', display: 'cards', options: [{ value: 'top', label: 'Top' }] };
   const fields = plain(Settings.windowFields([edge, other, media, weather, nested], catalog, 'Edge.qml'));
-  assert.deepEqual(fields.map((f) => f.key), ['position.edge', 'hoverOpenDelay', 'weather.city', 'notches.1.position.edge']);
+  assert.deepEqual(fields.map((f) => f.key), ['position.edge', 'hoverOpenDelay', 'media.x', 'weather.city', 'notches.1.position.edge']);
   assert.deepEqual(fields[0].options.map((o) => o.preview), ['Edge.qml', 'Edge.qml']);
-  assert.equal(fields[3].options[0].preview, 'Edge.qml');
+  assert.equal(fields[4].options[0].preview, 'Edge.qml');
   assert.ok(!('value' in fields[0]) && !('visible' in fields[0]) && !('locked' in fields[1]));
   assert.equal(fields[1].default, 120);
   assert.equal(other.value, 120, 'the daemon\'s field is not mutated');

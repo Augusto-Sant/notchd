@@ -234,7 +234,9 @@ impl Inner {
         }
     }
 
-    fn announce(&self, changes: Changes) {
+    /// Sends what changed; true when the notch state did.
+    fn announce(&self, changes: Changes) -> bool {
+        let state = changes.state.is_some();
         if let Some(c) = changes.config {
             self.broadcast(&ToUi::Config(c));
         }
@@ -247,6 +249,7 @@ impl Inner {
         if let Some(s) = changes.state {
             self.broadcast(&ToUi::State(s));
         }
+        state
     }
 }
 
@@ -306,6 +309,16 @@ impl Hub {
 
     /// A terminal's or a usage request's report, for its module.
     fn on_note(&self, note: &Note) {
+        // What the installer said of the components: no module's.
+        if note.provider == "components" {
+            let mut g = self.lock();
+            let Inner { core, store, .. } = &mut *g;
+            core.components_note(store, &note.data);
+            let _ = self.publish(&mut g);
+            drop(g);
+            self.wake.notify_all();
+            return;
+        }
         let Some(id) = note.data.get("id").and_then(Value::as_str) else {
             return;
         };
@@ -425,10 +438,12 @@ impl Hub {
         // A config that changed may enable or disable a module or change its
         // settings' values.
         let config_changed = changes.config.is_some();
-        g.announce(changes);
+        let state_changed = g.announce(changes);
         if config_changed {
             self.sync_host(g);
             self.sync_core(g);
+        } else if state_changed {
+            self.notches_changed(g);
         }
         result
     }
@@ -451,7 +466,32 @@ impl Hub {
             g.broadcast(m);
         }
         let changes = g.store.take_changes(self.clock.now());
-        g.announce(changes);
+        if g.announce(changes) {
+            self.notches_changed(g);
+        }
+    }
+
+    /// The notch state changed: the modules that follow it (a voice session
+    /// follows its notch opening) are told, and what that moves is sent. A
+    /// module tells nothing twice, so this settles within a few rounds.
+    fn notches_changed(&self, g: &mut Inner) {
+        for _ in 0..4 {
+            let now = self.clock.now();
+            let Inner {
+                core, store, mods, ..
+            } = &mut *g;
+            let msgs = core.notches_changed(store, mods, now);
+            if msgs.is_empty() {
+                return;
+            }
+            for m in &msgs {
+                g.broadcast(m);
+            }
+            let changes = g.store.take_changes(self.clock.now());
+            if !g.announce(changes) {
+                return;
+            }
+        }
     }
 
     // ------------------------------------------------------------ clients

@@ -7,6 +7,7 @@ pub mod notifications;
 pub mod osd;
 pub mod pty;
 pub mod resources;
+pub mod sidecar;
 pub mod usage;
 
 #[cfg(target_os = "linux")]

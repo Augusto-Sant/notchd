@@ -56,6 +56,50 @@ pub enum Effect {
     Usage(crate::plan::Ask),
     /// Acts on the notches that show this module (`module-notch`).
     Notch(notchd_proto::ui::ModuleOp),
+    /// A command for the module's sidecar process (the `sidecar` provider).
+    Sidecar(SidecarCmd),
+}
+
+/// What a module asks of its sidecar, a program it talks to in JSON lines.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SidecarCmd {
+    /// Starts it (the old one, if any, is stopped first). `run` names the
+    /// run: what the host feeds back carries it, so the lines and the exit of
+    /// a run that was replaced are told apart.
+    Start(Box<SidecarStart>),
+    /// A line to its standard input (the line end is the host's).
+    Write(String),
+    /// SIGTERM: it ends what it started and stops.
+    Term,
+}
+
+/// The sidecar to run and how. The host knows where the scripts are and what
+/// `~` is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SidecarStart {
+    pub run: u64,
+    pub bridge: Bridge,
+}
+
+/// The two bridges of the voice (`core/live/`), with the options their
+/// command lines are made from (`notchd_core::live`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Bridge {
+    /// `codex-live.py`: Codex's realtime voice.
+    Codex(notchd_core::live::BridgeOpts),
+    /// `local-live.py`: Voxtype, an agent's text session and a LocalAI voice.
+    Local(notchd_core::live::LocalBridgeOpts),
+}
+
+/// How the notches show a module now (`CoreModule::shown`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shown {
+    /// A notch is open on it by a click or a shortcut (pinned, and showing
+    /// it); a hover only shows it.
+    pub open: bool,
+    /// Its expanded view is on screen, however it got there: the only time
+    /// what changes by the second (a level) is worth sending.
+    pub visible: bool,
 }
 
 /// What a module asks of its terminal.
@@ -92,6 +136,8 @@ pub struct Ctx {
     pub expanded: bool,
     /// Some notch shows this module's peek.
     pub peeking: bool,
+    /// Some notch lists this module (so opening one can show it).
+    pub listed: bool,
 }
 
 /// A module that lives in the daemon.
@@ -125,6 +171,9 @@ pub trait CoreModule: Send {
     }
     /// A primitive's `action` fired in one of its views.
     fn event(&mut self, _ctx: &Ctx, _action: &str, _value: &EventValue, _now: u64) {}
+    /// What the notches show of it changed (the host looks at every change of
+    /// the notch state and calls this when the answer for this module does).
+    fn shown(&mut self, _shown: Shown, _now: u64) {}
     /// The time `next_due` named has come.
     fn tick(&mut self, _now: u64) {}
     /// When the module wants `tick` next (epoch ms), `None` for never.

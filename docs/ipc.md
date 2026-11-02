@@ -143,7 +143,11 @@ bind = SUPER ALT, V, exec, omarchy-shell eryk.notchd live codex-live toggle
 | `new` | a new session, the transcript cleared |
 | `mute`, `unmute` | the microphone, while it talks |
 
-It answers `ok`, `no notch shows <id>; add it to one`, `not in a conversation`, the usage, `<id> module not loaded`, or `no live module <id>` with the ones there are.
+It answers `ok`, `no notch shows <id>; add it to one`, `not in a conversation`, the usage, `<id> module not loaded`, or `no live module <id>` with the ones there are. The module and its bridge are the daemon's, so `notchd ipc live ...` prints those answers; the shell's own target answers `ok` once it has sent the command.
+
+## Components
+
+The optional components ([settings.md](settings.md#components)): `notchd ipc component status [id]` prints a line per component (`<id>: <state in words>`), `component install <id>`, `component cancel <id>` and `component remove <id>` run the installer (the same as the buttons of the settings) and answer `ok`, or `no component <id>; components: ...`. An installation runs apart from the daemon (detached) and goes on if it stops.
 
 ## Terminals
 

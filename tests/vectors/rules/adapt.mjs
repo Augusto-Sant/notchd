@@ -8,8 +8,6 @@ export const SOURCES = {
   'config.json': 'core/Config.js',
   'settings.json': 'core/settings/Settings.js',
   'position.json': 'core/Position.js',
-  'live.json': 'core/Live.js',
-  'components.json': 'core/Components.js'
 };
 
 // `{"$undefined": true}` stands for JS `undefined`, as an argument and as a result.
@@ -22,19 +20,7 @@ export const encode = (v) => (v === undefined ? { $undefined: true } : plain(v))
 const FIXED = ['the config must be a JSON object', 'not an object', 'agent: needs a command', 'live: needs a command'];
 const message = (e) => (e === undefined || FIXED.includes(e) ? e : 'syntax');
 
-const id = (x) => (x ? x.id : null);
-
 const before = {
-  'components.json': {
-    parseCatalog: (m) => (text) => m.parseCatalog(text).map((c) => ({ id: c.id, title: c.title, kind: c.kind })),
-    parseStatus: (m) => (text) => Object.fromEntries(Object.entries(m.parseStatus(text)).filter(([, v]) => v).map(([k, v]) => [k, { installed: !!v.installed, active: !!v.active }])),
-    matching: (m) => (catalog, where) => m.matching(catalog, where).map(id),
-    needed: (m) => (option, catalog, values, strings) => m.needed(option, catalog, values ? (k) => values[k] : null, strings),
-    gate: (m) => (schema, catalog, installed, values) => m.gate(schema, catalog, installed, (k) => values[k])
-  },
-  'live.json': {
-    localPath: (m) => (url, dir) => { try { return m.localPath(url, dir); } catch (e) { if (e.name !== 'URIError') throw e; return ''; } }
-  },
   'config.json': {
     reservedKeys: (m) => () => m.RESERVED_KEYS
   },
@@ -47,7 +33,6 @@ const before = {
   },
 };
 const after = {
-  'live.json': { parseLine: (r) => (r === null ? null : true) },
   'config.json': { parse: (r) => (r.ok ? r : { ok: false, error: message(r.error) }) },
   'settings.json': { parseModuleInfo: (r) => (r.error === undefined ? r : { ...r, error: message(r.error) }) }
 };
