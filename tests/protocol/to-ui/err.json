@@ -1,0 +1,11 @@
+{
+ "message": "err",
+ "valid": [
+  {"t":"err","id":6,"code":"module","message":"timer module not loaded"},
+  {"t":"err","code":"proto","want":1}
+ ],
+ "invalid": [
+  {"why":"code missing","json":{"t":"err","id":6}},
+  {"why":"want is not a number","json":{"t":"err","code":"proto","want":"1"}}
+ ]
+}

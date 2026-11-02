@@ -1,0 +1,15 @@
+{
+ "message": "set",
+ "note": "`value: null` removes the key (and empties parents).",
+ "valid": [
+  {"t":"set","id":1,"key":"hoverOpenDelay","value":200},
+  {"t":"set","id":2,"key":"position","value":null},
+  {"t":"set","id":3,"key":"theme.accent","value":"#88c0d0"},
+  {"t":"set","id":4,"key":"notches","value":[{"id":"main","modules":["media"]}]}
+ ],
+ "invalid": [
+  {"why":"value missing","json":{"t":"set","id":1,"key":"hoverOpenDelay"}},
+  {"why":"id is a string","json":{"t":"set","id":"1","key":"k","value":1}},
+  {"why":"key missing","json":{"t":"set","id":1,"value":1}}
+ ]
+}

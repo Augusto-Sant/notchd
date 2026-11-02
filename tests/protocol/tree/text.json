@@ -1,0 +1,14 @@
+{
+ "message": "text",
+ "valid": [
+  {"t":"text","text":"24:31"},
+  {"t":"text","action":"open","text":"Now playing","tone":"muted","size":"bodySmall","tabular":true,"elide":"end","wrap":true,"maxWidth":200,"align":"end","lines":2}
+ ],
+ "invalid": [
+  {"why":"text missing","json":{"t":"text","tone":"muted"}},
+  {"why":"size is not a size","json":{"t":"text","text":"x","size":"huge"}},
+  {"why":"elide is not an elide","json":{"t":"text","text":"x","elide":"middle"}},
+  {"why":"lines is zero","json":{"t":"text","text":"x","lines":0}},
+  {"why":"a canvas-only token is not a tone","json":{"t":"text","text":"x","tone":"background"}}
+ ]
+}

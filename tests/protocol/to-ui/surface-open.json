@@ -1,0 +1,11 @@
+{
+ "message": "surface-open",
+ "valid": [
+  {"t":"surface-open","ref":"term:claude","kind":"terminal","cols":80,"rows":24},
+  {"t":"surface-open","ref":"web:weather","kind":"webview","cols":0,"rows":0}
+ ],
+ "invalid": [
+  {"why":"kind is not a kind","json":{"t":"surface-open","ref":"x","kind":"gpu","cols":80,"rows":24}},
+  {"why":"cols is negative","json":{"t":"surface-open","ref":"x","kind":"terminal","cols":-1,"rows":24}}
+ ]
+}

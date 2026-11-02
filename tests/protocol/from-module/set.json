@@ -1,0 +1,12 @@
+{
+ "message": "set",
+ "valid": [
+  {"t":"set","active":true,"priority":40,"icon":"󰖐","attention":false},
+  {"t":"set","urgentPeek":true,"expandedWidth":360},
+  {"t":"set"}
+ ],
+ "invalid": [
+  {"why":"priority is a string","json":{"t":"set","priority":"high"}},
+  {"why":"expandedWidth is negative","json":{"t":"set","expandedWidth":-5}}
+ ]
+}

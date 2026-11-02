@@ -1,0 +1,22 @@
+[package]
+name = "notchd-daemon"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The notchd daemon and CLI."
+
+[dependencies]
+notchd-proto = { path = "../notchd-proto" }
+notchd-core = { path = "../notchd-core" }
+notchd-modules = { path = "../notchd-modules" }
+notchd-providers = { path = "../notchd-providers" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lib]
+name = "notchd_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "notchd"
+path = "src/main.rs"

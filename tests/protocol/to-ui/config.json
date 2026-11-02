@@ -1,0 +1,12 @@
+{
+ "message": "config",
+ "note": "Free-form objects serialize with sorted keys, so fixtures write theirs sorted.",
+ "valid": [
+  {"t":"config","rev":1,"cfg":{"hoverOpenDelay":200,"notches":[{"id":"main","modules":["media"]}]},"resolved":{"hoverCloseDelay":300,"hoverOpenDelay":200}},
+  {"t":"config","rev":2,"cfg":{},"resolved":{"hoverOpenDelay":120}}
+ ],
+ "invalid": [
+  {"why":"cfg missing","json":{"t":"config","rev":1,"resolved":{}}},
+  {"why":"rev is negative","json":{"t":"config","rev":-1,"cfg":{},"resolved":{}}}
+ ]
+}

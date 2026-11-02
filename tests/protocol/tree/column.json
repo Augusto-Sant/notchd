@@ -1,0 +1,9 @@
+{
+ "message": "column",
+ "valid": [
+  {"t":"column","gap":4,"align":"start","children":[{"t":"text","text":"a"}]}
+ ],
+ "invalid": [
+  {"why":"children is not a list","json":{"t":"column","children":{}}}
+ ]
+}

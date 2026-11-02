@@ -1,0 +1,9 @@
+{
+ "message": "tab",
+ "valid": [
+  {"t":"tab","notch":"main","screen":"DP-1","module":"timer"}
+ ],
+ "invalid": [
+  {"why":"module missing","json":{"t":"tab","notch":"main","screen":"DP-1"}}
+ ]
+}

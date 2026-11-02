@@ -1,0 +1,10 @@
+{
+ "message": "usage",
+ "valid": [
+  {"limits":[{"id":"5h","label":"5 hour","percent":42.5,"resetsAt":1730000000000,"windowSecs":18000},{"id":"7d","label":"Week","percent":8,"resetsAt":0,"windowSecs":0}],"stale":false,"problem":""}
+ ],
+ "invalid": [
+  {"why":"percent is a string","json":{"limits":[{"id":"5h","label":"x","percent":"1","resetsAt":0,"windowSecs":0}],"stale":false,"problem":""}},
+  {"why":"stale missing","json":{"limits":[],"problem":""}}
+ ]
+}

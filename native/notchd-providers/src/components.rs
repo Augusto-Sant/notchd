@@ -1,0 +1,1 @@
+//! The `components` provider trait.

@@ -1,0 +1,15 @@
+{
+ "message": "progress",
+ "note": "A `null` value (no bar) parses, and is written back by leaving the field out.",
+ "valid": [
+  {"t":"progress"},
+  {"t":"progress","value":0.4,"orientation":"h","tone":"accent","thickness":3,"anchor":{"at":1730000000000,"rate":0.0025},"seek":"seek"},
+  {"t":"progress","value":0,"orientation":"v"}
+ ],
+ "invalid": [
+  {"why":"value over 1","json":{"t":"progress","value":1.5}},
+  {"why":"value negative","json":{"t":"progress","value":-0.1}},
+  {"why":"orientation is not an orientation","json":{"t":"progress","orientation":"x"}},
+  {"why":"anchor without rate","json":{"t":"progress","value":0.1,"anchor":{"at":1}}}
+ ]
+}

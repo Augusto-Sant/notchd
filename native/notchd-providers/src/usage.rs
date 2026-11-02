@@ -1,0 +1,1 @@
+//! The `usage` provider trait.

@@ -25,11 +25,11 @@ DEV_CONFIG ?= $(CURDIR)/build/dev-config.json
 # Each layer records what it cost in build/times/ (scripts/timed.py).
 TIMED = scripts/timed.py
 
-.PHONY: check test integration qmltest visual times hero icons bench lint lint-run validate dev restart deps clean
+.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate dev restart deps clean
 
 # The cheap layers first, one after another: a broken rule fails in seconds,
 # before anything costly starts. Then the costly ones at once.
-check: lint validate test
+check: lint validate test rust
 	@$(MAKE) --no-print-directory -j3 -O integration qmltest visual
 
 # Unit layer: the pure-JS rules (core/*.js, core/settings/*.js) in Node, their
@@ -43,6 +43,13 @@ test:
 	  tests/*.test.mjs
 	@$(TIMED) py-unit scripts/pytests.py unit
 	@$(TIMED) rust cargo test --manifest-path native/Cargo.toml --quiet
+
+# The Rust workspace (native/): format, clippy with warnings as errors, every
+# crate's tests. Cheap, so it sits with the first layers of `make check`.
+rust:
+	@$(TIMED) rust-fmt cargo fmt --all --check --manifest-path native/Cargo.toml
+	@$(TIMED) rust-clippy cargo clippy --workspace --all-targets --manifest-path native/Cargo.toml --quiet -- -D warnings
+	@$(TIMED) rust-test cargo test --workspace --manifest-path native/Cargo.toml --quiet
 
 # Integration layer: the live bridges and the components' installer run as
 # processes against fakes (a fake LocalAI, pacman, downloads from a local

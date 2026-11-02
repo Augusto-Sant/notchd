@@ -1,0 +1,9 @@
+{
+ "message": "attach",
+ "valid": [
+  {"t":"attach","ref":"term:claude"}
+ ],
+ "invalid": [
+  {"why":"ref missing","json":{"t":"attach"}}
+ ]
+}

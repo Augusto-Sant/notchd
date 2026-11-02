@@ -109,7 +109,8 @@ What v1 does not need, and so does not have: text input (no built-in module type
 - One JSON object per line, UTF-8, `\n` terminated, no embedded newlines (JSON escapes them). Max line 4 MiB (cover art goes as a path or URL, never inline).
 - Every message has `"t"` (its type). A request carries `"id"` (client-chosen integer); its reply is `{"t":"ok"|"err","id":..}`. Unsolicited messages have no id.
 - The daemon is single-writer per connection: messages arrive in order, per type, and a UI applies them in order.
-- A client that cannot parse a message or does not know its `t` ignores it and logs once (forward compatibility inside one major version).
+- A client that cannot parse a message or does not know its `t` ignores it and logs once (forward compatibility inside one major version). Unknown **fields** are ignored on input and never emitted.
+- **Canonical form**, the one the fixtures hold both ends to: compact (no spaces), object keys in the order this document writes them (`t` first), whole numbers without a fraction (`8`, never `8.0`), an optional field left out when absent. The few fields the doc shows as `null` (`view.tree`, `state.navigation`, a copy's `peek`, `module.error`, `screens.barEdge`, a field's `locked`) are always written. Free-form objects (`config`, a module's `config`, a `provider` payload) serialize with sorted keys. Types: `native/notchd-proto`; fixtures: `tests/protocol/`.
 
 ### Handshake and version
 
@@ -137,11 +138,11 @@ Entities and their messages:
 
 | Message | Entity | Sent when |
 |---|---|---|
-| `config` | the resolved config (`{"cfg":{...}}` as in the file, plus `"resolved"` with defaults filled for reading) | the file changes or `set` runs |
+| `config` | the resolved config: `{"t":"config","rev":1,"cfg":{...},"resolved":{...}}`, `cfg` as in the file, `resolved` with defaults filled for reading | the file changes or `set` runs |
 | `schema` | the settings pages and fields, resolved | modules, components or the config that shows fields change |
 | `state` | notches and copies: mode, pin, peek, current tab, which modules show, navigation, reserve targets | any of those changes |
 | `view` | one module slot's tree | its output changes |
-| `module` | one module's facts: id, title, priority, active, icon, attention, expandedWidth, status or error | they change |
+| `module` | one module's facts: id, title, priority, active, icon, attention, expandedWidth, urgentPeek, peekOnFocusedScreen, `error` (`null` when fine) and an optional `status` text | they change |
 
 ```json
 {"t":"state","rev":41,"navigation":null,"settingsOpen":false,
@@ -156,7 +157,7 @@ Entities and their messages:
 {"t":"module","id":"media","rev":7,"title":"Now playing","priority":50,"active":true,"icon":"","attention":false,
  "expandedWidth":400,"urgentPeek":false,"peekOnFocusedScreen":false,"error":null}
 ```
-`mode` is `rest | compact | peek | expanded` (`State.mode`). `peek` is `{"module":"media","view":"peek","until":1730000000000}`; the UI shows the module's `peek` view while it is set. The UI derives nothing from time: the core clears `peek`.
+`mode` is `rest | compact | peek | expanded` (`State.mode`). `navigation` is `null`, or `{"mode":"select|move|remove","selected":0,"tab":""}` (`Navigate.step`'s state: the selected notch's index and the tab it shows, `""` for its own). `peek` is `{"module":"media","view":"peek","until":1730000000000}` (`view` is a slot name, `until` epoch milliseconds); the UI shows the module's `peek` view while it is set. The UI derives nothing from time: the core clears `peek`.
 
 ### View
 
@@ -173,7 +174,7 @@ A module has up to five slots, as `NotchModule` has today: `compact`, `verticalC
 ### UI to core
 
 ```json
-{"t":"screens","screens":[{"name":"DP-1","x":0,"y":0,"w":2560,"h":1440,"scale":1.0}],"focused":"DP-1",
+{"t":"screens","screens":[{"name":"DP-1","x":0,"y":0,"w":2560,"h":1440,"scale":1}],"focused":"DP-1",
  "fullscreen":["DP-1"],"workspaces":{"DP-1":{"id":"2","name":"2"}},"known":["1","2","3"],"supportsWorkspaces":true,
  "barEdge":"top"}
 ```
@@ -193,9 +194,10 @@ Sent on hello and on any change. This is the adapter contract of `GenericComposi
 ```
 
 - `pointer`: raw facts; the core owns `hoverOpenDelay`, `hoverCloseDelay` and decides `mode`. `press` pins (`State`'s click rule).
-- `drag`: the UI computes the drop (`Position.dragTarget`, `screenAt`) and reports the result; the core stores `position` (config edit, never writes a default). While dragging the UI shows its own preview; the core's mode does not change until the drop.
+- `settings`: `page` is optional (absent: keep the page shown).
+- `drag`: `ev` is only `drop` in v1. The UI computes the drop (`Position.dragTarget`, `screenAt`) and reports the result; the core stores `position` (config edit, never writes a default). While dragging the UI shows its own preview; the core's mode does not change until the drop.
 - `key`: while a notch holds the keyboard. `key` is a normalized name (`"a"`, `"Escape"`, `"Tab"`, `"Left"`, `"Return"`, `"1"`); `mods` from `shift|ctrl|alt|meta`. In navigation and while a module with a text field is focused the core replies by changing `state`; keys the core does not use come back as nothing.
-- `event`: a primitive's `action` fired. `value` is `null`, a number (a `progress` seek, as a fraction), a string, or a boolean.
+- `event`: a primitive's `action` fired. `value` is always present: `null`, a number (a `progress` seek, as a fraction), a string, or a boolean; never an object or array.
 - `reserve-applied`: optional ack for `reserve`, to let the core run `reserveStep`'s "shrink 400 ms after collapse" against what is actually mapped.
 
 ### Requests (UI, CLI, scripts)
@@ -212,8 +214,10 @@ Sent on hello and on any change. This is the adapter contract of `GenericComposi
 {"t":"err","id":6,"code":"module","message":"timer module not loaded"}
 ```
 
+- Replies: `ok` carries `result` (the method's string) for `ipc` and leaves it out for `set` and `edit`. `err` has `code` (one of `proto`, `module`, `method`, `args`, `key`, `config`), an optional `message`, and, only for a refused handshake, no `id` and `want`.
+
 - `set`: `Config.withValue` semantics. `value: null` (a `null` on the wire is JS's `undefined` here) removes the key and empties parents. This is today's `set <key> <json>`; the CLI parses its argument and sends it.
-- `edit`: the list edits of `Settings.js` as intent ops; the core computes and writes.
+- `edit`: the list edits of `Settings.js` as intent ops; the core computes and writes. v1's ops are `moveModule` (`delta`, an integer, negative towards the start), `toggleModule` and `toggleWorkspace`; a new op is a minor addition, and the core answers one it does not know with `err` code `args`. A request's `id` is an unsigned integer.
 - `ipc`: every method of [ipc.md](ipc.md) (`push`, `clear`, `open`, `toggle`, `close`, `openNotch`, `agent`, `terminal`, `timer`, `live`, `navigate`, `settings`, `recenter`, `state`) with the same strings as replies. The `notchd` CLI is `notchd ipc <method> args...` and nothing else. The host's own IPC (`omarchy-shell eryk.notchd ...`, `qs ipc call notchd ...`) stays: a one-line `IpcHandler` per method in the host QML forwards to the daemon (`ipc` request) and returns its reply. `ipc.md` does not change.
 
 ### Settings
@@ -228,35 +232,35 @@ The schema is core-built; the settings window is a UI.
             "min":0,"max":2000,"step":20,"unit":"ms","default":120,"value":120,"visible":true,"locked":null}]}
 ```
 
-Field types are the existing ones ([settings.md](settings.md); each is one control plus one case in `SettingRow.qml`). `value` is current, `default` from the schema, `visible` is `Settings.shownFields`'s answer, `locked` is `Components.lock`'s reason or `null`. The UI sends `set` or `edit` and waits for the next `schema`. Component rows (`type: "component"`) carry the view `Components.view` computes (title, status, size text, buttons as action ids), and a button press is `{"t":"ipc","method":"component","args":["install","voice-piper-pt-br"]}`; progress arrives as `schema` updates, read by the core from the installer's state files, as `ComponentStore.qml` does today.
+Field types are the existing ones ([settings.md](settings.md); each is one control plus one case in `SettingRow.qml`): `choice`, `integer`, `number`, `boolean`, `string`, `color`, `modules`, `workspaces`, `notches`, `moduleCatalog`, `component`, `components` and `note`. A field also carries, when set, `help`, `options` (`[{value,label,preview?,disabled?}]`, `disabled` being `needs` resolved), `display` (`cards|chips|percent`), `when` (`{key,is}`), and for a `component` its `component` id and the `row` the core computes (free-form in v1); `key` is absent on a `note` and a `component` row. `match`/`by` and `needs` are resolved by the core and never reach the UI. A `null` `default` or `value` is left out. `value` is current, `default` from the schema, `visible` is `Settings.shownFields`'s answer, `locked` is `Components.lock`'s reason or `null`. The UI sends `set` or `edit` and waits for the next `schema`. Component rows (`type: "component"`) carry the view `Components.view` computes (title, status, size text, buttons as action ids), and a button press is `{"t":"ipc","method":"component","args":["install","voice-piper-pt-br"]}`; progress arrives as `schema` updates, read by the core from the installer's state files, as `ComponentStore.qml` does today.
 
 Theme is **not** in the protocol. Each UI maps the token set to its own source and applies it (`Theme.provider` today).
 
 ### Primitive tree (v1)
 
-Every node: `"t"` (the primitive) and optional `"id"` (stable across updates, so a UI may animate a changed node in place), `"visible"` (default true), `"action"` (string, fires `event` on press/tap; absent means not interactive), `"tooltip"`. Sizes are **design pixels**, which each UI multiplies by `Theme.space()`'s `spacingScale` (`Theme.space(px)` today). Colors never appear: `tone` is one of `foreground | muted | faint | accent | danger | success | line`. Text sizes: `caption | bodySmall | body | heading | display` (theming.md's five).
+Every node: `"t"` (the primitive) and optional `"id"` (stable across updates, so a UI may animate a changed node in place), `"visible"` (default true), `"action"` (string, fires `event` on press/tap; absent means not interactive), `"tooltip"`, `"fill"` (in a `row` or `column`, the node takes the rest of the space), written in that order before the node's own fields. Sizes are **design pixels**, which each UI multiplies by `Theme.space()`'s `spacingScale` (`Theme.space(px)` today). Colors never appear: `tone` is one of `foreground | muted | faint | accent | danger | success | line`. Text sizes: `caption | bodySmall | body | heading | display` (theming.md's five).
 
 | `t` | Fields | Notes |
 |---|---|---|
-| `row` | `children`, `gap`, `align` (`start\|center\|end`), `fill` | horizontal layout. `fill: true` on a child makes it take the rest |
+| `row` | `gap`, `align` (`start\|center\|end`), `children` | horizontal layout. `fill: true` on a child makes it take the rest |
 | `column` | same | vertical layout |
-| `stack` | `children`, `align` | overlay, centered by default: the Voice disc and its glyph |
-| `spacer` | `size` | fixed gap, or `fill` |
+| `stack` | `align`, `children` | overlay, centered by default: the Voice disc and its glyph |
+| `spacer` | `size` | fixed gap, or `fill: true` (the common property) for a flexible one |
 | `text` | `text`, `tone`, `size`, `tabular`, `elide` (`end\|none`), `wrap`, `maxWidth`, `align`, `lines` | always plain text, never rich (the code's `textFormat: Text.PlainText`) |
 | `icon` | `glyph` (a codepoint string, Nerd Font), `tone`, `size` | v1 icons are Nerd Font glyphs, as today. *Open*: native symbol sets per OS |
 | `image` | `src` (absolute path or `file://` / `https://`), `size` or `w`/`h`, `radius` (`none\|small\|round`), `fit` (`crop\|contain`), `fallback` (an `icon` node) | cover art: the UI draws the fallback while loading and on failure, and rounds the corners without a shader where it has none (the software-render rule in CLAUDE.md applies to every UI) |
-| `progress` | `value` (0..1 or `null` for no bar), `orientation` (`h\|v`), `tone`, `thickness`, `anchor`, `seek` (action id) | `anchor`: `{"at":<epoch ms>,"rate":<fraction per second>}`: the UI interpolates `value + rate * (now - at)` itself, so the media position needs no stream. `seek` fires `event` with a fraction |
+| `progress` | `value` (0..1; absent or `null`: no bar), `orientation` (`h\|v`), `tone`, `thickness`, `anchor`, `seek` (action id) | `anchor`: `{"at":<epoch ms>,"rate":<fraction per second>}`: the UI interpolates `value + rate * (now - at)` itself, so the media position needs no stream. `seek` fires `event` with a fraction |
 | `meter` | `value` (0..1), `style` (`disc`), `size`, `child` (a node drawn inside) | `disc`: the Voice disc that swells with the voice (`1 + value * .35`, 90 ms ease). The core sends the normalized level; the UI animates |
 | `equalizer` | `active`, `mode` (`smooth\|light`), `bars` (default 4), `height` | the media module's decorative bars (the code's "fake equalizer"): the UI generates the motion, the core sends only `active` and `mode`. Not a canvas, so no 60 Hz stream |
-| `list` | `children`, `gap`, `stick` (`start\|end`), `maxHeight` | a scrolling column; `stick: "end"` keeps the newest line in view (the transcript) |
+| `list` | `gap`, `stick` (`start\|end`), `maxHeight`, `children` | a scrolling column; `stick: "end"` keeps the newest line in view (the transcript) |
 | `button` | `glyph` or `label`, `action`, `tone`, `enabled`, `selected`, `variant` (`icon\|outline`) | the `IconButton`, the Voice start button and the timer's controls |
-| `chip` | `label`, `value`, `action`, `selected` | the timer's presets |
+| `chip` | `label`, `value` (a string), `action`, `selected` | the timer's presets |
 | `canvas` | `w`, `h`, `cmds`, `animate` | tier 2, below |
 | `surface` | `kind` (`terminal\|webview`), `ref`, `w`, `h` | tier 3, below |
 
 **Notch-level props the module sets** (in `module`, not in a tree): `priority`, `active`, `icon`, `attention`, `expandedWidth`, `urgentPeek`, `peekOnFocusedScreen`, all of `NotchModule.qml`'s. They stay core facts.
 
-A UI validates the tree against the schema it implements (`proto`'s JSON Schema in `native/notchd-proto/schema/view.schema.json`, shared); an invalid node renders as an error row, not a crash.
+A UI validates the tree against the schema it implements (`proto`'s JSON Schema in `native/notchd-proto/schema/view.schema.json`, shared); an invalid node renders as an error row, not a crash. Beyond the schema the core enforces limits (`notchd-proto::version`): 2 000 nodes, depth 16 and 256 KiB per `view` (Open question 13's suggestion, adopted); `progress.value` and `meter.value` within 0..1; an `image`'s `fallback` being an `icon`; a `canvas` with positive `w` and `h` and `animate.fps` in 1..30.
 
 ### Canvas (tier 2)
 
@@ -271,7 +275,7 @@ A `canvas` node is a fixed-size box drawn from a flat list of vector commands in
  {"c":"text","x":4,"y":4,"text":"cpu","size":"caption","tone":"muted"}]}
 ```
 
-Commands: `rect` (rounded, fill and/or stroke), `circle`, `line`, `path` (SVG path data, `M L Q C Z`, the subset `Outline.js` emits), `text`, `clip` (`{"c":"clip","r":..}` ... `{"c":"unclip"}`), each with `opacity`. Colors are tokens or `{"mix":["accent","background",0.4]}` (`Theme.mix`), never hex. Animation: `animate: false` (default) redraws only when the core sends a new `view`; `animate: {"fps":30}` lets the core stream at most that rate (the core caps at 30). *Inferred, not decided*: gradients, images in a canvas and `fill-rule` wait for a module that needs them.
+Commands: `rect` (rounded, fill and/or stroke), `circle`, `line`, `path` (SVG path data, `M L Q C Z`, the subset `Outline.js` emits), `text`, `clip` (`{"c":"clip","x":..,"y":..,"w":..,"h":..,"r":..}`, a rounded rectangle, ... `{"c":"unclip"}`); the drawing commands take `opacity` (0..1), `width` is the stroke width, `cap` is `butt|round|square`, `join` `miter|round|bevel`. Colors are any **token** of `welcome.tokens` (`foreground background accent danger success muted faint line hover selected surface`; a node's `tone` is only the seven listed above) or `{"mix":["accent","background",0.4]}` (`Theme.mix`), never hex. Animation: `animate: false` (default) redraws only when the core sends a new `view`; `animate: {"fps":30}` lets the core stream at most that rate (the core caps at 30). *Inferred, not decided*: gradients, images in a canvas and `fill-rule` wait for a module that needs them.
 
 ### Free surface (tier 3)
 
@@ -290,6 +294,8 @@ A `surface` is a rectangle the UI hands to something that draws itself.
 {"t":"surface","ref":"term:claude","ev":"title","text":"⠋ Fix tests | notchd"}
 {"t":"surface-close","ref":"term:claude"}
 ```
+
+`ev` is `data` or `input` (`b64`), `resize` (`cols`, `rows`) or `title` (`text`).
 
 - `ref` names the surface; the core sends `data` (PTY output) and `title` (OSC 0/2, which the agent modules read to decide the compact view and the done peek, `Agent.js`), the UI sends `input` and `resize`. Lines carry base64 PTY bytes; a surface's traffic is **not** the line-JSON state channel in practice: for `terminal` the daemon opens a second connection per surface (`{"t":"attach","ref":"term:claude"}`) so a flood of output cannot delay a `view` update. *Inferred design, to confirm in Phase 4.*
 - `surface-open` on first need; the UI answers with its capabilities (`surfaces` in `hello`). Without one, the module's view shows a fallback row ("the terminal needs the qmltermwidget package" today, `TerminalModule.qml` and ipc.md's replies).
@@ -350,10 +356,11 @@ Core to module:
  "slots":["compact","verticalCompact","peek","verticalPeek","expanded"],"dir":"/home/eryk/.config/notchd/modules/weather"}
 {"t":"config","config":{"city":"Paris"}}
 {"t":"event","slot":"expanded","action":"refresh","value":null}
-{"t":"provider","name":"resources","data":{"cpu":0.12,"mem":0.41,"disk":0.63}}
+{"t":"provider","name":"resources","data":{"cpu":0.12,"disk":{"path":"/","total":500000000000,"used":300000000000},"mem":{"total":16000000000,"used":6500000000}}}
 {"t":"cmd","method":"push","args":["..."]}
 {"t":"visible","slot":"expanded","visible":true}
 {"t":"stop"}
+{"t":"error","code":"provider"}
 ```
 
 Module to core:
@@ -371,8 +378,9 @@ Module to core:
 ```
 
 - `view` takes the same tree as the core to UI `view`; the core forwards it unchanged after validating (an invalid tree is an `error` row, the module keeps running). A slot never sent has no view.
-- `set` takes `active`, `priority`, `icon`, `attention`, `urgentPeek`, `expandedWidth` (the changeable `NotchModule` properties).
-- `peek` is `requestPeek(ms)`; `open` is `openNotch()`; `notify` goes through the `notifications` provider. A module **never takes over a system service**: the invariant stands, the notification is shown by the OS, the module only posts one.
+- `set` takes `active`, `priority`, `icon`, `attention`, `urgentPeek`, `expandedWidth` (the changeable `NotchModule` properties), every one optional.
+- `error` from a module is `{"t":"error","message":".."}`; `notify`'s `body` is optional.
+- `peek` is `requestPeek(ms)`, `slot` optional (default `peek`); `open` is `openNotch()`; `notify` goes through the `notifications` provider. A module **never takes over a system service**: the invariant stands, the notification is shown by the OS, the module only posts one.
 - `event` carries any `action` the module's tree defined. `cmd` is the module's own IPC (`omarchy-shell eryk.notchd module <id> <method> args...`: *new*, user modules get a hook into `ipc.md`'s shape).
 - Unknown `t` is ignored, in both directions.
 
@@ -382,7 +390,7 @@ The module owns its timer: it prints a `view` when it wants. The core does not p
 
 ### Provider subscriptions
 
-`subscribe: ["resources"]` in the manifest, or at runtime `{"t":"subscribe","name":"media"}`. The core then sends `provider` messages on change (throttled per provider: `resources` 1 s, `media` on change, `screens` on change). A module may `{"t":"unsubscribe","name":"..."}`. A provider name the core does not know gets `{"t":"error","code":"provider"}` in the module's log. Provider payloads are the same shapes as the built-in modules consume (below) and are part of `proto`.
+`subscribe: ["resources"]` in the manifest, or at runtime `{"t":"subscribe","name":"media"}`. The core then sends `provider` messages on change (throttled per provider: `resources` 1 s, `media` on change, `screens` on change). A module may `{"t":"unsubscribe","name":"..."}`. A provider name the core does not know is answered with `{"t":"error","code":"provider"}` to the module (and logged); the manifest's `subscribe` is checked against the known names when it is read. Provider payloads are the same shapes as the built-in modules consume (below) and are part of `proto`.
 
 ### Lifecycle
 
@@ -408,7 +416,7 @@ A provider is a core component that produces facts for official modules and, by 
 | `components` | the registry and per-component status | `core/components/install.py` (pacman, AUR, files, LocalAI): Python in v1, run by the core, state files in `$XDG_STATE_HOME/notchd/components/` | later (brew, downloads); the registry grows an OS key per component (`kind: system` is Arch-only today: **Open**) | later |
 | `osd` (Omarchy host) | `{icon,message,value,max}` | the host forwards `omarchy-shell osd show <json>` | n/a | n/a |
 
-Providers are Rust traits in `notchd-providers`, one backend module per OS behind `cfg(target_os)`; a module asks the trait, never the OS. A provider with no backend on an OS reports `unavailable` and the module shows its empty state.
+Payload types are in `notchd-proto::provider` (`MediaData`, `ResourcesData`, `UsageData`, `OsdData`, `NotifyData`; `screens` is the `screens` message), one fixture each under `tests/protocol/provider/`. Providers are Rust traits in `notchd-providers`, one backend module per OS behind `cfg(target_os)`; a module asks the trait, never the OS. A provider with no backend on an OS reports `unavailable` and the module shows its empty state.
 
 Sidecars (`core/live/codex-live.py`, `local-live.py`) are Python, launched by the core as `Live.bridgeArgs` does and speak the same line-JSON documented in their docstrings (`{"status"...}`, `{"transcript"...}`). The core reduces those lines (`Live.reduce`) and builds the Voice view. Porting them to Rust is a later phase, out of this plan.
 
@@ -441,9 +449,9 @@ How a host finds and launches the daemon (**Open**; options):
 
 Rule for every phase: **Linux behaviour is identical at its end and `make check` passes** (all layers, CLAUDE.md). The strategy is a strangler: the Rust core grows a slice at a time behind a feature the QML reads through `DaemonClient`; the QML rules it replaces are deleted only after the slice's QML tests pass against the daemon.
 
-**Status.** The workspace lives at `native/` (`native/Cargo.toml`, `native/rust-toolchain.toml`), with `notchd-core` and one stub per rule file; `make test` runs `cargo test` on it. Phase 1's ports of the rule files run ahead of 0.2 and 0.3, since they are pure functions with no protocol. The `position` config half, `peek` and the shared `tests/vectors/` are still to do.
+**Status.** Tasks 0.1 and 0.2 are done: all six crates exist, `make rust` runs, and `notchd-proto` has every type of this protocol with fixtures (`tests/protocol/`: `to-ui/`, `to-daemon/`, `to-module/`, `from-module/`, `tree/`, `canvas/`, `provider/`, `manifest/`, one file per message). The workspace lives at `native/` (`native/Cargo.toml`, `native/rust-toolchain.toml`), with `notchd-core` and one stub per rule file; `make test` runs `cargo test` on it. Phase 1's ports of the rule files run ahead of 0.2 and 0.3, since they are pure functions with no protocol. The `position` config half, `peek` and the shared `tests/vectors/` are still to do.
 
-A new `make rust` (`cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace`) joins `make test`'s unit layer and `make check`. Every Rust test is hermetic (temp `XDG_*`, `NOTCHD_CONFIG`, random socket names under a temp dir).
+A new `make rust` (`cargo fmt --all --check`, `clippy -D warnings`, `cargo test --workspace`) joins `make test`'s unit layer and `make check`. Every Rust test is hermetic (temp `XDG_*`, `NOTCHD_CONFIG`, random socket names under a temp dir).
 
 **Ownership rule for parallel agents**: a task owns the paths listed; it edits nothing outside them except by adding a re-export line to its crate's `lib.rs` (which Task 0.1 pre-creates as one `pub mod` per rule file, so no two tasks touch the same line). A task that needs a change in another's path asks the owner through a protocol or fixture change in `native/notchd-proto` (Task 0.2's owner), not by editing it.
 

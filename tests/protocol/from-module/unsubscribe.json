@@ -1,0 +1,9 @@
+{
+ "message": "unsubscribe",
+ "valid": [
+  {"t":"unsubscribe","name":"media"}
+ ],
+ "invalid": [
+  {"why":"name missing","json":{"t":"unsubscribe"}}
+ ]
+}

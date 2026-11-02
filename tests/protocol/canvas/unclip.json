@@ -1,0 +1,9 @@
+{
+ "message": "unclip",
+ "valid": [
+  {"c":"unclip"}
+ ],
+ "invalid": [
+  {"why":"c is wrong","json":{"c":"reclip"}}
+ ]
+}

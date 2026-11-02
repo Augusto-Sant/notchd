@@ -1,0 +1,12 @@
+{
+ "message": "surface",
+ "valid": [
+  {"t":"surface","kind":"terminal","ref":"term:claude","w":480,"h":300},
+  {"t":"surface","kind":"webview","ref":"web:weather"}
+ ],
+ "invalid": [
+  {"why":"kind missing","json":{"t":"surface","ref":"term:claude"}},
+  {"why":"empty ref","json":{"t":"surface","kind":"terminal","ref":""}},
+  {"why":"kind is not a kind","json":{"t":"surface","kind":"gpu","ref":"x"}}
+ ]
+}

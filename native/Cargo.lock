@@ -23,6 +23,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "notchd-daemon"
+version = "0.1.0"
+dependencies = [
+ "notchd-core",
+ "notchd-modules",
+ "notchd-proto",
+ "notchd-providers",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "notchd-modules"
+version = "0.1.0"
+dependencies = [
+ "notchd-core",
+ "notchd-proto",
+ "notchd-providers",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "notchd-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "notchd-providers"
+version = "0.1.0"
+dependencies = [
+ "notchd-proto",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "notchd-testkit"
+version = "0.1.0"
+dependencies = [
+ "notchd-proto",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"

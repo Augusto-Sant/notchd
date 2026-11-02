@@ -1,0 +1,13 @@
+{
+ "message": "edit",
+ "valid": [
+  {"t":"edit","id":3,"op":"moveModule","notch":"main","module":"media","delta":1},
+  {"t":"edit","id":4,"op":"toggleModule","notch":"main","module":"timer"},
+  {"t":"edit","id":5,"op":"toggleWorkspace","notch":"main","workspace":"2"}
+ ],
+ "invalid": [
+  {"why":"unknown op","json":{"t":"edit","id":3,"op":"shuffle","notch":"main"}},
+  {"why":"moveModule without delta","json":{"t":"edit","id":3,"op":"moveModule","notch":"main","module":"media"}},
+  {"why":"delta is fractional","json":{"t":"edit","id":3,"op":"moveModule","notch":"main","module":"media","delta":0.5}}
+ ]
+}

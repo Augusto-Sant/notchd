@@ -1,0 +1,10 @@
+{
+ "message": "spacer",
+ "valid": [
+  {"t":"spacer","size":12},
+  {"t":"spacer","fill":true}
+ ],
+ "invalid": [
+  {"why":"size is a string","json":{"t":"spacer","size":"12"}}
+ ]
+}

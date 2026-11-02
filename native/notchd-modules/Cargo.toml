@@ -1,0 +1,13 @@
+[package]
+name = "notchd-modules"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "notchd's official modules, one file each: state in, view tree out."
+
+[dependencies]
+notchd-proto = { path = "../notchd-proto" }
+notchd-core = { path = "../notchd-core" }
+notchd-providers = { path = "../notchd-providers" }
+serde.workspace = true
+serde_json.workspace = true

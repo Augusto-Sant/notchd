@@ -1,0 +1,1 @@
+//! The `notifications` provider trait.
