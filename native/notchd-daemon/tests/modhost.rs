@@ -5,7 +5,7 @@ use notchd_daemon::modhost::proc::alive;
 use notchd_daemon::modhost::{
     ErrorKind, ModEvent, ModHost, ModuleStatus, Options, State, error_row,
 };
-use notchd_proto::module::{LogLevel, ModuleEvent};
+use notchd_proto::module::{LogLevel, ModuleEvent, ProviderData};
 use notchd_proto::{EventValue, Node, Slot, ToModule};
 use notchd_testkit::fake_module::{install, tick_mtime, viewer_script, write, write_script};
 use notchd_testkit::tempdir::TempDir;
@@ -697,4 +697,49 @@ fn command_placeholders_and_env_reach_the_module() {
     let cwd = fs::canonicalize(&dir).unwrap();
     assert!(log.contains(&format!("cwd {}", cwd.display())), "{log}");
     assert!(config.is_dir() && cache.is_dir());
+}
+
+#[test]
+fn provider_lines_for_a_module_that_does_not_read_are_capped_not_queued_without_end() {
+    let h = Harness::new(|_| {});
+    // Sleeps before it reads anything: its stdin fills (a pipe holds 64 KiB),
+    // then the host's queue for it. Then it counts the provider lines it got
+    // up to the first event, which the host never drops.
+    let script = "#!/bin/sh\nread -r init\nsleep 0.4\nn=0\nwhile read -r line; do\n  case \"$line\" in\n    *'\"t\":\"provider\"'*) n=$((n+1)) ;;\n    *'\"t\":\"event\"'*) echo \"{\\\"t\\\":\\\"log\\\",\\\"level\\\":\\\"info\\\",\\\"text\\\":\\\"got $n\\\"}\"; break ;;\n  esac\ndone\nwhile read -r line; do :; done\n";
+    write(&h.modules, "slow", "{\"command\":[\"./run.sh\"]}", script);
+    h.host.rescan();
+    h.wait("started", started("slow"));
+    let big = "x".repeat(4096);
+    let t = Instant::now();
+    for i in 0..100 {
+        h.host.send(
+            "slow",
+            ToModule::Provider(ProviderData {
+                name: "media".into(),
+                data: serde_json::json!({ "i": i, "pad": big }),
+            }),
+        );
+    }
+    h.host.send("slow", click());
+    // The hub answers at once: nothing waited for the module to read.
+    assert!(h.host.status("slow").is_some());
+    assert!(
+        t.elapsed() < Duration::from_millis(300),
+        "{:?}",
+        t.elapsed()
+    );
+    let e = h.wait(
+        "the module's count",
+        |e| matches!(e, ModEvent::Log { text, .. } if text.starts_with("got ")),
+    );
+    let ModEvent::Log { text, .. } = e else {
+        unreachable!()
+    };
+    let got: usize = text["got ".len()..].parse().unwrap();
+    // The pipe holds 16 of these lines, the backlog 32 (plus the one being
+    // written): without the cap all 100 arrive.
+    assert!(
+        (1..=50).contains(&got),
+        "{got} of 100 provider lines arrived"
+    );
 }
