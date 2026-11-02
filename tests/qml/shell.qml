@@ -1140,7 +1140,8 @@ ShellRoot {
       root.check(JSON.stringify(lists) === JSON.stringify(["notch", "agent", "terminal", "standalone"]),
                  "the Modules page does not list agents and standalone modules apart: " + JSON.stringify(lists))
       root.check(svc.moduleCatalog.some(function(m) { return m.moduleId === "claude" && m.agent && !m.standalone }), "claude is no agent")
-      root.check(svc.moduleSetting("codex", "command") === "codex", "codex's command default: " + svc.moduleSetting("codex", "command"))
+      root.check(svc.reportedCatalog.every(function(m) { return m.moduleId === "osd" }), "the host reported more than its own modules: " + JSON.stringify(svc.reportedCatalog.map(function(m) { return m.moduleId })))
+      root.check(svc.moduleSetting("codex", "command") === "codex","codex's command default: " + svc.moduleSetting("codex", "command"))
       root.check(svc.agentCommand("media", "toggle").indexOf("no agent media") === 0, "media took an agent command")
       svc.setConfigValue("osd.enabled", undefined)
       yield root.settle(svc)

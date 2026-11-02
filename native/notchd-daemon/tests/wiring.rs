@@ -143,6 +143,32 @@ fn the_schema_arrives_after_the_config_and_before_the_state() {
 }
 
 #[test]
+fn a_ui_that_sends_no_catalog_still_gets_the_built_in_modules_in_the_schema() {
+    // No `catalog` and no `coreDir`: the daemon knows its own modules.
+    let r = rig("builtincat", "{}");
+    let mut ui = r.ui();
+    let got = ui.wait_for(WAIT, |m| matches!(m, ToUi::Schema(_)));
+    let Some(ToUi::Schema(s)) = got else {
+        panic!("no schema");
+    };
+    for page in ["modules/media", "modules/claude", "modules/timer"] {
+        assert!(s.pages.iter().any(|p| p.id == page), "{page}");
+    }
+    let modules = s.modules.expect("the schema lists the modules");
+    let get = |id: &str| modules.iter().find(|m| m["moduleId"] == id).cloned();
+    assert_eq!(get("media").expect("media")["title"], "Now playing");
+    assert_eq!(get("claude").expect("claude")["agent"], true);
+    assert_eq!(get("codex-live").expect("codex-live")["live"], true);
+    assert!(get("osd").is_none(), "the OSD is the host's to declare");
+    assert!(
+        s.fields
+            .iter()
+            .any(|f| f.key.as_deref() == Some("media.equalizer") && f.value == "smooth"),
+        "a built-in's field is there with its default"
+    );
+}
+
+#[test]
 fn a_change_of_the_config_resends_the_schema_with_the_new_value() {
     let r = rig("schema2", "{}");
     let mut ui = r.ui();

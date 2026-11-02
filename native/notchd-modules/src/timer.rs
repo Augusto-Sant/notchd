@@ -40,7 +40,7 @@ pub struct Timer {
 impl Timer {
     pub fn new() -> Timer {
         Timer {
-            settings: Settings::new("timer", include_str!("../../../core/modules/timer.json")),
+            settings: Settings::new("timer", include_str!("../modules/timer.json")),
             countdown: State::idle(),
             done_at: None,
             effects: Vec::new(),

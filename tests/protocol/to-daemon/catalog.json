@@ -3,6 +3,7 @@
  "valid": [
   {"t":"catalog","modules":[{"moduleId":"media","settings":[],"title":"Now playing"}]},
   {"t":"catalog","modules":[]},
+  {"t":"catalog","modules":[{"moduleId":"osd","settings":[],"standalone":true,"title":"OSD"}],"defaultModules":["media","activities"]},
   {"t":"catalog","modules":[],"defaultModules":["claude","codex"]},
   {"t":"catalog","modules":[],"coreDir":"/home/me/.config/notchd/core"}
  ],

@@ -268,7 +268,7 @@ test('notchSummary says where a notch is and what it shows', () => {
 // Every module's JSON file parses, and each field the window can save has
 // a key, a type and a default within its range.
 test('every module JSON file is well-formed', () => {
-  const files = ['core/modules', 'hosts/omarchy/modules'].flatMap((dir) =>
+  const files = ['native/notchd-modules/modules', 'hosts/omarchy/modules'].flatMap((dir) =>
     fs.readdirSync(new URL(`../${dir}`, import.meta.url)).filter((f) => f.endsWith('.json')).map((f) => `${dir}/${f}`));
   assert.ok(files.length >= 5, 'files: ' + files);
   for (const file of files) {
@@ -292,7 +292,7 @@ test('every module JSON file is well-formed', () => {
       if (f.options) assert.ok(f.options.some((o) => o.value === f.default), `${file}: ${f.key} default not an option`);
     }
   }
-  const qml = ['core/modules', 'hosts/omarchy/modules'].flatMap((dir) =>
+  const qml = ['native/notchd-modules/modules', 'hosts/omarchy/modules'].flatMap((dir) =>
     fs.readdirSync(new URL(`../${dir}`, import.meta.url)).filter((f) => f.endsWith('.qml')).map((f) => `${dir}/${f.replace(/\.qml$/, '.json')}`));
   for (const json of qml) assert.ok(files.includes(json), `${json} is missing`);
 });

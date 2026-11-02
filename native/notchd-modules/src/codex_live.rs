@@ -8,6 +8,6 @@ pub fn new() -> Voice {
     Voice::new(Kind {
         id: "codex-live",
         local: false,
-        info: include_str!("../../../core/modules/codex-live.json"),
+        info: include_str!("../modules/codex-live.json"),
     })
 }

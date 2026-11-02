@@ -231,6 +231,8 @@ pub struct Store {
     /// The same for the modules the UI loads itself (`catalog`), kept
     /// apart so a user module coming and going never touches them.
     ui_defs: Vec<Value>,
+    /// The built-in modules' own catalog entries (the daemon's, not a UI's).
+    builtin_defs: Vec<Value>,
     /// What a notch lists when the config lists none: the host's
     /// `defaultModules` (`catalog`), else [`DEFAULT_MODULES`].
     default_modules: Option<Vec<String>>,
@@ -1966,6 +1968,13 @@ impl Store {
         self.last_schema.clone()
     }
 
+    /// The built-in modules' catalog entries (their JSON files, embedded in the
+    /// daemon): the settings pages and defaults no UI has to send. A host's
+    /// entry or a user module's with the same id wins.
+    pub fn set_builtin_catalog(&mut self, modules: Vec<Value>) {
+        self.builtin_defs = modules;
+    }
+
     /// The modules the UI loads itself, as it reports them (`catalog`): they
     /// replace the last report. An entry with the id of a user module's own
     /// def loses to it.
@@ -1974,8 +1983,8 @@ impl Store {
         self.default_modules = defaults;
     }
 
-    /// Where the UI's `core/` is (`catalog`'s `coreDir`): the sidecars the
-    /// daemon runs are in it.
+    /// Where the UI's `core/` is (`catalog`'s `coreDir`, deprecated): the
+    /// sidecars come from there instead of the daemon's own.
     pub fn set_core_dir(&mut self, dir: Option<String>) {
         if dir.is_some() {
             self.core_dir = dir;
@@ -2032,14 +2041,24 @@ impl Store {
     /// rev is given as it is sent).
     pub fn compute_schema(&self) -> Schema {
         let notches = config::notches(&self.config, &self.default_refs());
-        let mut catalog: Vec<Value> = self
+        let ui_ids: Vec<&str> = self
             .ui_defs
+            .iter()
+            .filter_map(|d| d.get("moduleId").and_then(Value::as_str))
+            .collect();
+        let mut catalog: Vec<Value> = self
+            .builtin_defs
             .iter()
             .filter(|d| {
                 d.get("moduleId")
                     .and_then(Value::as_str)
-                    .is_some_and(|id| !self.module_defs.contains_key(id))
+                    .is_some_and(|id| !ui_ids.contains(&id) && !self.module_defs.contains_key(id))
             })
+            .chain(self.ui_defs.iter().filter(|d| {
+                d.get("moduleId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !self.module_defs.contains_key(id))
+            }))
             .cloned()
             .collect();
         catalog.extend(self.module_defs.values().cloned());

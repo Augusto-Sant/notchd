@@ -1059,6 +1059,31 @@ fn the_schema_rev_moves_only_when_the_schema_changes() {
 }
 
 #[test]
+fn the_built_in_catalog_shapes_the_schema_and_the_host_and_user_modules_win_their_ids() {
+    let mut s = store(json!({}));
+    let _ = s.take_changes(0);
+    let entry = |title: &str| {
+        json!({"moduleId": "media", "title": title, "settings": [
+            {"key": "equalizer", "type": "string", "label": "Eq"}]})
+    };
+    s.set_builtin_catalog(vec![entry("Built-in")]);
+    let schema = s.take_changes(1).schema.expect("the catalog changed it");
+    assert!(schema.pages.iter().any(|p| p.label == "Built-in"));
+    let mods = schema.modules.expect("listed");
+    assert_eq!(mods.len(), 1);
+    // The host's entry replaces it, not adds to it.
+    s.set_ui_catalog(vec![entry("Host's")], None);
+    let schema = s.take_changes(2).schema.expect("changed");
+    assert_eq!(schema.modules.expect("listed").len(), 1);
+    assert!(schema.pages.iter().any(|p| p.label == "Host's"));
+    // A user module's own def replaces both.
+    s.set_module_def(entry("Mine"));
+    let schema = s.take_changes(3).schema.expect("changed");
+    assert_eq!(schema.modules.expect("listed").len(), 1);
+    assert!(schema.pages.iter().any(|p| p.label == "Mine"));
+}
+
+#[test]
 fn the_uis_catalog_shapes_the_schema_and_a_user_module_wins_its_id() {
     let mut s = store(json!({}));
     let _ = s.take_changes(0);

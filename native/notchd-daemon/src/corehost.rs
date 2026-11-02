@@ -82,6 +82,8 @@ pub struct CoreHost {
     ptys: PtyHost,
     notes: Option<Sender<Note>>,
     env: Env,
+    /// The sidecars written out of the binary (`assets`), on first use.
+    embedded: std::sync::OnceLock<Option<String>>,
     http: Arc<dyn Http>,
     /// Some UI can draw a terminal (`surfaces` of its `hello`).
     terminal_ui: bool,
@@ -113,6 +115,7 @@ impl CoreHost {
             ptys: PtyHost::default(),
             notes: None,
             env: Arc::new(|k| std::env::var(k).ok()),
+            embedded: std::sync::OnceLock::new(),
             http: Arc::new(Curl),
             terminal_ui: false,
             sidecars: Sidecars::default(),
@@ -384,13 +387,30 @@ impl CoreHost {
         out
     }
 
-    /// Where a file of the UI's `core/` is: its folder (`catalog`), else
-    /// `NOTCHD_CORE_DIR`.
+    /// Where a sidecar file is (`live/codex-live.py`...): `NOTCHD_CORE_DIR`
+    /// (a dev checkout's `core/`), else the folder a UI's `catalog` named
+    /// (`coreDir`, deprecated), else the daemon's own, embedded in it and
+    /// written out on first use (`assets`).
     fn core_file(&self, store: &Store, rel: &str) -> String {
-        let dir = store
-            .core_dir()
-            .map(String::from)
-            .or_else(|| (self.env)("NOTCHD_CORE_DIR"))
+        let dir = (self.env)("NOTCHD_CORE_DIR")
+            .or_else(|| store.core_dir().map(String::from))
+            .or_else(|| {
+                self.embedded
+                    .get_or_init(|| {
+                        let home = crate::assets::data_home(&*self.env)?;
+                        match crate::assets::extract(&home) {
+                            Ok(dir) => Some(dir.to_string_lossy().into_owned()),
+                            Err(e) => {
+                                eprintln!(
+                                    "notchd: cannot write its sidecars under {}: {e}",
+                                    home.display()
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .clone()
+            })
             .unwrap_or_default();
         format!("{}/{rel}", dir.trim_end_matches('/'))
     }
@@ -422,7 +442,7 @@ impl CoreHost {
     // ---------------------------------------------------------- components
 
     /// The installer's command line (`NOTCHD_COMPONENTS_INSTALLER`, else
-    /// `core/components/install.py` of the UI's core).
+    /// the daemon's own `components/install.py`).
     fn installer(&self, store: &Store, args: &[&str]) -> Vec<String> {
         let script = (self.env)("NOTCHD_COMPONENTS_INSTALLER")
             .unwrap_or_else(|| self.core_file(store, "components/install.py"));
@@ -815,6 +835,44 @@ mod tests {
     ) -> String {
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         h.command(s, m, method, &args, now).expect("an owner").0
+    }
+
+    #[test]
+    fn sidecars_come_from_the_dev_override_then_the_uis_folder_then_the_daemons_own() {
+        let data = std::env::temp_dir().join(format!("notchd-corefile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let data_str = data.to_string_lossy().into_owned();
+        let env_with = |core: Option<&'static str>| -> Env {
+            let d = data_str.clone();
+            Arc::new(move |k| match k {
+                "XDG_DATA_HOME" => Some(d.clone()),
+                "NOTCHD_CORE_DIR" => core.map(String::from),
+                _ => None,
+            })
+        };
+        let mut store = Store::new();
+        // Nobody named a folder: the files the binary carries, written out.
+        let own = CoreHost::new(None).with_env(env_with(None));
+        let path = own.core_file(&store, "components/install.py");
+        assert!(path.starts_with(&data_str), "{path}");
+        assert!(std::path::Path::new(&path).is_file(), "{path}");
+        assert!(
+            std::path::Path::new(&own.core_file(&store, "live/local-live.py")).is_file(),
+            "the bridge finds localai.py beside it"
+        );
+        // A UI's `coreDir` (deprecated) wins over them.
+        store.set_core_dir(Some("/ui/core".into()));
+        assert_eq!(
+            own.core_file(&store, "live/codex-live.py"),
+            "/ui/core/live/codex-live.py"
+        );
+        // The dev override wins over both.
+        let dev = CoreHost::new(None).with_env(env_with(Some("/dev/core/")));
+        assert_eq!(
+            dev.core_file(&store, "live/codex-live.py"),
+            "/dev/core/live/codex-live.py"
+        );
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]

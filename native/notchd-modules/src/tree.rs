@@ -54,7 +54,7 @@ pub fn glyph(code: u32) -> String {
     char::from_u32(code).map(String::from).unwrap_or_default()
 }
 
-/// A module's settings as its JSON file declares them (`core/modules/<id>.json`):
+/// A module's settings as its JSON file declares them (`native/notchd-modules/modules/<id>.json`):
 /// the one place a default lives. The config's `<id>.<key>` wins.
 pub struct Settings {
     id: &'static str,

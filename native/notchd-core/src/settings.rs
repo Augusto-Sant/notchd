@@ -1622,7 +1622,7 @@ mod tests {
     // a key, a type and a default within its range.
     #[test]
     fn every_module_json_file_is_well_formed() {
-        let dirs = ["core/modules", "hosts/omarchy/modules"];
+        let dirs = ["native/notchd-modules/modules", "hosts/omarchy/modules"];
         let list = |ext: &str| -> Vec<String> {
             dirs.iter()
                 .flat_map(|dir| {

@@ -266,7 +266,11 @@ impl Hub {
         core.set_notes(notes_tx);
         let hub = Arc::new(Hub {
             inner: Mutex::new(Inner {
-                store: Store::new(),
+                store: {
+                    let mut store = Store::new();
+                    store.set_builtin_catalog(notchd_modules::catalog());
+                    store
+                },
                 clients: Vec::new(),
                 next_client: 1,
                 last_text: None,

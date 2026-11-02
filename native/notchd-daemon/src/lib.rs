@@ -1,5 +1,6 @@
 //! The daemon's parts: the socket server, the router, the CLI and the module host.
 
+pub mod assets;
 pub mod attach;
 pub mod corehost;
 pub mod daemon;
