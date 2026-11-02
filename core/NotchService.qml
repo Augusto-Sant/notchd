@@ -861,6 +861,12 @@ Item {
     if (answer !== "ok") return answer
     return svc.notchIpc(method, args) ? "ok" : "notchd is not running"
   }
+  // A module's own "not loaded" answer, which needs no daemon: the load list
+  // is known here. Else `answer`. Without it, a command for a module no notch
+  // lists answered `ok` and did nothing.
+  function loadedAnswer(id, answer) {
+    return svc.moduleIds.indexOf(id) === -1 ? id + " module not loaded" : answer
+  }
   // What `push` answers to a payload that is not a JSON object.
   function pushAnswer(json) {
     var o
@@ -1000,10 +1006,11 @@ Item {
     // (native/notchd-modules). An IPC handler cannot wait for the daemon's
     // answer, so these send the method and answer `ok` (`invalid json` for a
     // push that is not, which is known here); `notchd ipc <method>` has the
-    // module's own answer (`timer module not loaded`, `no timer running`...).
-    function push(json: string): string { return svc.daemonIpc("push", [json], svc.pushAnswer(json)) }
-    function clear(id: string): string { return svc.daemonIpc("clear", [id], "ok") }
-    function timer(command: string): string { return svc.daemonIpc("timer", [command], "ok") }
+    // module's own answer (`no timer running`...). A module no notch loads answers
+    // `<id> module not loaded` here, as before (svc.loadedAnswer).
+    function push(json: string): string { return svc.daemonIpc("push", [json], svc.loadedAnswer("activities", svc.pushAnswer(json))) }
+    function clear(id: string): string { return svc.daemonIpc("clear", [id], svc.loadedAnswer("activities", "ok")) }
+    function timer(command: string): string { return svc.daemonIpc("timer", [command], svc.loadedAnswer("timer", "ok")) }
     // An agent, by its module's id: "toggle" opens or closes its notch,
     // "new" starts a new session, "ask <question>" opens the notch and types
     // it in; see TerminalModule.qml. `claude` and `codex` are the same.

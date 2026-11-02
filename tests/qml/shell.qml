@@ -243,6 +243,7 @@ ShellRoot {
       { name: "live: the local voice starts its own bridge with its settings", run: root.localLiveArgs },
       { name: "daemon: a settings edit goes to the daemon and comes back; defaults are never written; a slider drag is one write", run: root.daemonSettingsRoundTrip },
       { name: "daemon: ipc set answers as before, the daemon's own ipc set and a hand edit of the file reach the UI, a bad file is ignored", run: root.daemonIpcAndFile },
+      { name: "daemon: a command for a module no notch loads says so, instead of ok", run: root.ipcModuleNotLoaded },
       { name: "daemon: killed, the notch says notchd is not running, the config stays, an edit waits, and it all comes back", run: root.daemonDownAndBack },
       { name: "daemon: SIGKILLed with nothing else happening, it comes back by itself", run: root.daemonKilledComesBack },
       { name: "components: the settings rows show the installer's state, install, cancel and remove (twice) through it, and lock a voice until it is installed", run: root.componentRows }
@@ -3118,6 +3119,22 @@ ShellRoot {
           root.done()
         }, 10000)
       }, 5000)
+    })
+  }
+
+  // Bug: `push` (and `timer`, `clear`) for a module no notch loads answered
+  // `ok` and did nothing, since the IPC handler cannot wait for the daemon;
+  // before the daemon it said `<id> module not loaded`. It says so again.
+  function ipcModuleNotLoaded() {
+    var s = daemonSvc
+    var h = root.ipcHandler(s)
+    root.until(function() { return s.daemonReady }, function() {
+      if (!root.check(!!h, "no IPC handler")) { root.done(); return }
+      root.check(h.timer("5m") === "timer module not loaded", "timer, not loaded: " + h.timer("5m"))
+      root.check(h.push('{"id":"x","title":"t"}') === "ok", "push, loaded: " + h.push('{"id":"x","title":"t"}'))
+      root.check(h.push("nope") === "invalid json", "push, bad json: " + h.push("nope"))
+      h.clear("x")
+      root.done()
     })
   }
 }
