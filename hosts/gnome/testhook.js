@@ -18,6 +18,7 @@ const IFACE = `
     <method name="PointerMove"><arg type="d" direction="in" name="x"/><arg type="d" direction="in" name="y"/></method>
     <method name="PointerClick"/>
     <method name="Key"><arg type="u" direction="in" name="keyval"/></method>
+    <method name="KeybindingAction"><arg type="u" direction="in" name="keycode"/><arg type="u" direction="in" name="mask"/><arg type="u" direction="out" name="action"/></method>
     <method name="Screenshot"><arg type="s" direction="in" name="path"/><arg type="b" direction="out" name="ok"/></method>
   </interface>
 </node>`;
@@ -76,6 +77,13 @@ export class TestHook {
         const t = this._now();
         this._keyboard.notify_keyval(t, keyval, Clutter.KeyState.PRESSED);
         this._keyboard.notify_keyval(t + 1000, keyval, Clutter.KeyState.RELEASED);
+    }
+
+    // The keybinding action mutter would run for an X key code and a
+    // modifier mask (0: none). The virtual keyboard's chords never reach
+    // mutter's keybindings in a headless shell, so a test asks this instead.
+    KeybindingAction(keycode, mask) {
+        return global.display.get_keybinding_action(keycode, mask);
     }
 
     ScreenshotAsync(params, invocation) {

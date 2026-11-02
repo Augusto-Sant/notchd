@@ -7,6 +7,8 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import * as Protocol from './lib/Protocol.js';
@@ -18,6 +20,18 @@ import {PRIMITIVES} from './view.js';
 
 export default class NotchdExtension extends Extension {
     enable() {
+        // Enabled while the shell starts, it draws once the shell has
+        // started: a copy laid out before that is not in the stage yet, and
+        // Clutter and St warn about it.
+        this._starting = Main.layoutManager._startingUp;
+        if (this._starting) {
+            this._startupId = Main.layoutManager.connect('startup-complete', () => {
+                Main.layoutManager.disconnect(this._startupId);
+                this._startupId = 0;
+                this._starting = false;
+                this._redraw();
+            });
+        }
         this._copies = new Map();
         this._struts = [];
         this._theme = new Theme(() => this._redraw());
@@ -63,13 +77,27 @@ export default class NotchdExtension extends Extension {
                     copies: [...(this._copies?.entries() ?? [])].map(([id, c]) => ({id, ...c.describe()})),
                     struts: (this._struts ?? []).map(a => ({x: a.x, y: a.y, w: a.width, h: a.height})),
                     navigating: !!this._navActor,
+                    navigateAction: this._navigateAction ?? 0,
                 }));
             }).catch(e => console.warn(`notchd: no test hooks: ${e.message}`));
         }
         this._client.start();
+        // The navigation key (the schema's `navigate`), as `notchd ipc
+        // navigate`: it starts navigation, and leaves it while its grab
+        // holds the keyboard (POPUP, the grab's action mode).
+        this._settings = this.getSettings();
+        this._ipcId = 0;
+        this._navigateAction = Main.wm.addKeybinding('navigate', this._settings, Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW | Shell.ActionMode.POPUP,
+            () => this._client?.send(Protocol.ipc(`gnome-${++this._ipcId}`, 'navigate', [])));
     }
 
     disable() {
+        if (this._startupId)
+            Main.layoutManager.disconnect(this._startupId);
+        this._startupId = 0;
+        Main.wm.removeKeybinding('navigate');
+        this._settings = null;
         this._test?.destroy();
         this._test = null;
         this._client?.stop();
@@ -93,12 +121,19 @@ export default class NotchdExtension extends Extension {
 
     _apply(store, key) {
         const state = store.state;
-        if (!state || !this._copies)
+        if (!state || !this._copies || this._starting)
             return;
         if (key !== 'state' && !key.startsWith('view:'))
             return;
         const seen = new Set();
-        for (const notch of state.notches ?? []) {
+        const notches = state.notches ?? [];
+        const nav = state.navigation;
+        notches.forEach((notch, index) => {
+            // While navigating, what this notch's highlight says.
+            const highlight = nav ? {
+                number: index < 9 ? index + 1 : 0, selected: nav.selected === index, mode: nav.mode,
+                count: notches.length, screens: this._screens.names?.length ?? 1,
+            } : null;
             for (const copy of notch.copies ?? []) {
                 const id = `${notch.id}@${copy.screen}`;
                 seen.add(id);
@@ -107,9 +142,9 @@ export default class NotchdExtension extends Extension {
                     actor = new NotchCopy(this._host, notch.id);
                     this._copies.set(id, actor);
                 }
-                actor.update(notch, copy);
+                actor.update(notch, copy, highlight);
             }
-        }
+        });
         for (const [id, actor] of this._copies) {
             if (!seen.has(id)) {
                 actor.destroy();
@@ -124,7 +159,7 @@ export default class NotchdExtension extends Extension {
 
     // While navigating, the keyboard is the daemon's: a modal grab on an
     // invisible actor hands every key over (`key` with no notch, as the
-    // QML navigation window sends). The highlight is not drawn yet.
+    // QML navigation window sends). Each copy draws its own highlight.
     _navigation(on) {
         if (on && !this._navActor) {
             this._navActor = new St.Widget({name: 'notchd-navigation', reactive: true, can_focus: true, width: 1, height: 1, opacity: 0});
@@ -136,7 +171,7 @@ export default class NotchdExtension extends Extension {
                 return Clutter.EVENT_STOP;
             });
             try {
-                this._navGrab = Main.pushModal(this._navActor);
+                this._navGrab = Main.pushModal(this._navActor, {actionMode: Shell.ActionMode.POPUP});
                 this._navActor.grab_key_focus();
             } catch (e) {
                 console.warn(`notchd: no keyboard for navigation: ${e.message}`);

@@ -28,4 +28,8 @@ for src in "${shared[@]}"; do
   } > "$dest/lib/$name"
 done
 
+# The extension's GSettings schema (its keybinding), compiled where GNOME
+# looks for it: schemas/ in the extension's folder.
+glib-compile-schemas -- "$dest/schemas"
+
 echo "$dest"

@@ -36,6 +36,20 @@ function animations() {
     return St.Settings.get().enable_animations;
 }
 
+// The keys the selected notch's navigation label lists, a line each, as
+// NotchCopy.qml's hint(): by the navigation's `mode`, the number of
+// notches, whether it has tabs to walk and how many screens there are.
+function navHint({mode, count, tabs, screens}) {
+    if (mode === 'remove')
+        return ['x remove   Esc keep'];
+    if (mode === 'move') {
+        return [['←↑↓→ edge', '⇧ slide', screens > 1 ? 'Tab screen' : ''].filter(Boolean).join('   '),
+            '↵ done   Esc undo'];
+    }
+    return [[count > 1 ? `1-${Math.min(9, count)} ←→` : '', tabs ? 'Tab' : '', '↵ open', 'Esc'].filter(Boolean).join('   '),
+        ['m move', 's settings', count > 1 ? 'x remove' : ''].filter(Boolean).join('   ')];
+}
+
 // The card's paddings and sizes in design pixels, as core/NotchCard.qml has
 // them for a top edge.
 const CARD = {
@@ -147,7 +161,9 @@ class NotchCopy extends St.Widget {
     }
 
     // `notch`: the state's notch entry; `copy`: this copy's entry in it.
-    update(notch, copy) {
+    // `highlight`: while navigating, what this notch's highlight says
+    // ({number, selected, mode, count, screens}), else null.
+    update(notch, copy, highlight = null) {
         this._wireScreen = notch.screen ?? '';
         this._monitorIndex = this._host.monitorFor(copy.screen);
         this._notch = notch;
@@ -169,6 +185,73 @@ class NotchCopy extends St.Widget {
         if (!this._pending)
             this._layout(true);
         this._keyboard(copy.keyboard ?? 'none', mode);
+        const nav = highlight ? {...highlight, tabs: (copy.tabs?.length ?? 0) > 1} : null;
+        const navKey = JSON.stringify([nav, this.theme.generation]);
+        if (navKey !== this._navKey) {
+            this._navKey = navKey;
+            this._nav = nav;
+            this._drawNavLabel();
+            this._bg.queue_repaint();
+        }
+    }
+
+    // ------------------------------------------------------------ navigation
+    // While navigating, as NotchCard.qml: the outline in the accent for the
+    // selected notch and muted for the others, and a small label at the
+    // card's top right, outside it: its number and name, the selected one's
+    // with the keys under it, in the danger color when asking to remove.
+    // Outside the clipped card, so an actor of its own; it takes no clicks.
+    _drawNavLabel() {
+        this._navLabel?.destroy();
+        this._navLabel = null;
+        const nav = this._nav;
+        if (!nav)
+            return;
+        const theme = this.theme;
+        const removing = nav.selected && nav.mode === 'remove';
+        const border = removing ? 'danger' : nav.selected ? 'accent' : 'line';
+        const label = new St.BoxLayout({
+            name: 'notchd-nav-label', reactive: false,
+            style: `background-color: ${theme.css('background')}; border: 1px solid ${theme.css(border)};` +
+                ` border-radius: ${theme.radiusSmall}px; padding: 3px 6px; spacing: 1px;`,
+        });
+        if ('orientation' in label)
+            label.orientation = Clutter.Orientation.VERTICAL;
+        else
+            label.vertical = true;
+        const top = new St.BoxLayout({style: 'spacing: 5px;'});
+        const caption = theme.fonts.caption;
+        if (nav.number > 0)
+            top.add_child(new St.Label({text: String(nav.number), style: `color: ${theme.css('accent')}; font-size: ${caption}px; font-weight: bold;`}));
+        const name = removing ? `remove ${this.notchId}?` : this.notchId;
+        const tone = removing ? 'danger' : nav.selected ? 'foreground' : 'muted';
+        top.add_child(new St.Label({text: name, style: `color: ${theme.css(tone)}; font-size: ${caption}px;`}));
+        label.add_child(top);
+        for (const line of nav.selected ? navHint(nav) : [])
+            label.add_child(new St.Label({text: line, style: `color: ${theme.css('faint')}; font-size: ${caption - 1}px;`}));
+        Main.layoutManager.uiGroup.add_child(label);
+        this._navLabel = label;
+        this._placeNavLabel();
+    }
+
+    // Right of the card past its shoulder, at its top, or left of it where
+    // the right has no room; kept on the monitor.
+    _placeNavLabel() {
+        const label = this._navLabel;
+        const t = this._target;
+        if (!label || !t)
+            return;
+        const monitor = Main.layoutManager.monitors[this._monitorIndex] ?? Main.layoutManager.primaryMonitor;
+        const gap = this.theme.space(6);
+        const [, w] = label.get_preferred_width(-1);
+        const [, h] = label.get_preferred_height(w);
+        let x = t.x + t.w + gap;
+        if (x + w > monitor.x + monitor.width)
+            x = t.x - gap - w;
+        x = Math.max(monitor.x, Math.min(x, monitor.x + monitor.width - w));
+        const y = Math.max(monitor.y, Math.min(t.y + gap, monitor.y + monitor.height - h));
+        label.set_position(Math.round(x), Math.round(y));
+        Main.layoutManager.uiGroup.set_child_above_sibling(label, null);
     }
 
     // New content: the old fades out, then the new is drawn, the card
@@ -410,6 +493,7 @@ class NotchCopy extends St.Widget {
         this._content.y = pads.near;
         this._moveTo({x, y, w: total, h: height}, animate);
         this._bg.queue_repaint();
+        this._placeNavLabel();
         this._measure();
     }
 
@@ -479,7 +563,8 @@ class NotchCopy extends St.Widget {
         cr.setSourceRGBA(c.background.r, c.background.g, c.background.b, 1);
         cr.fill();
         trace(cr, paths.stroke);
-        cr.setSourceRGBA(c.line.r, c.line.g, c.line.b, c.line.a);
+        const stroke = this._nav?.selected ? c.accent : this._nav ? c.muted : c.line;
+        cr.setSourceRGBA(stroke.r, stroke.g, stroke.b, stroke.a);
         cr.setLineWidth(1);
         cr.stroke();
         cr.$dispose();
@@ -524,7 +609,7 @@ class NotchCopy extends St.Widget {
             mode: this._shown, wanted: this._mode, screen: this._copy?.screen ?? '', monitor: this._monitorIndex,
             ...(this._target ?? {x: this.x, y: this.y, w: this.width, h: this.height}),
             card: {w: this._cardW, h: this._cardH}, modal: !!this._modal,
-            hasContent: !!this._content.child, shown: this._copy?.shown ?? [],
+            hasContent: !!this._content.child, navLabel: this._navLabel ? this._navLabel.get_children().flatMap(c => (c instanceof St.Label ? [c.text] : c.get_children().map(l => l.text))) : null, shown: this._copy?.shown ?? [],
             tabs: (this._tabButtons ?? []).filter(({button}) => button.mapped).map(({tab, button}) => {
                 // Allocations summed up to the card: the transformed extents
                 // are NaN in GNOME 46's headless shell.
@@ -583,6 +668,8 @@ class NotchCopy extends St.Widget {
         this._pending = null;
         this._motion?.timeline.stop();
         this._motion = null;
+        this._navLabel?.destroy();
+        this._navLabel = null;
         // Its last word: the keyboard it held is let go.
         this._release();
         this._destroyed = true;

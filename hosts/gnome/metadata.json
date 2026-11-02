@@ -4,5 +4,6 @@
   "description": "A notch at the top of the screen that shows what your system is doing: media, timers, activities, agents. Needs the notchd daemon.",
   "shell-version": ["46", "47", "48", "49", "50", "51"],
   "url": "https://github.com/eryk-vieira/notchd",
+  "settings-schema": "org.gnome.shell.extensions.notchd",
   "version-name": "0.4.0"
 }

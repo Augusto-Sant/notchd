@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The extension's own settings. The notch's settings are the daemon's
+     (its config file); these are only what GNOME keeps for an extension. -->
+<schemalist>
+  <schema id="org.gnome.shell.extensions.notchd" path="/org/gnome/shell/extensions/notchd/">
+    <key name="navigate" type="as">
+      <!-- Super+N is GNOME's "focus the active notification". -->
+      <default><![CDATA[['<Super><Alt>n']]]></default>
+      <summary>Navigate notches</summary>
+      <description>Starts or leaves notch navigation, as `notchd ipc navigate` does.</description>
+    </key>
+  </schema>
+</schemalist>

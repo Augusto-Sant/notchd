@@ -28,6 +28,9 @@ NOTCHD = os.environ.get("NOTCHD_BIN", os.path.join(ROOT, "native", "target", "re
 SHOTS = os.path.join(ROOT, "build", "gnome")
 UUID = "notchd@eryk-vieira.github.io"
 KEY_ESCAPE = 0xFF1B
+# The extension's default navigation key, Super+Alt+N: the X key code of N
+# and the Mod4 (Super) and Mod1 (Alt) mask.
+NAVIGATE_KEY = (57, (1 << 6) | (1 << 3))
 SECOND_MONITOR = "1280x800"
 
 try:
@@ -138,6 +141,9 @@ class Shell:
 
     def key(self, keyval):
         self.call("Key", (keyval,), "(u)")
+
+    def keybinding_action(self, keycode, mask):
+        return self.call("KeybindingAction", (keycode, mask), "(uu)")[0]
 
     def screenshot(self, name):
         os.makedirs(SHOTS, exist_ok=True)
@@ -323,6 +329,22 @@ class NotchOnGnome(ShellCase):
         sh.until(lambda s: s["navigating"] and grabs(s) > 0, 2, "navigation to take the keyboard")
         sh.key(KEY_ESCAPE)
         sh.until(lambda s: not s["navigating"] and grabs(s) == 0, 2, "Escape to end navigation")
+
+    def test_navigation_highlights_the_notch_and_its_key_is_bound(self):
+        sh = self.shell
+        # Super+Alt+N runs the extension's own action (a virtual chord never
+        # reaches mutter's keybindings headless, so the binding is asked).
+        action = sh.snapshot()["navigateAction"]
+        self.assertGreater(action, 0)
+        self.assertEqual(sh.keybinding_action(*NAVIGATE_KEY), action)
+        self.assertEqual(sh.ipc("navigate"), "ok")
+        s = sh.until(lambda s: s["navigating"] and main_copy(s)["navLabel"], 2, "the notch highlighted")
+        label = main_copy(s)["navLabel"]
+        # Its number and name, and as the selected (only) notch the keys.
+        self.assertEqual(label[:2], ["1", "main"])
+        self.assertIn("\u21b5 open", label[2])
+        sh.key(KEY_ESCAPE)
+        sh.until(lambda s: not s["navigating"] and main_copy(s)["navLabel"] is None, 2, "the highlight gone")
 
     def test_a_notch_placed_on_the_second_monitor_goes_there_with_no_panel(self):
         sh = self.shell
