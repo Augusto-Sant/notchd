@@ -7,11 +7,14 @@ pub mod config;
 pub mod countdown;
 pub mod live;
 pub mod navigate;
+pub mod peek;
 pub mod position;
 pub mod resources;
 pub mod settings;
 pub mod state;
+pub mod store;
 pub mod terminal;
+pub mod timers;
 pub mod usage;
 
 pub(crate) mod js;

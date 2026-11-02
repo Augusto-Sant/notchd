@@ -16,6 +16,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub const WAIT: Duration = Duration::from_secs(5);
+/// Process start-up under a loaded machine (parallel `cargo test` binaries):
+/// a bound only, never a sleep that a test waits out.
+pub const START_WAIT: Duration = Duration::from_secs(30);
 
 /// A running `notchd daemon`, killed and reaped on drop.
 pub struct Daemon {
@@ -35,7 +38,7 @@ impl Daemon {
         let child = cmd.spawn().expect("spawn notchd");
         let socket = env.socket(instance);
         let mut daemon = Daemon { child, socket };
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + START_WAIT;
         while UnixStream::connect(&daemon.socket).is_err() {
             assert!(Instant::now() < deadline, "the daemon never listened");
             assert!(

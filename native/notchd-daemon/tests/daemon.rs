@@ -4,7 +4,7 @@
 
 use notchd_proto::ToUi;
 use notchd_proto::version::MAX_LINE_BYTES;
-use notchd_testkit::fake_ui::{Daemon, FakeUi, WAIT, run_bounded};
+use notchd_testkit::fake_ui::{Daemon, FakeUi, START_WAIT, WAIT, run_bounded};
 use notchd_testkit::tempdir::TestEnv;
 use std::process::Command;
 use std::time::Duration;
@@ -188,10 +188,22 @@ fn a_stale_socket_file_is_replaced() {
     std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
     drop(std::os::unix::net::UnixListener::bind(&sock).unwrap());
     assert!(sock.exists());
+    // The listener's fd can outlive `drop` for a moment: another test thread
+    // forking a daemon holds a copy until its exec. A daemon that probed the
+    // socket in that window would find it answered and refuse to start. Wait
+    // (bounded) until nobody answers: that is what "stale" means.
+    let deadline = std::time::Instant::now() + START_WAIT;
+    while std::os::unix::net::UnixStream::connect(&sock).is_ok() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stale socket still answers"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let daemon = Daemon::start(BIN.as_ref(), &env, "default");
     let mut ui = FakeUi::connect_hello(&daemon.socket);
     assert!(
-        ui.wait_for(WAIT, |m| matches!(m, ToUi::Welcome(_)))
+        ui.wait_for(START_WAIT, |m| matches!(m, ToUi::Welcome(_)))
             .is_some()
     );
 }

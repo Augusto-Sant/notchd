@@ -8,3 +8,4 @@ description = "notchd's rules: the decisions the UIs only bind (ported from core
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+notchd-proto = { path = "../notchd-proto" }

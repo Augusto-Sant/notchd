@@ -1,28 +1,32 @@
-//! The socket server: thread per connection (std only, v1), each connection
-//! the single writer of its own stream.
+//! The socket server: thread per connection (std only, v1). Each connection
+//! reads on its own thread and writes on a second one fed by a channel, so it
+//! is the single writer of its stream and a slow UI never blocks the hub.
 
+use crate::hub::Hub;
 use crate::instance::Instance;
-use crate::router::{err, route};
+use crate::router::err;
 use notchd_proto::request::ErrReply;
-use notchd_proto::ui::{ConfigError, ConfigUpdate, Welcome};
 use notchd_proto::version::{MAX_LINE_BYTES, PROTO};
-use notchd_proto::{Num, ToDaemon, ToUi, Token, to_line};
+use notchd_proto::{ToDaemon, ToUi, to_line};
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub use crate::hub::VERSION;
+
+/// A UI that does not read for this long is dropped rather than waited on.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A bound listener. Binding refuses a socket another daemon answers on and
 /// replaces a stale file.
 pub struct Server {
     listener: UnixListener,
-    instance: Arc<Instance>,
+    hub: Arc<Hub>,
 }
 
 impl Server {
@@ -46,17 +50,24 @@ impl Server {
             .map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(Server {
             listener,
-            instance: Arc::new(instance),
+            hub: Hub::new(&instance.name, &instance.config),
         })
+    }
+
+    /// The instance's hub: what the module host (and in-process tests) feed.
+    pub fn hub(&self) -> Arc<Hub> {
+        Arc::clone(&self.hub)
     }
 
     /// Accepts forever.
     pub fn serve(self) {
+        let hub = Arc::clone(&self.hub);
+        thread::spawn(move || hub.run_ticker());
         for stream in self.listener.incoming() {
             let Ok(stream) = stream else { continue };
-            let instance = Arc::clone(&self.instance);
+            let hub = Arc::clone(&self.hub);
             thread::spawn(move || {
-                let _ = connection(stream, &instance);
+                let _ = connection(stream, &hub);
             });
         }
     }
@@ -96,17 +107,36 @@ fn salvage_id(line: &str) -> Option<u64> {
         .as_u64()
 }
 
-fn connection(stream: UnixStream, instance: &Instance) -> std::io::Result<()> {
+fn connection(stream: UnixStream, hub: &Arc<Hub>) -> std::io::Result<()> {
+    stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let mut out = stream.try_clone()?;
+    let (id, rx) = hub.register();
+    let writer = thread::spawn(move || {
+        for msg in rx {
+            if send(&mut out, &msg).is_err() {
+                break;
+            }
+        }
+    });
+    let result = serve_lines(stream, hub, id);
+    // Closing the channel lets the writer flush what is queued (a refusal, an
+    // error) and end.
+    hub.unregister(id);
+    let _ = writer.join();
+    result
+}
+
+fn serve_lines(stream: UnixStream, hub: &Hub, id: u64) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream);
     loop {
         let line = match read_line(&mut reader)? {
             None => return Ok(()),
             Some(Err(())) => {
-                return send(
-                    &mut out,
-                    &err(None, "args", format!("line over {MAX_LINE_BYTES} bytes")),
+                hub.send(
+                    id,
+                    err(None, "args", format!("line over {MAX_LINE_BYTES} bytes")),
                 );
+                return Ok(());
             }
             Some(Ok(line)) => line,
         };
@@ -116,74 +146,29 @@ fn connection(stream: UnixStream, instance: &Instance) -> std::io::Result<()> {
         let msg = match notchd_proto::parse::<ToDaemon>(&line) {
             Ok(m) => m,
             Err(e) => {
-                send(
-                    &mut out,
-                    &err(salvage_id(&line), "args", format!("bad message: {e}")),
-                )?;
+                hub.send(
+                    id,
+                    err(salvage_id(&line), "args", format!("bad message: {e}")),
+                );
                 continue;
             }
         };
         if let ToDaemon::Hello(h) = &msg {
             if h.proto != PROTO {
-                let refusal = ToUi::Err(ErrReply {
-                    id: None,
-                    code: "proto".into(),
-                    message: Some(format!("the daemon speaks proto {PROTO}, not {}", h.proto)),
-                    want: Some(PROTO),
-                });
-                return send(&mut out, &refusal);
+                hub.send(
+                    id,
+                    ToUi::Err(ErrReply {
+                        id: None,
+                        code: "proto".into(),
+                        message: Some(format!("the daemon speaks proto {PROTO}, not {}", h.proto)),
+                        want: Some(PROTO),
+                    }),
+                );
+                return Ok(());
             }
-            send(&mut out, &welcome(instance))?;
-            send(&mut out, &config_message(&instance.config))?;
+            hub.subscribe(id);
             continue;
         }
-        for reply in route(&msg) {
-            send(&mut out, &reply)?;
-        }
-    }
-}
-
-fn welcome(instance: &Instance) -> ToUi {
-    ToUi::Welcome(Welcome {
-        proto: PROTO,
-        daemon: VERSION.into(),
-        instance: instance.name.clone(),
-        config: instance.config.display().to_string(),
-        tokens: Token::ALL
-            .iter()
-            .filter_map(|t| serde_json::to_value(t).ok()?.as_str().map(String::from))
-            .collect(),
-    })
-}
-
-/// The `config` message for the file, or `config-error`. A missing file is an
-/// empty config (a missing key means its default).
-pub fn config_message(path: &Path) -> ToUi {
-    let text = match fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return ToUi::ConfigError(ConfigError {
-                message: format!("{}: {e}", path.display()),
-            });
-        }
-    };
-    match notchd_core::config::parse(&text) {
-        Ok(map) => {
-            let cfg = Value::Object(map);
-            let r = notchd_core::config::resolve(&cfg);
-            let resolved = serde_json::json!({
-                "hoverCloseDelay": Num(r.hover_close_delay),
-                "hoverOpenDelay": Num(r.hover_open_delay),
-            });
-            ToUi::Config(ConfigUpdate {
-                rev: 1,
-                cfg,
-                resolved,
-            })
-        }
-        Err(message) => ToUi::ConfigError(ConfigError {
-            message: format!("{}: {message}", path.display()),
-        }),
+        hub.handle(id, &msg);
     }
 }
