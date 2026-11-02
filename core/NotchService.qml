@@ -67,22 +67,20 @@ Item {
   property var hostSettingsPages: []
 
   // -------------------------------------------------------------- built-ins
-  // The built-in modules, all in the daemon (native/notchd-modules): no QML
-  // file, only core/modules/<id>.json, which gives the settings page its
-  // title and fields and the service its defaults. The daemon announces each
-  // (`module`) and the service makes a CoreModule for it.
-  readonly property var coreModuleIds: ["activities", "claude", "codex", "codex-live", "local-live", "media", "resources", "timer"]
+  // The built-in modules are all in the daemon (native/notchd-modules), with
+  // their title, settings fields and defaults (its embedded JSON files): the
+  // daemon's `schema` lists them (`modules`, daemonCatalog), so this service
+  // neither ships nor reports them. It makes a CoreModule for each one a
+  // notch shows.
 
   // The QML file of a module the host ships (hostModules); built-ins have none.
   function moduleUrl(id) {
     return svc.hostModules && svc.hostModules[id] ? svc.hostModules[id] : ""
   }
-  // Where a module's JSON file is: beside its QML when the host ships one,
-  // else core/modules/<id>.json for a built-in; "" for an unknown id.
+  // Where a host module's JSON file is: beside its QML; "" for an unknown id.
   function infoPathOf(id) {
     var u = svc.moduleUrl(id)
-    if (String(u) !== "") return svc.moduleInfoPath(u)
-    return svc.coreModuleIds.indexOf(id) !== -1 ? svc.coreDir + "/modules/" + id + ".json" : ""
+    return String(u) !== "" ? svc.moduleInfoPath(u) : ""
   }
   // What loads a module: its QML file, else a CoreModule when the daemon has
   // announced it (a built-in of its own, or a user module).
@@ -94,25 +92,27 @@ Item {
   // Every module the daemon runs, as it announced them.
   readonly property var daemonModuleIds: Object.keys(svc.client.modules || {})
 
-  // Every module that has a JSON file: built-ins first, then the host's. Its
-  // title and settings fields are in it (media.json), read whether it loads
-  // or not (moduleInfo).
-  readonly property var fileModuleIds: {
-    var out = svc.coreModuleIds.slice()
-    var host = Object.keys(svc.hostModules || {})
-    for (var i = 0; i < host.length; i++)
-      if (out.indexOf(host[i]) === -1) out.push(host[i])
-    return out
-  }
+  // Every module of the host, which has a JSON file beside its QML: its
+  // title and settings fields are in it (osd.json), read whether it loads or
+  // not (moduleInfo).
+  readonly property var fileModuleIds: Object.keys(svc.hostModules || {})
+  // The modules the daemon lists in its schema: the built-ins and the user
+  // modules, each `{ moduleId, title, settings, standalone, agent, live }`.
+  // (The host's and the terminals' entries, which this service reported, come
+  // back in it too: ownModuleIds leaves them out.)
+  readonly property var daemonCatalog: svc.daemonSchema && svc.daemonSchema.modules ? svc.daemonSchema.modules : []
   // The modules this host knows of itself: those, then the config's terminals.
   readonly property var ownModuleIds: svc.fileModuleIds.concat(svc.terminalSpecs.map(function(t) { return t.id }))
-  // The user modules (folders of `modules/` in the config dir): the daemon
-  // announces them (`module`) and has their settings page in its schema, so
-  // that is all the host has of them. Not the host's to report in `catalog`.
-  readonly property var userModuleIds: svc.daemonModuleIds
-    .filter(function(id) { return svc.ownModuleIds.indexOf(id) === -1 }).sort()
+  // The daemon's own modules: the built-ins and the user modules (folders of
+  // `modules/` in the config dir), from its schema and what it announced
+  // (`module`). Not the host's to report in `catalog`.
+  readonly property var daemonOwnedIds: {
+    var ids = svc.daemonCatalog.map(function(m) { return m.moduleId })
+    svc.daemonModuleIds.forEach(function(id) { if (ids.indexOf(id) === -1) ids.push(id) })
+    return ids.filter(function(id) { return svc.ownModuleIds.indexOf(id) === -1 })
+  }
   // Every module this host can load.
-  readonly property var availableModuleIds: svc.ownModuleIds.concat(svc.userModuleIds)
+  readonly property var availableModuleIds: svc.daemonOwnedIds.concat(svc.ownModuleIds)
 
   // Terminals of your own, from the config's `terminals` (Config.terminals):
   // [{ id, title, command }]. Each is a module of the daemon (a terminal), its
@@ -138,30 +138,33 @@ Item {
   // settings window writes (the host's included), by their first part.
   function takenIds() {
     var keys = svc.hostSettingsSchema.map(function(f) { return String(f.key || "").split(".")[0] })
-    return svc.fileModuleIds.concat(keys.filter(function(k) { return k !== "" }))
+    return svc.daemonOwnedIds.concat(svc.fileModuleIds, keys.filter(function(k) { return k !== "" }))
   }
   property string terminalErrors: ""
 
-  // id -> { title, settings, standalone, agent, terminal }, from each
-  // module's JSON file (Settings.parseModuleInfo; a module without one has
-  // none of them), and each terminal's entry.
+  // id -> { title, settings, standalone, agent, live, terminal }: the host's
+  // modules from their JSON files (Settings.parseModuleInfo; a module without
+  // one has none of them), each terminal's entry, and the daemon's catalog.
   property var fileModuleInfo: ({})
   readonly property var moduleInfo: {
     var out = Object.assign({}, svc.fileModuleInfo)
     svc.terminalSpecs.forEach(function(t) { out[t.id] = Settings.terminalInfo(t) })
-    var fields = svc.daemonSchema ? svc.daemonSchema.fields : []
-    svc.userModuleIds.forEach(function(id) {
+    svc.daemonOwnedIds.forEach(function(id) {
+      var e = svc.daemonCatalog.filter(function(m) { return m.moduleId === id })[0]
       var m = svc.client.modules[id]
-      out[id] = Settings.userModuleInfo(id, m ? m.title : "", fields)
+      out[id] = e ? { title: e.title, settings: e.settings || [], standalone: !!e.standalone,
+                      agent: !!e.agent, live: !!e.live, terminal: !!e.terminal }
+                  : { title: m ? m.title : "", settings: [], standalone: false }
     })
     return out
   }
-  // Every module has its file read (or found missing): modules load only
-  // then, so a standalone one never starts out in a notch. A terminal's
+  // Every host module has its file read (or found missing) and the daemon
+  // has said its catalog: modules load only then, so a standalone one never
+  // starts out in a notch. A terminal's
   // info comes with its entry: counting terminals, a new id made it false
   // for a moment, which emptied the list of modules and made them all
   // again, an agent's session with them.
-  readonly property bool moduleInfoReady: svc.fileModuleIds.every(function(id) {
+  readonly property bool moduleInfoReady: svc.daemonSchema !== null && svc.fileModuleIds.every(function(id) {
     return svc.fileModuleInfo[id] !== undefined
   })
   onModuleInfoReadyChanged: if (svc.moduleInfoReady) svc.refreshModuleIds()
@@ -174,8 +177,8 @@ Item {
              standalone: !!info.standalone, agent: !!info.agent, live: !!info.live, terminal: !!info.terminal }
   }
   readonly property var moduleCatalog: svc.availableModuleIds.map(svc.catalogEntry)
-  // What the daemon is told (`catalog`): without the user modules, which it
-  // knows better, its own defs winning in its schema.
+  // What the daemon is told (`catalog`): the host's modules and the
+  // terminals, not the built-ins and user modules, which it knows itself.
   readonly property var reportedCatalog: svc.ownModuleIds.map(svc.catalogEntry)
   // Agents (`"agent"` in their file): coding agents in a terminal, modules
   // of the daemon (native/notchd-modules/src/{claude,codex}.rs), with the
@@ -223,7 +226,7 @@ Item {
   // ---------------------------------------------------------------- live
   // Spoken conversations (`"live"` in their file) are modules of the daemon
   // (native/notchd-modules/src/voice.rs), which runs their bridges
-  // (core/live/*.py) and the optional components' installer; `live` and
+  // and the optional components' installer (the daemon ships both); `live` and
   // `component` are its IPC.
   function isLive(id) { return !!svc.moduleInfo[id] && !!svc.moduleInfo[id].live }
   // A live module's IPC command: the daemon's module answers it.
@@ -242,8 +245,6 @@ Item {
       return "not in a conversation"
     return svc.daemonIpc("live", [id, command], "ok")
   }
-  // The folder of this core (its sidecars are run by the daemon from it).
-  readonly property string coreDir: Settings.moduleInfoPath(Qt.resolvedUrl("NotchService.qml"), Quickshell.shellDir).replace(/\/[^\/]*$/, "")
 
   // Standalone modules (`"standalone": true` in their file) have a place of
   // their own, a notch that shows only them, and no notch of the config
@@ -509,7 +510,7 @@ Item {
   onCatalogReportChanged: Qt.callLater(svc.reportCatalog)
   onDefaultModulesChanged: Qt.callLater(svc.reportCatalog)
   function reportCatalog() {
-    if (svc.client.ready) svc.client.send({ t: "catalog", modules: JSON.parse(svc.catalogReport), defaultModules: svc.defaultModules, coreDir: svc.coreDir })
+    if (svc.client.ready) svc.client.send({ t: "catalog", modules: JSON.parse(svc.catalogReport), defaultModules: svc.defaultModules })
   }
   readonly property string screensReport: {
     var c = svc.compositor

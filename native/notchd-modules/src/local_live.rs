@@ -9,6 +9,6 @@ pub fn new() -> Voice {
     Voice::new(Kind {
         id: "local-live",
         local: true,
-        info: include_str!("../../../core/modules/local-live.json"),
+        info: include_str!("../modules/local-live.json"),
     })
 }

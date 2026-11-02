@@ -83,10 +83,7 @@ pub struct Resources {
 impl Resources {
     pub fn new() -> Resources {
         Resources {
-            settings: Settings::new(
-                "resources",
-                include_str!("../../../core/modules/resources.json"),
-            ),
+            settings: Settings::new("resources", include_str!("../modules/resources.json")),
             cpu: None,
             cores: 0,
             memory: None,

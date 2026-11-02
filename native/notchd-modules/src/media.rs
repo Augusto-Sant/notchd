@@ -46,7 +46,7 @@ pub struct Media {
 impl Media {
     pub fn new() -> Media {
         let mut m = Media {
-            settings: Settings::new("media", include_str!("../../../core/modules/media.json")),
+            settings: Settings::new("media", include_str!("../modules/media.json")),
             players: Vec::new(),
             read_at: 0,
             key: String::new(),

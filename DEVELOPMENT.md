@@ -71,11 +71,13 @@ core/                 the Linux UI: no desktop-specific code
   Terminal.js         the key that leaves a terminal
   terminal/           TerminalSurface.qml (the frame and the attach) and TerminalView.qml: a terminal
                       (QMLTermWidget, optional package; `notchd attach` feeds it); lint skips them
-  modules/            the JSON file of each built-in module (title, settings, defaults, agent or live
-                      kind): the daemon's modules have no QML; claude.svg
+  modules/            claude.svg, the mark the UI bundles (each built-in module's JSON file is in
+                      native/notchd-modules/modules/: the daemon's modules have no QML)
   components/         components.json (the registry), install.py (the installer: downloads, LocalAI
                       models, pacman; stdlib only) and localai.py (where LocalAI lives, how to reach it)
   live/               codex-live.py and local-live.py, the voice bridges the daemon runs as sidecars
+                      (embedded in the binary and written out on first use; `NOTCHD_CORE_DIR=core` runs
+                      a checkout's files instead)
   DepthReport.qml     what a notch card measures of itself, sent to the daemon (`measure`)
   KeepShown.qml       shows a window again after its monitor goes away and comes back
   *Compositor.qml     compositor adapters (Hyprland, generic)
