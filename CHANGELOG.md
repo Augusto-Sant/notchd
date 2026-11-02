@@ -69,6 +69,7 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 
+- An open notch that follows the focus stays on the screen the pointer opened it on, instead of jumping to another screen when the focus moves while it is open.
 - `claude` and `codex` down a side edge: the working dot sits on the mark's corner, instead of keeping an empty place under every mark while it is off.
 - An open notch taller than the screen was cut off at the bottom, with no way to reach the rest: two terminals on a laptop screen, say. Past the room the screen has, its modules now scroll, with the wheel and a scrollbar.
 - Switching a monitor off and on again no longer leaves its notches gone: they move to another monitor while it is off and come back to it, with the space they reserve.

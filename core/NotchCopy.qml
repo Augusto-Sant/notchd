@@ -112,7 +112,9 @@ Item {
     copy.dismissPeek()
     if (copy.navigating && copy.svc) copy.svc.endNavigation(false)
   }
-  onModeChanged: if (!copy.isOpen) copy.openScreen = ""
+  // On the new mode, not `isOpen`: that binding may still hold the old mode
+  // here, and would wipe the screen as the copy opens.
+  onModeChanged: if (copy.mode !== "peek" && copy.mode !== "expanded") copy.openScreen = ""
 
   Timer { id: openTimer; interval: copy.svc ? copy.svc.hoverOpenDelay : 0; onTriggered: if (!copy.dragging) copy.hovered = true }
   Timer { id: closeTimer; interval: copy.svc ? copy.svc.hoverCloseDelay : 0; onTriggered: copy.hovered = false }

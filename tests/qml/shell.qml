@@ -99,6 +99,7 @@ ShellRoot {
       { name: "compact depth ignores peek and expanded transitions", run: root.compactDepthTransitions },
       { name: "a joined row's depth ignores a peek opening and closing", run: root.closedDepthTransitions },
       { name: "leaving the notch before it opens forgets the screen", run: root.hoverLeaveForgetsScreen },
+      { name: "an opened notch keeps the screen the pointer opened it on", run: root.openKeepsScreen },
       { name: "peeks and the open notch never move windows", run: root.reserveIgnoresOpenNotch },
       { name: "reserved space grows at once and shrinks after the delay", run: root.reserveGrowsAndShrinks },
       { name: "one module ending as another starts keeps the space", run: root.reserveBridgesModules },
@@ -322,6 +323,19 @@ ShellRoot {
     root.check(copy.mode !== "expanded", "opened without waiting for the hover delay")
     root.check(copy.openScreen === "", "kept screen " + copy.openScreen)
     root.done()
+  }
+
+  // Bug: the copy cleared the screen it opened on as it opened (onModeChanged
+  // read `isOpen` before it updated), so an open notch followed the focus to
+  // another screen instead of staying under the pointer.
+  function openKeepsScreen() {
+    var copy = service.firstCopy
+    copy.setPointer("notch", true, "DP-1")
+    root.until(function() { return copy.mode === "expanded" }, function() {
+      root.check(copy.openScreen === "DP-1", "lost its screen on opening: '" + copy.openScreen + "'")
+      copy.setPointer("notch", false, "")
+      root.done()
+    })
   }
 
   // ------------------------------------------------------ reserved space

@@ -497,8 +497,6 @@ ShellRoot {
 
   // Why the known disagreements disagree (see the report of the task that
   // wrote this test: which side is wrong, and where).
-  readonly property string openScreenReason: "QML: NotchCopy.qml onModeChanged clears openScreen as the copy opens (isOpen is still stale), so a notch that moves follows focus while open; the daemon keeps the screen the pointer opened it on"
-  readonly property string visitorReason: "daemon: Store::ipc_state always answers `visitor: []` (store.rs); the visitor is not ported yet"
 
   Component.onCompleted: {
     var all = [
@@ -687,7 +685,6 @@ ShellRoot {
           { id: "main", modules: ["a"], workspaces: ["1"], position: { screen: "all" } },
           { id: "home", modules: ["b"], position: { screen: "A" } }] },
         screens: { supports: true, known: ["1", "2"], workspaces: { A: "1", B: "2" } },
-        known: [{ path: "ipc.visitor", reason: root.visitorReason }],
         modules: { a: { peekOnFocusedScreen: true }, b: {} }, steps: function(w) { return [
         [0, function() { w.snap("main hangs on A only (workspace 1)") }],
         [0, function() { w.screens({ workspaces: { A: "2", B: "1" } }) }],
@@ -722,8 +719,6 @@ ShellRoot {
 
       // The pointer reports the screen the copy is on (its window's).
       { name: "shadow: a notch that moves stays where the pointer opened it", config: { notches: [{ id: "main", modules: ["a", "b"], position: { edge: "top" } }] },
-        known: [{ path: "ipc.notches[0].copies[0].screen", reason: root.openScreenReason },
-                { path: "entity.notches.main.copies", reason: root.openScreenReason }],
         modules: root.facts, steps: function(w) { return [
         [0, function() { w.snap("one copy, on the focused screen") }],
         [0, function() { w.pointer("main", "B", "enter") }],
