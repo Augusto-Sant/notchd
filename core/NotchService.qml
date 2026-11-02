@@ -69,7 +69,6 @@ Item {
 
   // -------------------------------------------------------------- built-ins
   readonly property var builtinModules: ({
-    media: Qt.resolvedUrl("modules/media.qml"),
     claude: Qt.resolvedUrl("modules/claude.qml"),
     codex: Qt.resolvedUrl("modules/codex.qml"),
     "codex-live": Qt.resolvedUrl("modules/codex-live.qml"),
@@ -81,6 +80,7 @@ Item {
   // the service makes a CoreModule for it.
   readonly property var coreModules: ({
     activities: Qt.resolvedUrl("modules/activities.qml"),
+    media: Qt.resolvedUrl("modules/media.qml"),
     resources: Qt.resolvedUrl("modules/resources.qml"),
     timer: Qt.resolvedUrl("modules/timer.qml")
   })

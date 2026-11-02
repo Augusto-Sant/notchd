@@ -4,7 +4,7 @@
 Run it on a private session bus (dbus-run-session) next to Quickshell, so the
 media module shows this track instead of whatever the user is playing:
 
-    demo-player.py <cover.png>
+    demo-player.py <cover.png> [call-log]
 
 Needs python-dbus and python-gobject.
 """
@@ -21,8 +21,9 @@ PROPS = "org.freedesktop.DBus.Properties"
 
 
 class DemoPlayer(dbus.service.Object):
-    def __init__(self, bus, cover):
+    def __init__(self, bus, cover, log=None):
         super().__init__(bus, "/org/mpris/MediaPlayer2")
+        self.log = log
         self.props = {
             ROOT: {
                 "Identity": "notchd demo",
@@ -70,25 +71,43 @@ class DemoPlayer(dbus.service.Object):
     def PropertiesChanged(self, interface, changed, invalidated):
         pass
 
-    # Transport controls do nothing: the render is a still.
+    # The transport controls do nothing to the picture (the render is a
+    # still) unless a log file is given: then each call is appended to it, one
+    # line ("PlayPause", "Next", "Previous", "SetPosition <microseconds>"), and
+    # PlayPause flips the status, as a test of the controls needs.
+    def called(self, line):
+        if self.log:
+            with open(self.log, "a") as f:
+                f.write(line + "\n")
+
     @dbus.service.method(PLAYER)
     def PlayPause(self):
-        pass
+        self.called("PlayPause")
+        if self.log:
+            status = self.props[PLAYER]["PlaybackStatus"]
+            status = "Paused" if status == "Playing" else "Playing"
+            self.props[PLAYER]["PlaybackStatus"] = status
+            self.PropertiesChanged(PLAYER, {"PlaybackStatus": status}, [])
 
     @dbus.service.method(PLAYER)
     def Next(self):
-        pass
+        self.called("Next")
 
     @dbus.service.method(PLAYER)
     def Previous(self):
-        pass
+        self.called("Previous")
+
+    @dbus.service.method(PLAYER, in_signature="ox")
+    def SetPosition(self, track, position):
+        self.called("SetPosition %d" % position)
+        self.props[PLAYER]["Position"] = dbus.Int64(position)
 
 
 def main():
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SessionBus()
     name = dbus.service.BusName(ROOT + ".notchddemo", bus)  # noqa: F841 (keeps the name)
-    DemoPlayer(bus, sys.argv[1])
+    DemoPlayer(bus, sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)
     GLib.MainLoop().run()
 
 

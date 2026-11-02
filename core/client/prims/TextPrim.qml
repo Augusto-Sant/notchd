@@ -20,6 +20,7 @@ PrimBase {
     color: prim.tone(prim.node.tone, "foreground")
     font.family: Theme.font.family
     font.pixelSize: prim.fontPx(prim.node.size, "body")
+    font.bold: prim.node.bold === true
     font.features: prim.node.tabular === true ? ({ "tnum": 1 }) : ({})
     elide: prim.node.elide === "none" ? Text.ElideNone : Text.ElideRight
     wrapMode: prim.wraps ? Text.Wrap : Text.NoWrap

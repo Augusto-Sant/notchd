@@ -110,6 +110,9 @@ pub struct Text {
     pub size: Option<TextSize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tabular: Option<bool>,
+    /// A heavier weight: a track's title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elide: Option<Elide>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

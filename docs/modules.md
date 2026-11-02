@@ -38,7 +38,7 @@ A peek asked for while the notch is open (on another tab, say) doesn't show. For
 
 ## A module in the daemon
 
-The timer, activities, resources and OSD, and every user module (a folder of `modules/` in the config dir, run by the daemon as a process), keep their logic in the daemon and send **view trees** (the primitives of [architecture.md](architecture.md#primitive-tree-v1)), not QML. `core/CoreModule.qml` is the one QML type that shows them, so to the notch (tabs, compact row, peeks, the settings page) they are modules like any other:
+The timer, activities, resources, media and OSD, and every user module (a folder of `modules/` in the config dir, run by the daemon as a process), keep their logic in the daemon and send **view trees** (the primitives of [architecture.md](architecture.md#primitive-tree-v1)), not QML. `core/CoreModule.qml` is the one QML type that shows them, so to the notch (tabs, compact row, peeks, the settings page) they are modules like any other:
 
 - Its facts (`title`, `priority`, `active`, `icon`, `attention`, `urgentPeek`, `peekOnFocusedScreen`, `expandedWidth`) are the daemon's `module` message, bound as properties (`daemonOwned` is true, so the service never reports facts for it).
 - Each slot (`compact`, `verticalCompact`, `peek`, `verticalPeek`, `expanded`) is a stable `Component` that draws `client.view(id, slot)` with `ViewTree`, or `null` while the daemon sends no tree for it. A press in a view goes back as the client's `event(module, slot, action, value)`.

@@ -204,6 +204,7 @@ ShellRoot {
       { name: "resources show closed by default, or only once one runs short", run: root.resourcesCompactWhenShort },
       { name: "a timer counts down closed, peeks when it ends and goes back to rest", run: root.timerRunsAndEnds },
       { name: "timer commands: pomodoro phases, pause, errors and its settings", run: root.timerCommands },
+      { name: "media shows the playing track closed, peeks on a new one and rests when nothing plays", run: root.mediaShowsTheTrack },
       { name: "a module you type into takes the keyboard only while pinned open", run: root.keyboardOnlyWhilePinned },
       { name: "Escape in a field inside the notch closes it, and Ctrl+Escape on the notch", run: root.escapeCloses },
       { name: "a module sets the width of its expanded view", run: root.expandedWidthFromModule },
@@ -268,7 +269,7 @@ ShellRoot {
     onTriggered: root.until(root.daemonsReady, root.next, 15000)
   }
   function daemonsReady() {
-    var services = [service, multi, standaloneSvc, resourced, timed, typer, dropSvc, codexSvc, claudeSvc, codexMissingSvc,
+    var services = [service, multi, standaloneSvc, resourced, timed, played, typer, dropSvc, codexSvc, claudeSvc, codexMissingSvc,
                     ownTermSvc, liveSvc, localLiveSvc, componentSvc, tallSvc, tabsSvc, idleSvc]
     return services.every(function(s) { return s.daemonReady })
   }
@@ -1331,6 +1332,45 @@ ShellRoot {
       yield say("stop", "ok")
       timed.dismissPeek(null)
       timed.replaceConfig({})
+    })
+  }
+
+  TestService {
+    id: played
+    ipcTarget: "notchd-qmltest-media"
+    configPath: root.dir + "/media.json"
+    compositor: twoScreens
+    defaultModules: ["media"]
+  }
+
+  // The test hook gives the daemon demo players in place of MPRIS: the
+  // playing track takes the closed notch (title, artist), a new one peeks,
+  // and once nothing plays and the pause grace is not running the notch
+  // rests.
+  function mediaShowsTheTrack() {
+    root.go(function*() {
+      yield root.waitFor(function() { return !!played.moduleById("media") && played.notches.length > 0 })
+      var m = played.moduleById("media")
+      var notch = played.notches[0]
+      function players(title, playing) {
+        return JSON.stringify({ players: [{ id: "p", name: "Demo", playing: playing, title: title, artist: "Neon Harbor",
+          album: "", artUrl: "", length: 214, position: 92, canPlay: true, canPause: true, canNext: true, canPrev: true, canSeek: true }] })
+      }
+      root.check(!m.active && notch.compactModule === null, "media active with no player")
+      yield root.ask(played, "test-media", [players("Night Drive", true)], function(a) { root.check(a === "ok", "hook: " + a) })
+      yield root.settle(played)
+      var compact = root.texts(m.tree("compact"))
+      root.check(m.active && notch.compactModule === m, "the playing track is not in the closed notch")
+      root.check(compact.indexOf("Night Drive") !== -1 && compact.indexOf(" · Neon Harbor") !== -1, "compact: " + JSON.stringify(compact))
+      yield root.waitFor(function() { return played.peeking(m) }, 3000)
+      root.check(played.peeking(m), "a new track did not peek")
+      played.dismissPeek(null)
+      var expanded = root.texts(m.tree("expanded"))
+      root.check(expanded.indexOf("Demo") !== -1 && expanded.some(function(t) { return /^1:(3[2-9])$/.test(t) }) && expanded.some(function(t) { return /^-2:0[0-2]$/.test(t) }), "expanded: " + JSON.stringify(expanded))
+      yield root.ask(played, "test-media", [JSON.stringify({ players: [] })], function(a) { root.check(a === "ok", "hook: " + a) })
+      yield root.settle(played)
+      root.check(!m.active && notch.compactModule === null, "media still shown with no player")
+      played.replaceConfig({})
     })
   }
 

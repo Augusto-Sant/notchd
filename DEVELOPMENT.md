@@ -45,7 +45,7 @@ core/                 the framework: no desktop-specific code
   NotchWindow.qml     the layer-shell overlay that puts one copy on screen
   NotchCard.qml       the notch itself: outline, padding, the current view
   NotchModule.qml     base type for modules
-  CoreModule.qml      a module that lives in the daemon (timer, activities, resources, osd, user modules): draws its views
+  CoreModule.qml      a module that lives in the daemon (timer, activities, resources, media, osd, user modules): draws its views
   Theme.qml           visual tokens (singleton), fed by the host
   Config.js           config rules (pure JS)
   Position.js         edge and offset: where the notch sits, corners and joined rows (pure JS)
@@ -122,7 +122,7 @@ The tests are a pyramid: many cheap ones at the bottom, few costly ones on top, 
 | Layer | Target | What it does | Run it |
 |---|---|---|---|
 | unit | `make test` | Node tests of `core/*.js` and `core/settings/*.js`; the Python rules of the live bridges and the components' installer as functions (`tests/*_test.py`, every TestCase without `tier = "integration"`). No processes, no servers | after every change |
-| integration | `make integration` | `tests/codex_live_test.py`'s echo canceller on real GStreamer; `tests/local_live_test.py`, the whole local voice bridge with a fake LocalAI, voxtype, pacat, codex and claude; `tests/components_test.py`, the components' installer with fake `pacman`, `pkexec`, `yay`, a fake LocalAI and downloads from a server on 127.0.0.1; `tests/fetch_daemon_test.py`, `scripts/fetch-daemon.py` against a local release server. On parallel workers, each in its own process group, killed with what it left behind (every process is also under `timeout -k`) | after a change to `core/live/` or `core/components/` |
+| integration | `make integration` | `tests/codex_live_test.py`'s echo canceller on real GStreamer; `tests/local_live_test.py`, the whole local voice bridge with a fake LocalAI, voxtype, pacat, codex and claude; `tests/components_test.py`, the components' installer with fake `pacman`, `pkexec`, `yay`, a fake LocalAI and downloads from a server on 127.0.0.1; `tests/fetch_daemon_test.py`, `scripts/fetch-daemon.py` against a local release server; `tests/mpris_test.py`, the real daemon against the demo player on a private D-Bus (`make integration` builds the daemon first). On parallel workers, each in its own process group, killed with what it left behind (every process is also under `timeout -k`) | after a change to `core/live/` or `core/components/` |
 | qml | `make qmltest` | the QML behaviour tests, in parallel shards (below) | after a QML change |
 | visual | `make visual` | renders the settings window and the notch on each edge (the real modules, the media one playing the demo player's track) offscreen into `build/visual/`; fails on any QML warning, so it also proves the core loads | after a visual change, and look at the PNGs |
 | static | `make lint` | `qmllint` over `shell.qml` and the core; fails on any warning. Also checks that the Python bridges and installer parse | after a QML change |

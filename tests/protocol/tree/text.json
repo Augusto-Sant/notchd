@@ -2,7 +2,7 @@
  "message": "text",
  "valid": [
   {"t":"text","text":"24:31"},
-  {"t":"text","action":"open","text":"Now playing","tone":"muted","size":"bodySmall","tabular":true,"elide":"end","wrap":true,"maxWidth":200,"align":"end","lines":2}
+  {"t":"text","action":"open","text":"Now playing","tone":"muted","size":"bodySmall","tabular":true,"bold":true,"elide":"end","wrap":true,"maxWidth":200,"align":"end","lines":2}
  ],
  "invalid": [
   {"why":"text missing","json":{"t":"text","tone":"muted"}},

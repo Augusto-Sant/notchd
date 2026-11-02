@@ -12,9 +12,11 @@ use notchd_core::store::Store;
 use notchd_modules::{CoreModule, Ctx, Effect};
 use notchd_proto::common::Mode;
 use notchd_proto::{EventValue, Slot, ToUi};
+use notchd_providers::media::MediaCommand;
 use notchd_providers::notifications::Notifier;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::mpsc::Sender;
 
 /// The IPC methods a module of the daemon answers, by module. A method of
 /// one that is not loaded is answered `<id> module not loaded`.
@@ -38,6 +40,12 @@ pub struct CoreHost {
     /// When each wants `tick`, as it said after its last change.
     due: BTreeMap<&'static str, u64>,
     notifier: Option<Box<dyn Notifier>>,
+    /// The media provider's commands (its thread makes the D-Bus calls, never
+    /// this one, which runs under the hub's lock).
+    media: Option<Sender<MediaCommand>>,
+    /// The players of the system feed `media`; off once a test hook gave it
+    /// demo players.
+    media_live: bool,
     /// The system's readings feed `resources`; off once a test hook gave it
     /// demo values.
     pub sampling: bool,
@@ -55,8 +63,24 @@ impl CoreHost {
             loaded: BTreeMap::new(),
             due: BTreeMap::new(),
             notifier,
+            media: None,
+            media_live: true,
             sampling: true,
         }
+    }
+
+    /// Where `media`'s commands go.
+    /// A module that loaded before this asks for the players now.
+    pub fn set_media(&mut self, commands: Sender<MediaCommand>) {
+        self.media = Some(commands);
+        if self.loaded.contains_key("media") {
+            self.send_media(MediaCommand::Refresh);
+        }
+    }
+
+    /// Whether the module `media` wants the system's players.
+    pub fn wants_media(&self) -> bool {
+        self.media_live && self.loaded.contains_key("media")
     }
 
     pub fn has(&self, id: &str) -> bool {
@@ -123,6 +147,10 @@ impl CoreHost {
             if wanted && !self.loaded.contains_key(id) {
                 if let Some(m) = notchd_modules::create(id) {
                     self.loaded.insert(id, m);
+                    if *id == "media" {
+                        // It wants the players as they are now.
+                        self.send_media(MediaCommand::Refresh);
+                    }
                 }
             } else if !wanted && self.loaded.remove(id).is_some() {
                 self.due.remove(id);
@@ -145,6 +173,12 @@ impl CoreHost {
         out
     }
 
+    fn send_media(&self, c: MediaCommand) {
+        if let Some(tx) = &self.media {
+            let _ = tx.send(c);
+        }
+    }
+
     /// A module's facts, views and effects, after something changed it.
     fn settle(&mut self, store: &mut Store, mods: &mut Mods, id: &str, now: u64) -> Vec<ToUi> {
         let Some(m) = self.loaded.get_mut(id) else {
@@ -163,6 +197,7 @@ impl CoreHost {
             match e {
                 Effect::Peek(ms) => store.request_peek(id, Some(f64::from(ms)), now),
                 Effect::DismissPeek => store.dismiss_peek(id),
+                Effect::Media(c) => self.send_media(c),
                 Effect::Notify { title, body } => {
                     if let Some(n) = &self.notifier {
                         n.notify(&title, &body);
@@ -219,6 +254,9 @@ impl CoreHost {
         data: &Value,
         now: u64,
     ) -> Vec<ToUi> {
+        if provider == "media" && !self.media_live {
+            return Vec::new();
+        }
         let ids: Vec<&'static str> = self.loaded.keys().copied().collect();
         let mut out = Vec::new();
         for id in ids {
@@ -265,6 +303,9 @@ impl CoreHost {
     ) -> Option<(String, Vec<ToUi>)> {
         if id == "resources" {
             self.sampling = false;
+        }
+        if id == "media" {
+            self.media_live = false;
         }
         let m = self.loaded.get_mut(id)?;
         let answer = m.demo(args, now)?;
@@ -452,6 +493,44 @@ mod tests {
             .is_some()
         );
         assert!(!h.wants_resources(), "demo values stop the readings");
+    }
+
+    #[test]
+    fn media_asks_for_the_players_when_it_loads_and_its_buttons_reach_the_provider() {
+        use std::sync::mpsc::channel;
+        let (mut h, mut s, mut m, _) = rig(json!({"modules": ["media"]}));
+        let (tx, rx) = channel();
+        h.set_media(tx);
+        assert!(!h.wants_media(), "not loaded yet");
+        h.sync(&mut s, &mut m, 0);
+        assert!(h.wants_media());
+        assert_eq!(rx.try_recv(), Ok(MediaCommand::Refresh));
+        let player = json!({"id": "p", "name": "P", "playing": true, "title": "Song", "artist": "A",
+            "album": "", "artUrl": "", "length": 100, "position": 10, "canPlay": true, "canPause": true,
+            "canNext": true, "canPrev": true, "canSeek": true});
+        let out = h.feed(&mut s, &mut m, "media", &json!({"players": [player]}), 1000);
+        assert!(
+            out.iter()
+                .any(|u| matches!(u, ToUi::Module(i) if i.id == "media" && i.active))
+        );
+        let null = EventValue::Null(());
+        h.event(&mut s, &mut m, "media", "next", &null, 1100);
+        let half = EventValue::Number(notchd_proto::Num(0.5));
+        h.event(&mut s, &mut m, "media", "seek", &half, 1200);
+        assert_eq!(rx.try_recv(), Ok(MediaCommand::Next { player: "p".into() }));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(MediaCommand::Seek {
+                player: "p".into(),
+                seconds: 50.0
+            })
+        );
+        // Demo players stop the system's.
+        let demo = json!({"players": []}).to_string();
+        h.demo(&mut s, &mut m, "media", &[demo], 2000).unwrap();
+        assert!(!h.wants_media());
+        let out = h.feed(&mut s, &mut m, "media", &json!({"players": [player]}), 3000);
+        assert!(out.is_empty());
     }
 
     #[test]

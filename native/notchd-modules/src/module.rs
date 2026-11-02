@@ -47,6 +47,8 @@ pub enum Effect {
     DismissPeek,
     /// A desktop notification (the `notifications` provider).
     Notify { title: String, body: String },
+    /// A command for a media player (the `media` provider).
+    Media(notchd_providers::media::MediaCommand),
 }
 
 /// What the host knows that a module's rules need.

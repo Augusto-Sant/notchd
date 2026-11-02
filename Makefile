@@ -61,7 +61,7 @@ rust:
 # processes against fakes (a fake LocalAI, pacman, downloads from a local
 # server: nothing real is installed), on parallel workers. TestCases with
 # `tier = "integration"`.
-integration:
+integration: daemon
 	@$(TIMED) py-integration scripts/pytests.py integration
 
 # QML behaviour tests (tests/qml/shell.qml), offscreen, in parallel shards:

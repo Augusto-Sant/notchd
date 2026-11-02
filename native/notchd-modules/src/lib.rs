@@ -18,12 +18,13 @@ pub use module::{CoreModule, Ctx, Effect, Facts};
 
 /// The ids of the modules that live in the daemon. A module moves here (and
 /// out of the UI's own list of built-ins) when its logic is ported.
-pub const IDS: &[&str] = &["activities", "osd", "resources", "timer"];
+pub const IDS: &[&str] = &["activities", "media", "osd", "resources", "timer"];
 
 /// A fresh instance of a module of [`IDS`].
 pub fn create(id: &str) -> Option<Box<dyn CoreModule>> {
     Some(match id {
         "activities" => Box::new(activities::Activities::new()),
+        "media" => Box::new(media::Media::new()),
         "osd" => Box::new(osd::Osd::new()),
         "resources" => Box::new(resources::Resources::new()),
         "timer" => Box::new(timer::Timer::new()),
@@ -35,6 +36,7 @@ pub fn create(id: &str) -> Option<Box<dyn CoreModule>> {
 pub fn title(id: &str) -> &'static str {
     match id {
         "activities" => "Activities",
+        "media" => "Now playing",
         "osd" => "OSD",
         "resources" => "Resources",
         "timer" => "Timer",
