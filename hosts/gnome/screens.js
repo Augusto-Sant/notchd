@@ -44,8 +44,11 @@ export function queryConnectors(done) {
 }
 
 export class Screens {
-    constructor(onChanged) {
+    // `onChanged(msg)` has the `screens` message to send; `onNames()` says
+    // the monitors' names are known (or changed), for what waited on them.
+    constructor(onChanged, onNames) {
         this._onChanged = onChanged;
+        this._onNames = onNames;
         this._ids = [
             [Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => this._monitorsChanged())],
             [global.display, global.display.connect('in-fullscreen-changed', () => this._changed())],
@@ -74,6 +77,7 @@ export class Screens {
             this._cancel = null;
             this.names = names;
             this._changed();
+            this._onNames?.();
         });
     }
 

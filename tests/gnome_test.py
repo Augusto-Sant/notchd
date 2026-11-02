@@ -163,7 +163,13 @@ class Shell:
                               capture_output=True, text=True).stdout.strip()
 
     def extensions(self, verb):
-        env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=self._address())
+        # The shell's own session: GNOME 46's gnome-extensions edits the
+        # `enabled-extensions` setting itself (not over D-Bus, as 51 does)
+        # and reads it from the config dir of the user it runs as, so it
+        # needs the shell's XDG dirs (gnome-dev.sh) to see the shell's value.
+        env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=self._address(),
+                   XDG_RUNTIME_DIR=os.path.join(self.scratch, "run"), XDG_CONFIG_HOME=os.path.join(self.scratch, "config"),
+                   XDG_DATA_HOME=os.path.join(self.scratch, "data"), XDG_CACHE_HOME=os.path.join(self.scratch, "cache"))
         subprocess.run(["timeout", "-k", "2", "10", "gnome-extensions", verb, UUID], env=env, check=True,
                        capture_output=True)
 

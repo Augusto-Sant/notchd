@@ -35,7 +35,7 @@ export default class NotchdExtension extends Extension {
         this._copies = new Map();
         this._struts = [];
         this._theme = new Theme(() => this._redraw());
-        this._screens = new Screens(msg => this._client?.send(msg));
+        this._screens = new Screens(msg => this._client?.send(msg), () => this._redraw());
         const version = this.metadata['version-name'] ?? '0';
         this._client = new DaemonClient({
             hello: () => Protocol.hello('gnome-shell', version, 'default',
@@ -201,6 +201,12 @@ export default class NotchdExtension extends Extension {
     // strut is an invisible chrome actor touching the monitor's edge, so it
     // reaches from the top of the monitor down past the panel.
     _reserve(reserve) {
+        // Not before the monitors have names: a daemon that is already
+        // running sends its reserve at once, when this enable has not yet
+        // asked mutter for them, and the strut for `Meta-0` would have no
+        // monitor. `Screens` calls back when they are known.
+        if (!this._screens.names)
+            return;
         const text = JSON.stringify(reserve);
         if (text === this._lastReserve)
             return;
