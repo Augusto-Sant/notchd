@@ -1,0 +1,11 @@
+{
+ "message": "button",
+ "valid": [
+  {"t":"button","action":"toggle","glyph":"󰐊"},
+  {"t":"button","action":"refresh","label":"Refresh","tone":"accent","enabled":false,"selected":true,"variant":"outline"}
+ ],
+ "invalid": [
+  {"why":"variant is not a variant","json":{"t":"button","label":"x","variant":"ghost"}},
+  {"why":"enabled is a string","json":{"t":"button","label":"x","enabled":"no"}}
+ ]
+}

@@ -1,0 +1,13 @@
+{
+ "message": "hello",
+ "note": "A hello with another major still parses: the daemon answers it with err proto.",
+ "valid": [
+  {"t":"hello","proto":1,"client":"quickshell-omarchy","clientVersion":"0.4.0","instance":"default","caps":{"primitives":["row","column","text","icon","image","progress","meter","equalizer","list","button","chip","spacer","stack","canvas"],"surfaces":["terminal"],"webview":false,"canvas":true}},
+  {"t":"hello","proto":2,"client":"swiftui","clientVersion":"1.0.0","instance":"dev","caps":{"primitives":["row","hologram"],"surfaces":[],"webview":true,"canvas":false}}
+ ],
+ "invalid": [
+  {"why":"caps missing","json":{"t":"hello","proto":1,"client":"x","clientVersion":"1","instance":"default"}},
+  {"why":"proto missing","json":{"t":"hello","client":"x","clientVersion":"1","instance":"default","caps":{"primitives":[],"surfaces":[],"webview":false,"canvas":false}}},
+  {"why":"canvas is not a boolean","json":{"t":"hello","proto":1,"client":"x","clientVersion":"1","instance":"d","caps":{"primitives":[],"surfaces":[],"webview":false,"canvas":"yes"}}}
+ ]
+}

@@ -1,0 +1,12 @@
+{
+ "message": "equalizer",
+ "valid": [
+  {"t":"equalizer","active":true},
+  {"t":"equalizer","active":false,"mode":"light","bars":6,"height":14}
+ ],
+ "invalid": [
+  {"why":"active missing","json":{"t":"equalizer"}},
+  {"why":"mode is not a mode","json":{"t":"equalizer","active":true,"mode":"loud"}},
+  {"why":"zero bars","json":{"t":"equalizer","active":true,"bars":0}}
+ ]
+}

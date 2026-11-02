@@ -1,0 +1,10 @@
+{
+ "message": "notify",
+ "valid": [
+  {"t":"notify","title":"Rain","body":"in 10 minutes"},
+  {"t":"notify","title":"Done"}
+ ],
+ "invalid": [
+  {"why":"title missing","json":{"t":"notify","body":"x"}}
+ ]
+}

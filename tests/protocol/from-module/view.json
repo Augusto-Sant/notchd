@@ -1,0 +1,13 @@
+{
+ "message": "view",
+ "valid": [
+  {"t":"view","slot":"compact","tree":{"t":"row","gap":6,"children":[{"t":"icon","glyph":"󰖐","tone":"accent"},{"t":"text","text":"18°"}]}},
+  {"t":"view","slot":"expanded","tree":{"t":"column","gap":8,"children":[{"t":"text","text":"Berlin","size":"heading"},{"t":"button","action":"refresh","label":"Refresh"}]}},
+  {"t":"view","slot":"peek","tree":null}
+ ],
+ "invalid": [
+  {"why":"slot missing","json":{"t":"view","tree":null}},
+  {"why":"a node without t","json":{"t":"view","slot":"compact","tree":{"text":"x"}}},
+  {"why":"a row without children","json":{"t":"view","slot":"compact","tree":{"t":"row"}}}
+ ]
+}

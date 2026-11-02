@@ -1,0 +1,15 @@
+{
+ "message": "canvas",
+ "valid": [
+  {"t":"canvas","w":120,"h":28,"cmds":[{"c":"rect","x":0,"y":0,"w":120,"h":28,"r":6,"fill":"selected"},{"c":"path","d":"M0 20 L10 12 L20 16 L30 6","stroke":"accent","width":1.5,"cap":"round","join":"round"},{"c":"circle","x":60,"y":14,"r":4,"fill":"danger","opacity":0.8},{"c":"line","x1":0,"y1":27,"x2":120,"y2":27,"stroke":"line","width":1},{"c":"text","x":4,"y":4,"text":"cpu","size":"caption","tone":"muted"}]},
+  {"t":"canvas","w":64,"h":64,"cmds":[],"animate":{"fps":30}},
+  {"t":"canvas","w":64,"h":64,"cmds":[{"c":"clip","x":0,"y":0,"w":64,"h":64,"r":8},{"c":"rect","x":0,"y":0,"w":64,"h":64,"fill":{"mix":["accent","background",0.4]}},{"c":"unclip"}],"animate":false}
+ ],
+ "invalid": [
+  {"why":"cmds missing","json":{"t":"canvas","w":10,"h":10}},
+  {"why":"w is zero","json":{"t":"canvas","w":0,"h":10,"cmds":[]}},
+  {"why":"fps over the cap","json":{"t":"canvas","w":10,"h":10,"cmds":[],"animate":{"fps":60}}},
+  {"why":"unknown command","json":{"t":"canvas","w":10,"h":10,"cmds":[{"c":"star","x":1}]}},
+  {"why":"a hex color","json":{"t":"canvas","w":10,"h":10,"cmds":[{"c":"rect","x":0,"y":0,"w":1,"h":1,"fill":"#ff0000"}]}}
+ ]
+}

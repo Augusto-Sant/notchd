@@ -1,0 +1,12 @@
+{
+ "message": "meter",
+ "valid": [
+  {"t":"meter","value":0.3},
+  {"t":"meter","value":0.7,"style":"disc","size":90,"child":{"t":"icon","glyph":"󰍬"}}
+ ],
+ "invalid": [
+  {"why":"value missing","json":{"t":"meter"}},
+  {"why":"value over 1","json":{"t":"meter","value":1.2}},
+  {"why":"style is not a style","json":{"t":"meter","value":0.5,"style":"bar"}}
+ ]
+}

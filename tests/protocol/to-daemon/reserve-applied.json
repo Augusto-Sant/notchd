@@ -1,0 +1,10 @@
+{
+ "message": "reserve-applied",
+ "valid": [
+  {"t":"reserve-applied","screen":"DP-1","edge":"top","depth":34}
+ ],
+ "invalid": [
+  {"why":"depth missing","json":{"t":"reserve-applied","screen":"DP-1","edge":"top"}},
+  {"why":"edge is not an edge","json":{"t":"reserve-applied","screen":"DP-1","edge":"north","depth":34}}
+ ]
+}

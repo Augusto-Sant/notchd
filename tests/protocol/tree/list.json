@@ -1,0 +1,10 @@
+{
+ "message": "list",
+ "valid": [
+  {"t":"list","gap":4,"stick":"end","maxHeight":240,"children":[{"t":"text","text":"hi"},{"t":"text","text":"hello"}]}
+ ],
+ "invalid": [
+  {"why":"stick is not a stick","json":{"t":"list","children":[],"stick":"middle"}},
+  {"why":"children missing","json":{"t":"list"}}
+ ]
+}

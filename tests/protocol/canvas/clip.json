@@ -1,0 +1,9 @@
+{
+ "message": "clip",
+ "valid": [
+  {"c":"clip","x":0,"y":0,"w":20,"h":20,"r":4}
+ ],
+ "invalid": [
+  {"why":"h missing","json":{"c":"clip","x":0,"y":0,"w":20}}
+ ]
+}

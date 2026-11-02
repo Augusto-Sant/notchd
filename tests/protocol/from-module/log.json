@@ -1,0 +1,10 @@
+{
+ "message": "log",
+ "valid": [
+  {"t":"log","level":"info","text":"fetched"}
+ ],
+ "invalid": [
+  {"why":"level is not a level","json":{"t":"log","level":"loud","text":"x"}},
+  {"why":"text missing","json":{"t":"log","level":"info"}}
+ ]
+}

@@ -1,0 +1,11 @@
+{
+ "message": "settings",
+ "valid": [
+  {"t":"settings","open":true,"page":"modules/media"},
+  {"t":"settings","open":false}
+ ],
+ "invalid": [
+  {"why":"open missing","json":{"t":"settings","page":"general"}},
+  {"why":"open is a string","json":{"t":"settings","open":"yes"}}
+ ]
+}

@@ -1,0 +1,9 @@
+{
+ "message": "visible",
+ "valid": [
+  {"t":"visible","slot":"expanded","visible":true}
+ ],
+ "invalid": [
+  {"why":"visible is a string","json":{"t":"visible","slot":"expanded","visible":"yes"}}
+ ]
+}

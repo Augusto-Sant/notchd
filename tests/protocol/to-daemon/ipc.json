@@ -1,0 +1,13 @@
+{
+ "message": "ipc",
+ "valid": [
+  {"t":"ipc","id":6,"method":"timer","args":["3m Tea"]},
+  {"t":"ipc","id":7,"method":"state","args":[]},
+  {"t":"ipc","id":8,"method":"component","args":["install","voice-piper-pt-br"]}
+ ],
+ "invalid": [
+  {"why":"args missing","json":{"t":"ipc","id":6,"method":"state"}},
+  {"why":"an arg is not a string","json":{"t":"ipc","id":6,"method":"timer","args":[3]}},
+  {"why":"id missing","json":{"t":"ipc","method":"state","args":[]}}
+ ]
+}

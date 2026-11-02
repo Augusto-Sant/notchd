@@ -1,0 +1,11 @@
+{
+ "message": "module",
+ "valid": [
+  {"t":"module","id":"media","rev":7,"title":"Now playing","priority":50,"active":true,"icon":"","attention":false,"expandedWidth":400,"urgentPeek":false,"peekOnFocusedScreen":false,"error":null},
+  {"t":"module","id":"media","rev":8,"title":"Now playing","priority":50,"active":false,"icon":"","attention":false,"expandedWidth":400,"urgentPeek":false,"peekOnFocusedScreen":false,"status":"installing 40%","error":"network down"}
+ ],
+ "invalid": [
+  {"why":"expandedWidth is negative","json":{"t":"module","id":"media","rev":7,"title":"Now playing","priority":50,"active":true,"icon":"","attention":false,"expandedWidth":-1,"urgentPeek":false,"peekOnFocusedScreen":false,"error":null}},
+  {"why":"id missing","json":{"t":"module","rev":7,"title":"Now playing","priority":50,"active":true,"icon":"","attention":false,"expandedWidth":400,"urgentPeek":false,"peekOnFocusedScreen":false,"error":null}}
+ ]
+}

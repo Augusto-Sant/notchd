@@ -1,0 +1,9 @@
+{
+ "message": "circle",
+ "valid": [
+  {"c":"circle","x":5,"y":5,"r":3,"stroke":"accent","width":2}
+ ],
+ "invalid": [
+  {"why":"r missing","json":{"c":"circle","x":5,"y":5}}
+ ]
+}

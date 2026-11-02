@@ -1,0 +1,10 @@
+{
+ "message": "path",
+ "valid": [
+  {"c":"path","d":"M0 0 L10 10 Q5 5 2 2 C1 1 2 2 3 3 Z","fill":"hover"}
+ ],
+ "invalid": [
+  {"why":"d missing","json":{"c":"path","fill":"hover"}},
+  {"why":"join is not a join","json":{"c":"path","d":"M0 0","join":"flat"}}
+ ]
+}

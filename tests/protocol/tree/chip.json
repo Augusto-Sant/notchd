@@ -1,0 +1,11 @@
+{
+ "message": "chip",
+ "valid": [
+  {"t":"chip","action":"preset","label":"5 min","value":"300","selected":false},
+  {"t":"chip","label":"Tea"}
+ ],
+ "invalid": [
+  {"why":"label missing","json":{"t":"chip","value":"300"}},
+  {"why":"selected is a string","json":{"t":"chip","label":"x","selected":"yes"}}
+ ]
+}

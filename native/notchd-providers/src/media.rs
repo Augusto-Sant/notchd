@@ -1,0 +1,1 @@
+//! The `media` provider trait.

@@ -1,0 +1,15 @@
+{
+ "message": "manifest",
+ "valid": [
+  {"title":"Weather","command":["./run.sh"],"priority":40,"icon":"󰖐","expandedWidth":360,"permissions":["network"],"settings":[{"key":"city","type":"string","label":"City","default":"Berlin"}],"subscribe":["resources"],"standalone":false},
+  {"command":["python3","${config}/x.py"],"urgentPeek":true,"peekOnFocusedScreen":true,"env":{"LANG":"C"}},
+  {"command":["./run.sh"]}
+ ],
+ "invalid": [
+  {"why":"command missing","json":{"title":"x"}},
+  {"why":"command empty","json":{"command":[]}},
+  {"why":"command is a string","json":{"command":"./run.sh"}},
+  {"why":"subscribe names an unknown provider","json":{"command":["./r"],"subscribe":["weather"]}},
+  {"why":"settings field of an unknown type","json":{"command":["./r"],"settings":[{"key":"k","type":"slider"}]}}
+ ]
+}

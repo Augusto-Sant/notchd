@@ -1,0 +1,12 @@
+{
+ "message": "surface",
+ "valid": [
+  {"t":"surface","ref":"term:claude","ev":"data","b64":"G1s="},
+  {"t":"surface","ref":"term:claude","ev":"title","text":"⠋ Fix tests | notchd"}
+ ],
+ "invalid": [
+  {"why":"unknown ev","json":{"t":"surface","ref":"term:claude","ev":"scroll","b64":""}},
+  {"why":"data without b64","json":{"t":"surface","ref":"term:claude","ev":"data"}},
+  {"why":"ref missing","json":{"t":"surface","ev":"data","b64":""}}
+ ]
+}

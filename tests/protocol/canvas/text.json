@@ -1,0 +1,9 @@
+{
+ "message": "text",
+ "valid": [
+  {"c":"text","x":4,"y":4,"text":"cpu","size":"caption","tone":"muted","opacity":1}
+ ],
+ "invalid": [
+  {"why":"text missing","json":{"c":"text","x":4,"y":4}}
+ ]
+}

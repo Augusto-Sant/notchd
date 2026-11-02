@@ -1,0 +1,9 @@
+{
+ "message": "stop",
+ "valid": [
+  {"t":"stop"}
+ ],
+ "invalid": [
+  {"why":"no t","json":{}}
+ ]
+}

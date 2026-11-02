@@ -1,0 +1,11 @@
+{
+ "message": "media",
+ "valid": [
+  {"players":[{"id":"spotify","name":"Spotify","playing":true,"title":"Song","artist":"Artist","album":"Album","artUrl":"file:///tmp/a.jpg","length":215.5,"position":12.25,"canPlay":true,"canPause":true,"canNext":true,"canPrev":true,"canSeek":true}]},
+  {"players":[]}
+ ],
+ "invalid": [
+  {"why":"players missing","json":{}},
+  {"why":"a player without id","json":{"players":[{"name":"x"}]}}
+ ]
+}

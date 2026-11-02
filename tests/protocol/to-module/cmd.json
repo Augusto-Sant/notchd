@@ -1,0 +1,9 @@
+{
+ "message": "cmd",
+ "valid": [
+  {"t":"cmd","method":"push","args":["..."]}
+ ],
+ "invalid": [
+  {"why":"args missing","json":{"t":"cmd","method":"push"}}
+ ]
+}

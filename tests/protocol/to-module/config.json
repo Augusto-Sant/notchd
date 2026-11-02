@@ -1,0 +1,9 @@
+{
+ "message": "config",
+ "valid": [
+  {"t":"config","config":{"city":"Paris"}}
+ ],
+ "invalid": [
+  {"why":"config missing","json":{"t":"config"}}
+ ]
+}

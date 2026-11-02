@@ -1,0 +1,11 @@
+{
+ "message": "init",
+ "valid": [
+  {"t":"init","proto":1,"id":"weather","config":{"city":"Berlin"},"tokens":["foreground","muted","accent"],"slots":["compact","verticalCompact","peek","verticalPeek","expanded"],"dir":"/home/eryk/.config/notchd/modules/weather"}
+ ],
+ "invalid": [
+  {"why":"another major","json":{"t":"init","proto":2,"id":"w","config":{},"tokens":[],"slots":[],"dir":"/d"}},
+  {"why":"slot is not a slot","json":{"t":"init","proto":1,"id":"w","config":{},"tokens":[],"slots":["tiny"],"dir":"/d"}},
+  {"why":"dir missing","json":{"t":"init","proto":1,"id":"w","config":{},"tokens":[],"slots":[]}}
+ ]
+}

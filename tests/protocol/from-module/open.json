@@ -1,0 +1,9 @@
+{
+ "message": "open",
+ "valid": [
+  {"t":"open"}
+ ],
+ "invalid": [
+  {"why":"not an object","json":"open"}
+ ]
+}
