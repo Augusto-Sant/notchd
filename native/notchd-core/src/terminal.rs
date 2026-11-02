@@ -1,5 +1,5 @@
-//! Port of `core/Terminal.js` (tests: the Terminal tests of
-//! `tests/agent.test.mjs`, plus a few marked "(added)").
+//! The terminal's rules (ported from `core/Terminal.js`, which keeps only the
+//! widget's side; tests: `tests/vectors/rules/terminal.json`, plus a few marked "(added)").
 //!
 //! The terminal a module shows in its expanded view (`core/terminal/
 //! TerminalView.qml`, used by `modules/codex.qml`): whether the widget is

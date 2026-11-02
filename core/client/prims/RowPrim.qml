@@ -15,13 +15,16 @@ PrimBase {
     anchors.fill: parent
     spacing: row.px(row.node.gap, 8)
     Repeater {
-      model: row.node.children
+      // The count, not the list: a new list of the same shape (every `view` is one)
+      // must not remake the children, or a terminal in one would start over.
+      model: row.node.children ? row.node.children.length : 0
       delegate: ViewTree {
-        required property var modelData
-        tree: modelData
+        required property int index
+        readonly property var child: row.node.children[index]
+        tree: child
         inRow: true
         depth: row.depth + 1
-        Layout.fillWidth: modelData !== null && modelData !== undefined && modelData.fill === true
+        Layout.fillWidth: child !== null && child !== undefined && child.fill === true
         Layout.alignment: row.cross
         onAction: (actionId, value) => row.fired(actionId, value)
       }

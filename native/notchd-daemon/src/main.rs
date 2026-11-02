@@ -9,6 +9,7 @@ usage: notchd [options] <command>
 
   notchd daemon [--ensure]        run the daemon (--ensure: start it detached unless one runs)
   notchd ipc <method> [args...]   send an IPC method to the daemon, print its reply
+  notchd attach <ref>             a view of a terminal the daemon runs (term:claude), on this terminal
   notchd --version                its version
   notchd --help                   this text
 
@@ -73,6 +74,16 @@ fn main() {
             match ipc::call(&instance.socket, method, &args[2..]) {
                 Ok(reply) => println!("{reply}"),
                 Err(e) => die(&e, 1),
+            }
+        }
+        "attach" => {
+            let Some(reference) = args.get(1) else {
+                die("attach needs a surface (term:<module>)", 2)
+            };
+            if let Err(e) = notchd_daemon::attach::run(&instance.socket, reference) {
+                // The terminal this runs on shows it.
+                println!("notchd: {e}");
+                exit(1);
             }
         }
         _ => {

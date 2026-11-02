@@ -1,4 +1,5 @@
-//! Port of `core/Usage.js` (tests: `tests/usage.test.mjs`).
+//! The plan-usage rules (ported from `core/Usage.js`, gone with 3.5; its tests
+//! live on as `tests/vectors/rules/usage.json` and `tests/fixtures/usage`).
 //!
 //! The plan limits of the coding agents: how much of each window (5 hours,
 //! the week) is used and when it resets. The answers of the endpoints the

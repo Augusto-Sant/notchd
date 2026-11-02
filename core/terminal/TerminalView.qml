@@ -6,13 +6,14 @@ import "../Terminal.js" as Terminal
 // A terminal running one program, from the optional qmltermwidget package
 // (the QML port of qtermwidget). Nothing loads this file before
 // Terminal.PROBE has loaded, so a missing package is a message in the
-// module, not a warning. qmllint can't read the package's types, so lint
-// skips this file (Makefile); the QML tests load it. The program starts
-// with the view, and its session lives as long as the view does, wherever
-// the view is put (modules/codex.qml moves one view between the notch's
-// windows).
+// surface, not a warning. qmllint can't read the package's types, so lint
+// skips this file (Makefile); the QML tests load it. TerminalSurface runs
+// `notchd attach` in it: the program itself lives in the daemon and this is
+// only a window onto it. The program starts with the view, and the view
+// ends with it.
 QMLTermWidget {
   id: view
+  objectName: "terminal"
 
   property string program: "/bin/sh"
   property var programArguments: []

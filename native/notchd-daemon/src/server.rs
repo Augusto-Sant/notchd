@@ -33,6 +33,15 @@ pub struct Server {
 
 impl Server {
     pub fn bind(instance: Instance) -> Result<Server, String> {
+        Server::bind_with(instance, crate::corehost::CoreHost::default())
+    }
+
+    /// Binds with the modules of the daemon running on `core` (tests give it
+    /// a fake environment and network).
+    pub fn bind_with(
+        instance: Instance,
+        core: crate::corehost::CoreHost,
+    ) -> Result<Server, String> {
         let path = &instance.socket;
         if let Some(dir) = path.parent() {
             fs::DirBuilder::new()
@@ -53,7 +62,7 @@ impl Server {
         Ok(Server {
             listener,
             path: path.clone(),
-            hub: Hub::new(&instance.name, &instance.config),
+            hub: Hub::with_core(&instance.name, &instance.config, core),
         })
     }
 
@@ -94,6 +103,11 @@ impl Server {
         thread::spawn(move || {
             loop {
                 thread::sleep(Duration::from_secs(1));
+                // A hub that was stopped (an in-process test that is done)
+                // has nothing left to exit for.
+                if hub_w.stopped() {
+                    return;
+                }
                 if ident(&watched) != inode {
                     hub_w.stop();
                     hub_w.stop_modules();
@@ -158,6 +172,18 @@ fn salvage_id(line: &str) -> Option<u64> {
 /// `Ok(true)`: the peer asked the daemon to shut down.
 fn connection(stream: UnixStream, hub: &Arc<Hub>) -> std::io::Result<bool> {
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    // A connection that opens with `attach` is a view of a terminal (its own
+    // socket, so output never delays a `view`): it is served apart.
+    let first = match read_line(&mut reader)? {
+        None => return Ok(false),
+        Some(Err(())) => return Ok(false),
+        Some(Ok(line)) => line,
+    };
+    if let Ok(ToDaemon::Attach(a)) = notchd_proto::parse::<ToDaemon>(&first) {
+        crate::attach::serve(hub, stream, reader, &a);
+        return Ok(false);
+    }
     let mut out = stream.try_clone()?;
     let (id, rx) = hub.register();
     let writer = thread::spawn(move || {
@@ -167,7 +193,7 @@ fn connection(stream: UnixStream, hub: &Arc<Hub>) -> std::io::Result<bool> {
             }
         }
     });
-    let result = serve_lines(stream, hub, id);
+    let result = serve_lines(reader, Some(first), hub, id);
     // Closing the channel lets the writer flush what is queued (a refusal, an
     // error) and end.
     hub.unregister(id);
@@ -175,20 +201,28 @@ fn connection(stream: UnixStream, hub: &Arc<Hub>) -> std::io::Result<bool> {
     result
 }
 
-/// `Ok(true)` when the connection asked for `shutdown`.
-fn serve_lines(stream: UnixStream, hub: &Hub, id: u64) -> std::io::Result<bool> {
-    let mut reader = BufReader::new(stream);
+/// `Ok(true)` when the connection asked for `shutdown`. `first` is a line
+/// already read.
+fn serve_lines(
+    mut reader: BufReader<UnixStream>,
+    mut first: Option<String>,
+    hub: &Hub,
+    id: u64,
+) -> std::io::Result<bool> {
     loop {
-        let line = match read_line(&mut reader)? {
-            None => return Ok(false),
-            Some(Err(())) => {
-                hub.send(
-                    id,
-                    err(None, "args", format!("line over {MAX_LINE_BYTES} bytes")),
-                );
-                return Ok(false);
-            }
-            Some(Ok(line)) => line,
+        let line = match first.take() {
+            Some(l) => l,
+            None => match read_line(&mut reader)? {
+                None => return Ok(false),
+                Some(Err(())) => {
+                    hub.send(
+                        id,
+                        err(None, "args", format!("line over {MAX_LINE_BYTES} bytes")),
+                    );
+                    return Ok(false);
+                }
+                Some(Ok(line)) => line,
+            },
         };
         if line.is_empty() {
             continue;
@@ -216,7 +250,7 @@ fn serve_lines(stream: UnixStream, hub: &Hub, id: u64) -> std::io::Result<bool> 
                 );
                 return Ok(false);
             }
-            hub.subscribe(id);
+            hub.hello(id, h);
             continue;
         }
         hub.handle(id, &msg);

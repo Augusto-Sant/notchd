@@ -6,6 +6,7 @@ import "client"
 import "Config.js" as Config
 import "Live.js" as Live
 import "Components.js" as Components
+import "Terminal.js" as Terminal
 import "settings/Settings.js" as Settings
 
 // The notches' source of truth: config, modules, the notches (Notch, one per
@@ -69,8 +70,6 @@ Item {
 
   // -------------------------------------------------------------- built-ins
   readonly property var builtinModules: ({
-    claude: Qt.resolvedUrl("modules/claude.qml"),
-    codex: Qt.resolvedUrl("modules/codex.qml"),
     "codex-live": Qt.resolvedUrl("modules/codex-live.qml"),
     "local-live": Qt.resolvedUrl("modules/local-live.qml")
   })
@@ -80,6 +79,8 @@ Item {
   // the service makes a CoreModule for it.
   readonly property var coreModules: ({
     activities: Qt.resolvedUrl("modules/activities.qml"),
+    claude: Qt.resolvedUrl("modules/claude.qml"),
+    codex: Qt.resolvedUrl("modules/codex.qml"),
     media: Qt.resolvedUrl("modules/media.qml"),
     resources: Qt.resolvedUrl("modules/resources.qml"),
     timer: Qt.resolvedUrl("modules/timer.qml")
@@ -88,8 +89,7 @@ Item {
   // The QML file of a module this UI loads itself.
   function moduleUrl(id) {
     if (svc.hostModules && svc.hostModules[id]) return svc.hostModules[id]
-    if (svc.builtinModules[id]) return svc.builtinModules[id]
-    return svc.isTerminal(id) ? Qt.resolvedUrl("terminal/CustomTerminal.qml") : ""
+    return svc.builtinModules[id] || ""
   }
   // Where its JSON file is (a url of the `.qml` beside it), whether it has
   // a QML file or lives in the daemon.
@@ -121,8 +121,8 @@ Item {
   readonly property var availableModuleIds: svc.fileModuleIds.concat(svc.terminalSpecs.map(function(t) { return t.id }))
 
   // Terminals of your own, from the config's `terminals` (Config.terminals):
-  // [{ id, title, command }]. Each loads terminal/CustomTerminal.qml, its info made
-  // from its entry (Settings.terminalInfo) instead of read from a file.
+  // [{ id, title, command }]. Each is a module of the daemon (a terminal), its
+  // info made from its entry (Settings.terminalInfo) instead of read from a file.
   property var terminalSpecs: []
   function isTerminal(id) {
     return svc.terminalSpecs.some(function(t) { return t.id === id })
@@ -174,21 +174,39 @@ Item {
     return { moduleId: id, title: Settings.moduleTitle(id, info), settings: info.settings || [],
              standalone: !!info.standalone, agent: !!info.agent, live: !!info.live, terminal: !!info.terminal }
   })
-  // Agents ask their plan usage over the network, with the logins their
-  // CLIs keep (AgentUsage). Off offscreen (scripts/isolated.sh sets
-  // NOTCHD_OFFLINE): tests and renders never read a real login.
-  property bool usageLive: Quickshell.env("NOTCHD_OFFLINE") !== "1"
-  // Agents (`"agent"` in their file): coding agents in a terminal
-  // (TerminalModule), with the fields every agent has and the `agent` IPC.
+  // Agents (`"agent"` in their file): coding agents in a terminal, modules
+  // of the daemon (native/notchd-modules/src/{claude,codex}.rs), with the
+  // fields every agent has and the `agent` IPC. They ask their plan usage
+  // over the network in the daemon, with the logins their CLIs keep (off
+  // offscreen: scripts/isolated.sh sets NOTCHD_OFFLINE, which the daemon
+  // reads, so tests and renders never read a real login).
   function isAgent(id) { return !!svc.moduleInfo[id] && !!svc.moduleInfo[id].agent }
-  // An agent's IPC command (TerminalModule.command): "ok", or what was wrong.
+  // The terminal view needs the optional qmltermwidget package. The daemon
+  // is told (`hello`'s `surfaces`), so a command that needs one says so.
+  property bool terminalAvailable: svc.probeTerminal()
+  function probeTerminal() {
+    try {
+      Qt.createQmlObject(Terminal.PROBE, svc, "terminal-probe").destroy()
+      return true
+    } catch (e) {
+      return false
+    }
+  }
+  Binding {
+    target: svc.client
+    property: "caps"
+    value: ({ primitives: [], surfaces: svc.terminalAvailable ? ["terminal"] : [], webview: false, canvas: false })
+  }
+  // An agent's IPC command: the daemon's module answers it (`notchd ipc
+  // agent <id> <command>` has its answers: the usage, `the terminal needs
+  // the qmltermwidget package`...). The host's target cannot wait for it, so
+  // this sends the command and answers "ok", unless it already knows better.
   function agentCommand(id, command) {
     if (!svc.isAgent(id)) {
       var agents = svc.availableModuleIds.filter(function(a) { return svc.isAgent(a) })
       return "no agent " + id + (agents.length > 0 ? "; agents: " + agents.join(", ") : "")
     }
-    var m = svc.moduleById(id)
-    return m ? m.command(command) : id + " module not loaded"
+    return svc.moduleById(id) ? svc.daemonIpc("agent", [id, command], "ok") : id + " module not loaded"
   }
   // The same for a terminal of your own (`terminals`).
   function terminalCommand(id, command) {
@@ -196,8 +214,7 @@ Item {
       var ids = svc.terminalSpecs.map(function(t) { return t.id })
       return "no terminal " + id + (ids.length > 0 ? "; terminals: " + ids.join(", ") : "")
     }
-    var m = svc.moduleById(id)
-    return m ? m.command(command) : id + " module not loaded"
+    return svc.moduleById(id) ? svc.daemonIpc("terminal", [id, command], "ok") : id + " module not loaded"
   }
 
   // ---------------------------------------------------------------- live
@@ -1013,7 +1030,8 @@ Item {
     function timer(command: string): string { return svc.daemonIpc("timer", [command], svc.loadedAnswer("timer", "ok")) }
     // An agent, by its module's id: "toggle" opens or closes its notch,
     // "new" starts a new session, "ask <question>" opens the notch and types
-    // it in; see TerminalModule.qml. `claude` and `codex` are the same.
+    // it in; see native/notchd-modules/src/term.rs. `claude` and `codex` are
+    // the same.
     function agent(id: string, command: string): string { return svc.agentCommand(id, command) }
     // A terminal of your own (`terminals`), by its id: the same commands.
     function terminal(id: string, command: string): string { return svc.terminalCommand(id, command) }
@@ -1054,11 +1072,7 @@ Item {
           }
         }),
         modules: svc.modules.map(function(m) {
-          var out = { id: m.moduleId, active: m.active, priority: m.priority }
-          // An agent's plan usage (AgentUsage): its limits, and why they are stale.
-          var u = m.usage
-          if (u && u.active) out.usage = { limits: u.limits, stale: u.stale, problem: u.problem, fetchedAt: u.fetchedAt }
-          return out
+          return { id: m.moduleId, active: m.active, priority: m.priority }
         })
       })
     }

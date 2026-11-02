@@ -45,15 +45,13 @@ core/                 the framework: no desktop-specific code
   NotchWindow.qml     the layer-shell overlay that puts one copy on screen
   NotchCard.qml       the notch itself: outline, padding, the current view
   NotchModule.qml     base type for modules
-  CoreModule.qml      a module that lives in the daemon (timer, activities, resources, media, osd, user modules): draws its views
+  CoreModule.qml      a module that lives in the daemon (timer, activities, resources, media, osd, claude, codex, terminals, user modules): draws its views
   Theme.qml           visual tokens (singleton), fed by the host
   Config.js           config rules (pure JS)
   Position.js         edge and offset: where the notch sits, corners and joined rows (pure JS)
   Outline.js          the notch's outline: shoulders, corners, joins (pure JS)
-  TerminalModule.qml  base type for a module that runs a program's terminal UI (claude, codex)
-  Agent.js            what Claude Code's and Codex's terminal titles say, when to peek, IPC commands (pure JS)
-  Terminal.js         the terminal view: the command line, the folder, the color scheme (pure JS)
-  terminal/           TerminalView.qml: a terminal (QMLTermWidget, optional package); lint skips it
+  Terminal.js         the terminal view's widget side: is qmltermwidget there, the color scheme, the key that leaves (pure JS)
+  terminal/           TerminalSurface.qml (the frame and the attach) and TerminalView.qml: a terminal (QMLTermWidget, optional package); lint skips them
   Components.js       the optional components: what a row says, its buttons, choices that wait on one, what an error points to (pure JS)
   ComponentStore.qml  the components' state, read from the installer, and the install, cancel and remove calls
   components/         components.json (the registry) and install.py (the installer: downloads, LocalAI models, pacman; stdlib only) and localai.py (where LocalAI lives, how to reach and start it)

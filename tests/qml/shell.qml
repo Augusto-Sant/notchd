@@ -1789,10 +1789,12 @@ ShellRoot {
   }
 
   // ---------------------------------------------------------------- agents
-  // The claude and codex modules (TerminalModule) against fake terminal UIs
-  // (tests/qml/fixtures/bin) that set the terminal's title as Claude Code and
-  // Codex do. The terminal needs the qmltermwidget package; where it isn't
-  // installed, the cases that need it note so in the log and pass.
+  // The claude and codex modules (native/notchd-modules/src/term.rs, in the
+  // daemon) against fake terminal UIs (tests/qml/fixtures/bin) that set the
+  // terminal's title as Claude Code and Codex do. The program runs in the
+  // daemon; the terminal view (core/terminal/TerminalSurface.qml) attaches to
+  // it with `notchd attach`. The view needs the qmltermwidget package; where
+  // it isn't installed, the cases that need it note so in the log and pass.
   TestService {
     id: codexSvc
     ipcTarget: "notchd-qmltest-codex"
@@ -1804,7 +1806,7 @@ ShellRoot {
     id: codexWin
     implicitWidth: 900
     implicitHeight: 600
-    NotchCard { notch: codexSvc.notches.length > 0 ? codexSvc.notches[0].copies[0] : null }
+    NotchCard { id: codexCard; notch: codexSvc.notches.length > 0 ? codexSvc.notches[0].copies[0] : null }
     TestCase { id: codexKeys; when: false }
   }
   TestService {
@@ -1836,32 +1838,66 @@ ShellRoot {
     shellCmd.command = argv
     shellCmd.running = true
   }
+  // `run`, and the wait for it to finish (the output is in shellCmd.out).
+  function runAndWait(argv) {
+    return function(resume) {
+      root.run(argv)
+      root.until(function() { return shellCmd.code !== -1 }, resume, 3000)
+    }
+  }
 
   // The terminal is not there: the case only notes it.
-  function noTerminal(m) {
-    if (m.available) return false
+  function noTerminal(svc) {
+    if (svc.terminalAvailable) return false
     console.log("NOTE " + root.current + ": qmltermwidget is not installed; the terminal was not tested")
     root.done()
     return true
   }
 
-  // The same for a flow: the note, and whether to end it.
-  function terminalMissing(m) {
-    if (m.available) return false
-    console.log("NOTE " + root.current + ": qmltermwidget is not installed; the terminal was not tested")
-    return true
+  // The terminal view inside an item (TerminalView's objectName), or null.
+  function terminalIn(item) {
+    if (!item) return null
+    if (item.objectName === "terminal") return item
+    var kids = item.children
+    for (var i = 0; kids && i < kids.length; i++) {
+      var t = root.terminalIn(kids[i])
+      if (t) return t
+    }
+    return null
   }
-
+  // What the daemon says of a module (its views, in the closed notch and
+  // the open one): the facts the tests read. The tree's JSON, whole.
+  function viewJson(svc, id, slot) { return JSON.stringify(svc.client.view(id, slot) || null) }
+  function titleOf(svc, id) { return root.texts(svc.client.view(id, "compact"))[0] || "" }
+  // The dot of the closed notch: "working" (green), "done" (the accent, news
+  // you haven't seen) or "" (off).
+  function dotOf(svc, id) {
+    var t = root.viewJson(svc, id, "compact")
+    return t.indexOf('"fill":"success"') !== -1 ? "working" : t.indexOf('"fill":"accent"') !== -1 ? "done" : ""
+  }
+  // Waits until a module's closed notch says so.
+  function waitDot(svc, id, dot, ms) { return root.waitFor(function() { return root.dotOf(svc, id) === dot }, ms || 3000) }
+  function waitTitle(svc, id, title, ms) { return root.waitFor(function() { return root.titleOf(svc, id) === title }, ms || 3000) }
+  // Types text into the focused terminal as keys (so the daemon hears the
+  // first key: from then on the end of the work is news), then Enter.
+  function typeLine(keys, text) {
+    for (var i = 0; i < text.length; i++) keys.keyClick(text.charAt(i))
+    keys.keyClick(Qt.Key_Return)
+  }
   function codexMissing() {
-    var m = codexMissingSvc.moduleById("codex")
-    if (!root.check(!!m, "the codex module did not load")) { root.done(); return }
-    m.available = false
-    codexMissingSvc.open()
-    root.steps([[500, function() {}]], function() {
-      root.check(m.viewsOpen === 1, "the notch did not open on it: " + m.viewsOpen)
-      root.check(m.term === null && m.loadError === "", "it tried to start a terminal")
-      codexMissingSvc.close()
-      root.done()
+    root.go(function*() {
+      var svc = codexMissingSvc
+      yield root.settle(svc)
+      root.check(!svc.terminalAvailable, "the service believes it has a terminal")
+      // The daemon knows its UI can't draw one: the question is not typed.
+      var answer = ""
+      yield root.ask(svc, "codex", ["ask hello"], function(a) { answer = a })
+      root.check(answer === "the terminal needs the qmltermwidget package", "ask without a terminal answered: " + answer)
+      // The notch still opens on it, and says what to install in the terminal's place.
+      svc.open()
+      yield root.settle(svc)
+      root.check(svc.notches[0].copies[0].mode === "expanded", "the notch did not open on it")
+      svc.close()
     })
   }
   TestService {
@@ -1870,119 +1906,132 @@ ShellRoot {
     configPath: root.dir + "/codex-missing.json"
     compositor: workspace4
     defaultModules: ["codex"]
+    terminalAvailable: false
   }
   NotchCard { notch: codexMissingSvc.notches.length > 0 ? codexMissingSvc.notches[0].copies[0] : null }
 
   // One agent from start to restart: its command line and folder, Escape
-  // going to it, the dot and the title from its terminal's title, parked
-  // while closed and still running, a peek when it finishes while closed,
-  // the same terminal back on reopening, a new one (and the old one
+  // going to it, the dot and the title from its terminal's title, the session
+  // going on while the notch is closed, a peek when it finishes while closed,
+  // the same program behind the next view, a new one (and the old one
   // stopped) on restart, and noticing when it quits.
-  function agentRuns(svc, keys, id, expected) {
-    var m = svc.moduleById(id)
-    if (!root.check(!!m, "the " + id + " module did not load")) { root.done(); return }
-    if (root.noTerminal(m)) return
-    var cfg = {}
-    cfg[id] = { directory: root.dir }
-    svc.replaceConfig(cfg)
-    var copy = svc.notches[0].copies[0]
-    var argsFile = root.dir + "/" + id + "-args"
-    var first = null, pid = ""
-    root.activate(keys)
-    svc.open()
-    root.steps([
-      [900, function() {
-        first = m.term
-        if (!root.check(!!first, "opening the notch started no terminal")) return
-        root.check(!m.working && m.sessionTitle === "", "after starting: working " + m.working + ", title " + m.sessionTitle)
-        root.check(first.activeFocus, "the terminal does not have the focus")
-        // Escape goes to the agent: the notch stays open.
-        keys.keyClick(Qt.Key_Escape)
-        // The Escape is on the fake's line: end that line first.
-        first.write("\rwork\r")
-        root.run(["cat", argsFile])
-      }],
-      [200, function() {
-        var args = shellCmd.out.split("\n")
-        root.check(args[0] === "", id + " got options: " + args[0])
-        root.check(args[1] === root.dir, id + " started in " + args[1])
-        pid = args[2]
-        root.check(copy.pinned, "Escape closed the notch")
-        root.check(m.working, "the spinner did not make it working")
-      }],
-      [900, function() {
-        root.check(!m.working && m.sessionTitle === expected, "after work: working " + m.working + ", title " + m.sessionTitle)
-        // Ctrl+Escape is the way out: the notch closes, the agent goes on.
-        keys.keyClick(Qt.Key_Escape, Qt.ControlModifier)
-      }],
-      [600, function() {
-        root.check(!copy.pinned, "Ctrl+Escape did not close the notch")
-        root.check(m.viewsOpen === 0 && m.term === first && first.parent === m, "closing did not park the terminal")
-        root.check(!m.exited, "closing stopped it")
-        m.typed = true
-        first.write("work\r")
-      }],
-      [1100, function() {
-        root.check(copy.peekModule === m, "the end of work while closed did not peek")
-        root.check(m.attention, "done while closed, it has no news for you")
-        svc.open()
-      }],
-      [500, function() {
-        root.check(m.term === first && first.parent !== m && first.visible, "reopened, it did not show the same terminal")
-        root.check(!m.attention, "seen, it still has news")
-        m.restart()
-      }],
-      [900, function() {
-        root.check(m.term !== first && !!m.term && !m.exited, "restart did not start a new terminal")
-        root.run(["cat", argsFile])
-      }],
-      [300, function() {
-        root.check(shellCmd.out.split("\n")[2] !== pid, "the new terminal runs the old " + id)
-        root.run(["kill", "-0", pid])
-      }],
-      [300, function() {
-        root.check(shellCmd.code !== 0, "the old " + id + " (" + pid + ") still runs after restart")
-        m.term.write("quit\r")
-      }],
-      [500, function() {
-        root.check(m.exited && !m.working, id + " quit and the module did not notice")
-        svc.close()
-      }]
-    ], function() {
-      m.stop()
-      root.done()
+  function agentRuns(svc, keys, card, id, expected) {
+    if (root.noTerminal(svc)) return
+    root.go(function*() {
+      var cfg = {}
+      cfg[id] = { directory: root.dir }
+      svc.replaceConfig(cfg)
+      var copy = svc.notches[0].copies[0]
+      var argsFile = root.dir + "/" + id + "-args"
+      var pid = ""
+      root.activate(keys)
+      yield root.settle(svc)
+      root.check(root.dotOf(svc, id) === "" && root.titleOf(svc, id) !== expected, "before opening, it already works")
+      svc.open()
+      yield root.waitFor(function() { return !!root.terminalIn(card) && root.terminalIn(card).title !== "" }, 5000)
+      var first = root.terminalIn(card)
+      if (!root.check(!!first, "opening the notch started no terminal")) { svc.close(); return }
+      yield root.waitDot(svc, id, "", 3000)
+      root.check(root.dotOf(svc, id) === "" && root.titleOf(svc, id) !== expected, "after starting: dot " + root.dotOf(svc, id) + ", title " + root.titleOf(svc, id))
+      yield root.waitFor(function() { return first.activeFocus }, 2000)
+      root.check(first.activeFocus, "the terminal does not have the focus")
+      // Escape goes to the agent: the notch stays open.
+      keys.keyClick(Qt.Key_Escape)
+      // The Escape is on the fake's line: end that line first. Real keys, so
+      // the daemon hears the first one.
+      keys.keyClick(Qt.Key_Return)
+      root.typeLine(keys, "work")
+      yield root.runAndWait(["cat", argsFile])
+      var args = shellCmd.out.split("\n")
+      root.check(args[0] === "", id + " got options: " + args[0])
+      root.check(args[1] === root.dir, id + " started in " + args[1])
+      pid = args[2]
+      root.check(copy.pinned, "Escape closed the notch")
+      yield root.waitDot(svc, id, "working")
+      root.check(root.dotOf(svc, id) === "working", "the title did not make it working")
+      yield root.waitTitle(svc, id, expected, 4000)
+      yield root.waitDot(svc, id, "", 4000)
+      root.check(root.dotOf(svc, id) === "" && root.titleOf(svc, id) === expected,
+                 "after work: dot " + root.dotOf(svc, id) + ", title " + root.titleOf(svc, id))
+      // Ctrl+Escape is the way out: the notch closes, the agent goes on.
+      keys.keyClick(Qt.Key_Escape, Qt.ControlModifier)
+      yield root.settle(svc)
+      root.check(!copy.pinned, "Ctrl+Escape did not close the notch")
+      yield root.waitFor(function() { return !root.terminalIn(card) })
+      yield root.runAndWait(["kill", "-0", pid])
+      root.check(shellCmd.code === 0, "closing stopped " + id + " (" + pid + ")")
+      // Reopened, the same program: it was working while closed, so the end
+      // of its work, typed again, is news.
+      svc.open()
+      yield root.waitFor(function() { return !!root.terminalIn(card) && root.terminalIn(card).title !== "" }, 5000)
+      first = root.terminalIn(card)
+      root.check(!!first, "reopened, no terminal")
+      yield root.waitFor(function() { return first.activeFocus }, 2000)
+      root.typeLine(keys, "work")
+      yield root.waitDot(svc, id, "working")
+      keys.keyClick(Qt.Key_Escape, Qt.ControlModifier)
+      yield root.waitFor(function() { return !!copy.peekModule }, 4000)
+      root.check(!!copy.peekModule && copy.peekModule.moduleId === id, "the end of work while closed did not peek")
+      root.check(root.dotOf(svc, id) === "done" || root.dotOf(svc, id) === "working", "done while closed, it has no news for you")
+      yield root.waitDot(svc, id, "done", 4000)
+      root.check(root.dotOf(svc, id) === "done", "done while closed, it has no news for you: " + root.dotOf(svc, id))
+      svc.open()
+      yield root.waitFor(function() { return !!root.terminalIn(card) }, 5000)
+      yield root.waitDot(svc, id, "")
+      root.check(root.dotOf(svc, id) === "", "seen, it still has news")
+      yield root.runAndWait(["cat", argsFile])
+      root.check(shellCmd.out.split("\n")[2] === pid, "reopened, it is not the same " + id)
+      // A new session: the old program stops with it.
+      root.check(svc.agentCommand(id, "new") === "ok", "new failed")
+      yield root.waitFor(function() { return !!root.terminalIn(card) && root.terminalIn(card) !== first }, 5000)
+      yield root.wait(900)
+      yield root.runAndWait(["cat", argsFile])
+      root.check(shellCmd.out.split("\n")[2] !== pid, "the new terminal runs the old " + id)
+      yield root.runAndWait(["kill", "-0", pid])
+      root.check(shellCmd.code !== 0, "the old " + id + " (" + pid + ") still runs after restart")
+      // Quitting is noticed: the program is gone, its output stays.
+      var second = root.terminalIn(card)
+      yield root.waitFor(function() { return second.activeFocus }, 2000)
+      root.typeLine(keys, "quit")
+      yield root.waitFor(function() { return root.viewJson(svc, id, "expanded").indexOf("exited") !== -1 }, 4000)
+      root.check(root.viewJson(svc, id, "expanded").indexOf("exited") !== -1, id + " quit and the module did not notice")
+      root.check(root.dotOf(svc, id) === "", id + " quit and is still working")
+      svc.close()
+      yield root.settle(svc)
     })
   }
-  function codexRuns() { root.agentRuns(codexSvc, codexKeys, "codex", "Fake thread") }
-  function claudeRuns() { root.agentRuns(claudeSvc, claudeKeys, "claude", "Fake conversation") }
+  function codexRuns() { root.agentRuns(codexSvc, codexKeys, codexCard, "codex", "Fake thread") }
+  function claudeRuns() { root.agentRuns(claudeSvc, claudeKeys, claudeCard, "claude", "Fake conversation") }
 
   // Over IPC: ask opens the notch with the keyboard and types the question
-  // in once the agent is up; new starts another; anything else, the usage.
+  // in once the agent is up; new starts another; anything else, the usage
+  // (`notchd ipc` has the daemon's answers; the host's target answers ok).
   function claudeAsk() {
     root.go(function*() {
-      var m = claudeSvc.moduleById("claude")
-      if (root.terminalMissing(m)) return
+      if (!claudeSvc.terminalAvailable) { root.noTerminal(claudeSvc); return }
       var copy = claudeSvc.notches[0].copies[0]
       var pid = ""
       // The last case's view is still closing.
       yield root.wait(600)
-      root.check(m.command("nonsense").indexOf("usage") === 0, "an unknown command did not answer the usage")
-      root.check(m.command("ask why is the sky blue?") === "ok", "ask failed")
+      var answer = ""
+      yield root.ask(claudeSvc, "agent", ["claude", "nonsense"], function(a) { answer = a })
+      root.check(answer.indexOf("usage: agent claude") === 0, "an unknown command did not answer the usage: " + answer)
+      yield root.ask(claudeSvc, "claude", ["ask why is the sky blue?"], function(a) { answer = a })
+      root.check(answer === "ok", "ask failed: " + answer)
       yield root.settle(claudeSvc)
       root.check(copy.pinned && copy.keyboardFocus === "exclusive", "ask did not open the notch with the keyboard")
-      yield root.wait(1500)
-      root.run(["cat", root.dir + "/claude-args"])
-      yield root.wait(300)
-      var lines = shellCmd.out.split("\n")
+      var lines = []
+      yield root.wait(1800)
+      yield root.runAndWait(["cat", root.dir + "/claude-args"])
+      lines = shellCmd.out.split("\n")
       root.check(lines.indexOf("got why is the sky blue?") !== -1, "the question did not reach claude: " + JSON.stringify(lines))
       pid = lines[2]
-      root.check(m.command("new") === "ok", "new failed")
-      yield root.wait(900)
-      root.run(["cat", root.dir + "/claude-args"])
-      yield root.wait(300)
+      root.check(claudeSvc.agentCommand("claude", "new") === "ok", "new failed")
+      yield root.wait(1200)
+      yield root.runAndWait(["cat", root.dir + "/claude-args"])
       root.check(shellCmd.out.split("\n")[2] !== pid, "new did not start another claude")
-      m.closeNotch()
-      m.stop()
+      claudeSvc.close()
+      yield root.settle(claudeSvc)
     })
   }
 
@@ -1991,7 +2040,6 @@ ShellRoot {
   // the notch by the module it shows.
   function agentToggle() {
     root.go(function*() {
-      var m = claudeSvc.moduleById("claude")
       var copy = claudeSvc.notches[0].copies[0]
       // The last case's view is still closing.
       yield root.wait(600)
@@ -1999,51 +2047,65 @@ ShellRoot {
       root.check(claudeSvc.agentCommand("claude", "toggle") === "ok", "toggle failed")
       yield root.settle(claudeSvc)
       root.check(copy.pinned, "toggle did not open the notch")
-      yield root.wait(400)
-      root.check(m.viewsOpen > 0, "open, no view shows claude")
+      // The module hears of its view (the terminal attaching) before the
+      // toggle can close it; without a terminal there is no view to hear of.
+      if (claudeSvc.terminalAvailable) yield root.waitFor(function() { return !!root.terminalIn(claudeCard) }, 5000)
+      if (claudeSvc.terminalAvailable) yield root.wait(400)
       root.check(claudeSvc.agentCommand("claude", "toggle") === "ok", "toggle again failed")
       yield root.settle(claudeSvc)
-      root.check(!copy.pinned, "toggle did not close the notch")
+      root.check(!copy.pinned || !claudeSvc.terminalAvailable, "toggle did not close the notch")
       root.check(claudeSvc.agentCommand("nope", "toggle").indexOf("no agent nope") === 0, "an unknown agent did not say so")
-      m.stop()
+      claudeSvc.close()
+      yield root.settle(claudeSvc)
     })
   }
 
-  // The plan's limits (AgentUsage), fed answers by hand: offscreen, nothing
-  // asks the network or reads a real login (NOTCHD_OFFLINE).
+  // The plan's limits, fed answers by hand (the daemon's test hook): offscreen,
+  // nothing asks the network or reads a real login (NOTCHD_OFFLINE).
   function agentUsage() {
     root.go(function*() {
-      var m = claudeSvc.moduleById("claude")
       var copy = claudeSvc.notches[0].copies[0]
       // `day`: the session window (its reset), so a new window starts over.
       var answer = function(session, day) {
-        return { limits: [
+        return JSON.stringify({ limits: [
           { kind: "session", group: "session", percent: session, resets_at: "2099-01-0" + (day || 2) + "T05:00:00Z" },
-          { kind: "weekly_all", group: "weekly", percent: 20, resets_at: "2099-01-07T00:00:00Z" } ] }
+          { kind: "weekly_all", group: "weekly", percent: 20, resets_at: "2099-01-07T00:00:00Z" } ] })
       }
-      root.check(!m.usage.live, "offscreen, the usage asks the network")
-      root.check(m.usageProvider === "claude" && m.usage.active, "claude has no usage: " + m.usageProvider)
-      root.check(!m.showsUsage, "usage shown before any answer")
-      root.check(m.usage.apply(answer(85, 1)), "the answer was refused")
-      root.check(m.showsUsage && m.usage.limits.length === 2, "the limits do not show: " + JSON.stringify(m.usage.limits))
+      var last = ""
+      var feed = function(text) {
+        return root.ask(claudeSvc, "test-claude", ["usage", text], function(a) { last = a })
+      }
+      var shown = function() { return root.texts(claudeSvc.client.view("claude", "expanded")).some(function(t) { return /^\d+ %/.test(t) }) }
+      var peekText = function() { return root.texts(claudeSvc.client.view("claude", "peek"))[0] }
       yield root.settle(claudeSvc)
+      root.check(!shown(), "usage shown before any answer")
+      yield feed(answer(85, 1))
+      root.check(last === "ok", "the answer was refused: " + last)
+      yield root.settle(claudeSvc)
+      var t = root.texts(claudeSvc.client.view("claude", "expanded"))
+      root.check(shown() && t.indexOf("5h") !== -1 && t.some(function(x) { return x.indexOf("85 %") === 0 }), "the limits do not show: " + JSON.stringify(t))
       root.check(copy.peekModule === null, "the first answer warned: a restart would warn again")
-      root.check(m.usage.apply(answer(10)) && !m.usage.apply({ nope: 1 }), "an answer that isn't one was taken")
-      m.usage.apply(answer(81))
+      yield feed(answer(10))
+      root.check(last === "ok", "the answer was refused: " + last)
+      yield feed(JSON.stringify({ nope: 1 }))
+      root.check(last === "not an answer", "an answer that isn't one was taken: " + last)
+      yield feed(answer(81))
       yield root.settle(claudeSvc)
-      root.check(copy.peekModule === m && m.peekReason === "usage", "passing 80 % did not peek")
-      root.check(m.usageAlert && m.usageAlert.level === 80 && m.usageAlert.label === "5h", "the warning: " + JSON.stringify(m.usageAlert))
-      claudeSvc.dismissPeek(m)
-      m.usage.apply(answer(90))
+      root.check(!!copy.peekModule && copy.peekModule.moduleId === "claude", "passing 80 % did not peek")
+      root.check(peekText() === "Claude: 5h limit at 81 %", "the warning: " + peekText())
+      claudeSvc.dismissPeek(copy.peekModule)
+      yield feed(answer(90))
       yield root.settle(claudeSvc)
       root.check(copy.peekModule === null, "warned twice in one window")
-      m.usage.apply(answer(100))
+      yield feed(answer(100))
       yield root.settle(claudeSvc)
-      root.check(copy.peekModule === m && m.usageAlert.level === 100, "the limit reached did not peek")
-      claudeSvc.dismissPeek(m)
+      root.check(!!copy.peekModule && peekText() === "Claude: 5h limit reached", "the limit reached did not peek: " + peekText())
+      claudeSvc.dismissPeek(copy.peekModule)
       claudeSvc.setConfigValue("claude.usage", false)
-      root.check(!m.showsUsage, "switched off, the usage still shows")
+      yield root.settle(claudeSvc)
+      root.check(!shown(), "switched off, the usage still shows")
       claudeSvc.setConfigValue("claude.usage", undefined)
+      yield root.settle(claudeSvc)
     })
   }
 
@@ -2052,22 +2114,28 @@ ShellRoot {
   // (it springs to fit). Now the mark stays, and the working dot's place is
   // kept while it is off.
   function agentBusySteady() {
-    var m = claudeSvc.moduleById("claude")
-    claudeSvc.close()
-    var widths = []
-    root.steps([
-      [600, function() { m.status = { working: false, title: "A title" } }],
-      [500, function() { widths.push(claudeCard.width) }],
-      [0, function() { m.status = { working: true, title: "A title" } }],
-      [500, function() { widths.push(claudeCard.width) }],
-      [130, function() { widths.push(claudeCard.width) }],
-      [130, function() { widths.push(claudeCard.width) }]
-    ], function() {
+    root.go(function*() {
+      claudeSvc.close()
+      var widths = []
+      var title = function(t) { return root.ask(claudeSvc, "test-claude", ["title", t], function() {}) }
+      yield root.wait(600)
+      yield title("✳ A title")
+      yield root.settle(claudeSvc)
+      yield root.wait(500)
+      widths.push(claudeCard.width)
+      yield title("◐ A title")
+      yield root.settle(claudeSvc)
+      yield root.wait(500)
+      widths.push(claudeCard.width)
+      yield root.wait(130)
+      widths.push(claudeCard.width)
+      yield root.wait(130)
+      widths.push(claudeCard.width)
       root.check(claudeCard.mode === "compact", "the notch is " + claudeCard.mode)
       var min = Math.min.apply(null, widths), max = Math.max.apply(null, widths)
       root.check(max - min < 0.5, "the closed notch changed width going busy and while busy: " + JSON.stringify(widths))
-      m.status = { working: false, title: "" }
-      root.done()
+      yield title("")
+      yield root.settle(claudeSvc)
     })
   }
 
@@ -2089,47 +2157,40 @@ ShellRoot {
       terminals: { mine: { title: "Mine", command: "printf '\\033]0;Own title\\007'; pwd > " + pwdFile + "; exec cat" } },
       modules: ["mine"]
     })
-    var m = null
-    var copy = null
-    root.steps([
-      [500, function() {
-        m = ownTermSvc.moduleById("mine")
-        if (!root.check(!!m, "the terminal from the config did not load")) return
-        copy = ownTermSvc.notches[0].copies[0]
-        root.check(m.title === "Mine" && m.appName === "Mine", "its title: " + m.title + ", " + m.appName)
-        root.check(ownTermSvc.moduleCatalog.some(function(c) { return c.moduleId === "mine" && c.terminal && !c.agent }),
-                   "the catalog has no terminal mine")
-        root.check(ownTermSvc.settingsSchema.some(function(f) { return f.key === "terminals.mine.command" && f.page === "modules/mine" }),
-                   "its page has no command field")
-        root.check(ownTermSvc.settingsSchema.some(function(f) { return f.type === "moduleCatalog" && f.part === "terminal" }),
-                   "the Modules page does not list terminals apart")
-        root.check(m.defaultCommand.indexOf("printf") === 0, "it does not run its entry's command: " + m.defaultCommand)
-        root.check(ownTermSvc.agentCommand("mine", "toggle").indexOf("no agent mine") === 0, "a terminal took an agent command")
-        root.check(ownTermSvc.terminalCommand("nope", "toggle") === "no terminal nope; terminals: mine", "an unknown terminal did not say so")
-        if (!m.available) return
-        root.check(ownTermSvc.terminalCommand("mine", "toggle") === "ok", "toggle failed")
-      }],
-      [900, function() {
-        if (!m || !m.available) return
-        root.check(copy.pinned && !!m.term && !m.exited, "toggle did not open it running: pinned " + copy.pinned + ", term " + !!m.term + ", exited " + m.exited)
-        root.check(m.sessionTitle === "Own title" && !m.working, "its title: " + m.sessionTitle + ", working " + m.working)
-        root.run(["cat", pwdFile])
-      }],
-      [300, function() {
-        if (!m || !m.available) return
-        root.check(shellCmd.out.trim() === Quickshell.env("HOME"), "it started in " + shellCmd.out.trim())
-        root.check(ownTermSvc.terminalCommand("mine", "toggle") === "ok", "toggle failed")
-      }],
-      [300, function() {
-        if (!m || !m.available) return
-        root.check(!copy.pinned, "toggle did not close it")
-      }]
-    ], function() {
-      if (m) {
-        if (!m.available) console.log("NOTE " + root.current + ": qmltermwidget is not installed; the terminal was not run")
-        m.stop()
+    root.go(function*() {
+      yield root.waitFor(function() { return !!ownTermSvc.moduleById("mine") }, 4000)
+      var m = ownTermSvc.moduleById("mine")
+      if (!root.check(!!m, "the terminal from the config did not load")) return
+      var copy = ownTermSvc.notches[0].copies[0]
+      yield root.settle(ownTermSvc)
+      root.check(m.title === "Mine", "its title: " + m.title)
+      root.check(ownTermSvc.moduleCatalog.some(function(c) { return c.moduleId === "mine" && c.terminal && !c.agent }),
+                 "the catalog has no terminal mine")
+      root.check(ownTermSvc.settingsSchema.some(function(f) { return f.key === "terminals.mine.command" && f.page === "modules/mine" }),
+                 "its page has no command field")
+      root.check(ownTermSvc.settingsSchema.some(function(f) { return f.type === "moduleCatalog" && f.part === "terminal" }),
+                 "the Modules page does not list terminals apart")
+      root.check(ownTermSvc.agentCommand("mine", "toggle").indexOf("no agent mine") === 0, "a terminal took an agent command")
+      root.check(ownTermSvc.terminalCommand("nope", "toggle") === "no terminal nope; terminals: mine", "an unknown terminal did not say so")
+      if (!ownTermSvc.terminalAvailable) {
+        console.log("NOTE " + root.current + ": qmltermwidget is not installed; the terminal was not run")
+        return
       }
-      root.done()
+      root.check(ownTermSvc.terminalCommand("mine", "toggle") === "ok", "toggle failed")
+      yield root.settle(ownTermSvc)
+      root.check(copy.pinned, "toggle did not open it")
+      // Its program starts with the first view, and its title is the
+      // program's, never "working".
+      yield root.waitTitle(ownTermSvc, "mine", "Own title", 5000)
+      root.check(root.titleOf(ownTermSvc, "mine") === "Own title" && root.dotOf(ownTermSvc, "mine") === "",
+                 "its title: " + root.titleOf(ownTermSvc, "mine"))
+      yield root.runAndWait(["cat", pwdFile])
+      root.check(shellCmd.out.trim() === Quickshell.env("HOME"), "it started in " + shellCmd.out.trim())
+      // Toggle closes it once a view shows it.
+      yield root.wait(400)
+      root.check(ownTermSvc.terminalCommand("mine", "toggle") === "ok", "toggle failed")
+      yield root.settle(ownTermSvc)
+      root.check(!copy.pinned, "toggle did not close it")
     })
   }
 
@@ -2532,30 +2593,32 @@ ShellRoot {
   }
 
   function codexIdle() {
-    var m = codexSvc.moduleById("codex")
-    if (root.noTerminal(m)) return
-    // 0.02 min: 1.2 s.
-    codexSvc.replaceConfig({ codex: { directory: root.dir, idleMinutes: 0.02 } })
-    root.steps([
+    if (root.noTerminal(codexSvc)) return
+    root.go(function*() {
+      // 0.02 min: 1.2 s.
+      codexSvc.replaceConfig({ codex: { directory: root.dir, idleMinutes: 0.02 } })
+      var argsFile = root.dir + "/codex-args"
+      var pid = ""
       // The last case's view is still closing.
-      [600, function() { codexSvc.open() }],
-      [800, function() {
-        root.check(!!m.term, "opening started no terminal")
-        codexSvc.close()
-      }],
-      [700, function() { root.check(!!m.term, "it stopped before idleMinutes") }],
-      [1200, function() {
-        root.check(m.term === null, "closed and idle, it kept running")
-        codexSvc.open()
-      }],
-      [600, function() {
-        root.check(!!m.term && !m.exited, "opened again, no new terminal")
-        codexSvc.close()
-      }]
-    ], function() {
-      m.stop()
+      yield root.wait(600)
+      codexSvc.open()
+      yield root.waitFor(function() { return !!root.terminalIn(codexCard) && root.terminalIn(codexCard).title !== "" }, 5000)
+      yield root.runAndWait(["cat", argsFile])
+      pid = shellCmd.out.split("\n")[2]
+      codexSvc.close()
+      yield root.wait(700)
+      yield root.runAndWait(["kill", "-0", pid])
+      root.check(shellCmd.code === 0, "it stopped before idleMinutes")
+      yield root.wait(1200)
+      yield root.runAndWait(["kill", "-0", pid])
+      root.check(shellCmd.code !== 0, "closed and idle, it kept running")
+      codexSvc.open()
+      yield root.waitFor(function() { return !!root.terminalIn(codexCard) && root.terminalIn(codexCard).title !== "" }, 5000)
+      yield root.runAndWait(["cat", argsFile])
+      root.check(shellCmd.out.split("\n")[2] !== pid, "opened again, no new program")
+      codexSvc.close()
       codexSvc.replaceConfig({})
-      root.done()
+      yield root.settle(codexSvc)
     })
   }
 
@@ -2581,8 +2644,7 @@ ShellRoot {
     }
   }
   function messageBandGray() {
-    var m = codexSvc.moduleById("codex")
-    if (root.noTerminal(m)) return
+    if (root.noTerminal(codexSvc)) return
     var c = Qt.createComponent(Qt.resolvedUrl("core/terminal/TerminalView.qml"))
     var t = c.createObject(bandHolder, { program: "/bin/sh", width: 300, height: 60,
       programArguments: ["-c", "printf '\\033[48;5;8m%30s\\033[0m\\n' ''; sleep 5"] })

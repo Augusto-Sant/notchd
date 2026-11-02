@@ -11,6 +11,9 @@ notchd-core = { path = "../notchd-core" }
 serde.workspace = true
 serde_json.workspace = true
 
+portable-pty = "0.9.0"
+libc = "0.2.191"
+
 # MPRIS over D-Bus. zbus with its default features (the async-io reactor and
 # the blocking API): pure Rust, no libdbus to link, used from threads of its
 # own. It is the crate the architecture doc names.

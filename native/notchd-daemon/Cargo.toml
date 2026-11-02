@@ -12,6 +12,7 @@ notchd-modules = { path = "../notchd-modules" }
 notchd-providers = { path = "../notchd-providers" }
 serde.workspace = true
 serde_json.workspace = true
+libc = "0.2.191"
 
 [lib]
 name = "notchd_daemon"
