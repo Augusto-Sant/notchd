@@ -417,7 +417,7 @@ The module owns its timer: it prints a `view` when it wants. The core does not p
 
 ### Provider subscriptions
 
-`subscribe: ["resources"]` in the manifest, or at runtime `{"t":"subscribe","name":"media"}`. The core then sends `provider` messages on change (throttled per provider: `resources` 1 s, `media` on change, `screens` on change). A module may `{"t":"unsubscribe","name":"..."}`. A provider name the core does not know is answered with `{"t":"error","code":"provider"}` to the module (and logged); the manifest's `subscribe` is checked against the known names when it is read. Provider payloads are the same shapes as the built-in modules consume (below) and are part of `proto`.
+`subscribe: ["resources"]` in the manifest, or at runtime `{"t":"subscribe","name":"media"}`. The core then sends `provider` messages on change (throttled per provider: `resources` 1 s, `media` on change, `screens` on change). A module may `{"t":"unsubscribe","name":"..."}`. A provider name modules cannot have (`media`, `resources`, `screens` and `usage` are the ones with data; `usage` carries an `agent` beside `limits`) is answered with `{"t":"error","code":"provider"}` to the module (and logged); the manifest's `subscribe` is checked against the known names when it is read. Provider payloads are the same shapes as the built-in modules consume (below) and are part of `proto`.
 
 ### Lifecycle
 

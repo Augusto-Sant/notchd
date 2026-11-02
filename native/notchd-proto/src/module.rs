@@ -50,12 +50,19 @@ impl Validate for Manifest {
             return Err("command must be a non-empty argv".into());
         }
         for name in &self.subscribe {
-            if !crate::version::PROVIDERS.contains(&name.as_str()) {
-                return Err(format!("unknown provider {name:?} in subscribe"));
+            if !crate::version::SUBSCRIBABLE.contains(&name.as_str()) {
+                return Err(unknown_provider(name));
             }
         }
         Ok(())
     }
+}
+
+fn unknown_provider(name: &str) -> String {
+    format!(
+        "no provider {name:?} for modules (available: {})",
+        crate::version::SUBSCRIBABLE.join(", ")
+    )
 }
 
 /// A module's folder name: letters, digits, `-` and `_`.
@@ -202,9 +209,9 @@ impl Validate for FromModule {
         match self {
             FromModule::View(v) => v.tree.as_ref().map_or(Ok(()), |t| t.validate()),
             FromModule::Subscribe(p) | FromModule::Unsubscribe(p)
-                if !crate::version::PROVIDERS.contains(&p.name.as_str()) =>
+                if !crate::version::SUBSCRIBABLE.contains(&p.name.as_str()) =>
             {
-                Err(format!("unknown provider {:?}", p.name))
+                Err(unknown_provider(&p.name))
             }
             _ => Ok(()),
         }

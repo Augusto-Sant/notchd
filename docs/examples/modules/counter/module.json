@@ -1,0 +1,6 @@
+{
+  "title": "Counter",
+  "command": ["./run.sh", "${cache}"],
+  "priority": 30,
+  "icon": ""
+}

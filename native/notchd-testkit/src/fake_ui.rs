@@ -29,8 +29,16 @@ pub struct Daemon {
 impl Daemon {
     /// Starts `bin daemon` in `env` and waits (bounded) until it accepts.
     pub fn start(bin: &Path, env: &TestEnv, instance: &str) -> Daemon {
+        Daemon::start_with(bin, env, instance, &[])
+    }
+
+    /// [`Daemon::start`] with more environment variables (the examples' test
+    /// passes `PATH`, which the hermetic environment has not, to find
+    /// `python3` and `node`).
+    pub fn start_with(bin: &Path, env: &TestEnv, instance: &str, vars: &[(&str, &str)]) -> Daemon {
         let mut cmd = Command::new(bin);
         env.apply(&mut cmd);
+        cmd.envs(vars.iter().copied());
         cmd.args(["--instance", instance, "daemon"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

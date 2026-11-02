@@ -28,11 +28,14 @@ use crate::modhost::{ModEvent, ModHost};
 use crate::modstate::Mods;
 use crate::ptyhost::{Attached, Note, Session};
 use crate::router;
+use crate::subs::{Delivery, Subs};
 use notchd_core::store::{Changes, Store};
 use notchd_proto::module::ModuleEvent;
 use notchd_proto::ui::Welcome;
 use notchd_proto::version::PROTO;
 use notchd_proto::{ToDaemon, ToModule, ToUi, Token};
+use notchd_providers::media::MediaCommand;
+use notchd_providers::notifications::Notifier;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -108,6 +111,14 @@ struct Inner {
     core: CoreHost,
     /// What the host was last told per module: enabled, and its config.
     host_told: BTreeMap<String, (bool, Value)>,
+    /// Which user module wants which provider, and what it was last sent.
+    subs: Subs,
+    /// Posts a module's `notify` (the system's, once the providers start).
+    notifier: Option<Arc<dyn Notifier>>,
+    /// When each module last notified (ms), to hold it to one a second.
+    last_notify: BTreeMap<String, u64>,
+    /// Asks the media players for their state again (a new subscriber).
+    media_refresh: Option<Sender<MediaCommand>>,
 }
 
 pub struct Hub {
@@ -118,6 +129,66 @@ pub struct Hub {
     clock: Clock,
     pub instance: String,
     pub config_path: PathBuf,
+}
+
+/// `ResourcesData` (`{ cpu, mem, disk }`, bytes, the shape of
+/// `notchd-proto::provider`) from a reading of the provider (`Sample`). The
+/// first reading has no CPU yet (`None`): nothing to send. A reading without
+/// the disk (it is read now and then) keeps the last one.
+fn resources_payload(data: &Value, before: Option<&Value>) -> Option<Value> {
+    use notchd_providers::resources::Sample;
+    let s: Sample = serde_json::from_value(data.clone()).ok()?;
+    let (cpu, mem) = (s.cpu?, s.memory?);
+    let disk = match s.disk {
+        Some(d) => json!({"used": d.used as u64, "total": d.total as u64,
+            "path": notchd_modules::resources::DISK_PATH}),
+        None => before.and_then(|b| b.get("disk").cloned()).unwrap_or_else(
+            || json!({"used": 0, "total": 0, "path": notchd_modules::resources::DISK_PATH}),
+        ),
+    };
+    Some(
+        json!({"cpu": cpu, "mem": {"used": mem.used as u64, "total": mem.total as u64}, "disk": disk}),
+    )
+}
+
+/// A module may post one notification a second.
+const NOTIFY_EVERY_MS: u64 = 1000;
+
+/// What a `usage` answer of an agent's plan (`note.data`: `status` and
+/// `body`, or an `error`) is to a user module: `{ agent, limits, stale,
+/// problem }`, the limits of `UsageData` with the agent that has them. `None`
+/// for an answer that tells nothing new. A failed answer keeps the last
+/// limits, marked stale.
+fn usage_payload(subs: &Subs, agent: &str, data: &Value, now: u64) -> Option<Value> {
+    if data.get("unchanged") == Some(&Value::Bool(true)) {
+        return None;
+    }
+    let before = subs.last_of("usage", agent);
+    let kept = || {
+        before
+            .and_then(|b| b.get("limits").cloned())
+            .unwrap_or_else(|| json!([]))
+    };
+    let fail = |problem: String| {
+        let limits = kept();
+        let stale = limits.as_array().is_some_and(|l| !l.is_empty());
+        Some(json!({"agent": agent, "limits": limits, "stale": stale, "problem": problem}))
+    };
+    if let Some(error) = data.get("error").and_then(Value::as_str) {
+        return fail(error.to_string());
+    }
+    let status = data.get("status").and_then(Value::as_i64).unwrap_or(0);
+    if status != 200 {
+        return fail(format!("the plan usage answered {status}"));
+    }
+    let body: Value = serde_json::from_str(data.get("body").and_then(Value::as_str).unwrap_or(""))
+        .unwrap_or(Value::Null);
+    match notchd_core::usage::limits_of(agent, &body, now as f64) {
+        Some(limits) => {
+            Some(json!({"agent": agent, "limits": limits, "stale": false, "problem": ""}))
+        }
+        None => fail("the plan usage answer was not understood".into()),
+    }
 }
 
 /// The config file's text; a missing file is an empty config.
@@ -200,6 +271,10 @@ impl Hub {
                 mods: Mods::new(),
                 core,
                 host_told: BTreeMap::new(),
+                subs: Subs::new(),
+                notifier: None,
+                last_notify: BTreeMap::new(),
+                media_refresh: None,
             }),
             modhost: Mutex::new(None),
             wake: Condvar::new(),
@@ -241,6 +316,11 @@ impl Hub {
         } = &mut *g;
         let msgs = core.feed_to(store, mods, id, note.provider, &note.data, now);
         self.announce_core(&mut g, msgs);
+        if note.provider == "usage"
+            && let Some(payload) = usage_payload(&g.subs, id, &note.data, now)
+        {
+            self.forward(&mut g, "usage", id, payload);
+        }
         let _ = self.publish(&mut g);
         drop(g);
         self.wake.notify_all();
@@ -497,6 +577,11 @@ impl Hub {
             self.wake.notify_all();
             return;
         }
+        if let ToDaemon::Screens(sc) = msg
+            && let Ok(data) = serde_json::to_value(sc)
+        {
+            self.forward(&mut g, "screens", "", data);
+        }
         let mut replies = router::route(&mut g.store, msg, self.clock.now());
         // The UI's default modules changed what a notch lists.
         if matches!(msg, ToDaemon::Catalog(_)) {
@@ -545,9 +630,54 @@ impl Hub {
         } = &mut *g;
         let msgs = core.feed(store, mods, provider, data, now);
         self.announce_core(&mut g, msgs);
+        // A user module is sent the documented shape of a provider's data.
+        let payload = match provider {
+            "resources" => resources_payload(data, g.subs.last_of("resources", "")),
+            _ => Some(data.clone()),
+        };
+        if let Some(payload) = payload {
+            self.forward(&mut g, provider, "", payload);
+        }
         let _ = self.publish(&mut g);
         drop(g);
         self.wake.notify_all();
+    }
+
+    /// A provider's payload for the user modules that subscribed to it.
+    fn forward(&self, g: &mut Inner, provider: &str, key: &str, data: Value) {
+        let out = g.subs.publish(provider, key, data, self.clock.now());
+        self.deliver(out);
+    }
+
+    /// Hands payloads to the module host, which only enqueues them.
+    fn deliver(&self, out: Vec<Delivery>) {
+        if out.is_empty() {
+            return;
+        }
+        if let Some(host) = self.host() {
+            for (module, msg) in out {
+                host.send(&module, msg);
+            }
+        }
+    }
+
+    /// Whether anything wants a provider's readings: a module of the daemon,
+    /// or an enabled user module that subscribed.
+    fn wants(&self, provider: &str) -> bool {
+        let g = self.lock();
+        let core = match provider {
+            "resources" => g.core.wants_resources(),
+            "media" => g.core.wants_media(),
+            _ => false,
+        };
+        core || g
+            .subs
+            .wants(provider, |m| g.host_told.get(m).is_some_and(|t| t.0))
+    }
+
+    /// Posts user modules' notifications through this notifier.
+    pub fn set_notifier(&self, notifier: Arc<dyn Notifier>) {
+        self.lock().notifier = Some(notifier);
     }
 
     /// Starts the readings of the system that feed the modules of the daemon
@@ -562,22 +692,28 @@ impl Hub {
                 let Some(mut provider) = notchd_providers::resources::system() else {
                     return;
                 };
+                let mut last: Option<Instant> = None;
                 loop {
                     let Some(hub) = weak.upgrade() else { return };
                     if hub.lock().stop {
                         return;
                     }
-                    if hub.lock().core.wants_resources() {
+                    // Every 2 s, and at once for the first reading anybody
+                    // is waiting for (a module that subscribes).
+                    let due = last.is_none_or(|t| t.elapsed() >= RESOURCES_EVERY)
+                        || !hub.lock().subs.has_data("resources");
+                    if due && hub.wants("resources") {
+                        last = Some(Instant::now());
                         let sample = provider.sample(notchd_modules::resources::DISK_PATH);
                         if let Ok(data) = serde_json::to_value(sample) {
                             // A hook may have taken over while we read.
-                            if hub.lock().core.wants_resources() {
+                            if hub.wants("resources") {
                                 hub.feed("resources", &data);
                             }
                         }
                     }
                     drop(hub);
-                    thread::sleep(RESOURCES_EVERY);
+                    thread::sleep(Duration::from_millis(250));
                 }
             });
         if let Err(e) = spawned {
@@ -589,11 +725,7 @@ impl Hub {
         let wanted = Arc::downgrade(self);
         let fed = Arc::downgrade(self);
         let commands = notchd_providers::media::start(
-            Box::new(move || {
-                wanted
-                    .upgrade()
-                    .is_some_and(|h| h.lock().core.wants_media())
-            }),
+            Box::new(move || wanted.upgrade().is_some_and(|h| h.wants("media"))),
             Box::new(move |data| {
                 let Some(hub) = fed.upgrade() else { return };
                 if let Ok(data) = serde_json::to_value(data) {
@@ -601,8 +733,13 @@ impl Hub {
                 }
             }),
         );
-        if let Some(tx) = commands {
-            self.lock().core.set_media(tx);
+        {
+            let mut g = self.lock();
+            g.notifier = notchd_providers::notifications::system().map(Arc::from);
+            if let Some(tx) = commands {
+                g.media_refresh = Some(tx.clone());
+                g.core.set_media(tx);
+            }
         }
     }
 
@@ -657,6 +794,7 @@ impl Hub {
     fn on_mod_event(&self, ev: ModEvent) {
         let mut g = self.lock();
         let now = self.clock.now();
+        self.user_module_event(&mut g, &ev, now);
         let Inner { mods, store, .. } = &mut *g;
         let msgs = mods.apply(store, ev, now);
         for m in &msgs {
@@ -666,6 +804,55 @@ impl Hub {
         let _ = self.publish(&mut g);
         drop(g);
         self.wake.notify_all();
+    }
+
+    /// What a user module's event means beyond the notch's state: its
+    /// subscriptions (a process starting has its manifest's; a `subscribe`
+    /// adds one) and its notifications.
+    fn user_module_event(&self, g: &mut Inner, ev: &ModEvent, now: u64) {
+        match ev {
+            ModEvent::Started { module, .. } => {
+                let names = g.mods.subscriptions(module);
+                g.subs.reset(module, &names);
+                for name in &names {
+                    self.owe(g, module, name);
+                }
+            }
+            ModEvent::Subscribe { module, name } => {
+                g.subs.subscribe(module, name);
+                self.owe(g, module, name);
+            }
+            ModEvent::Unsubscribe { module, name } => g.subs.unsubscribe(module, name),
+            ModEvent::Removed { module } => g.subs.remove(module),
+            ModEvent::Notify { module, notify } => {
+                let held = g
+                    .last_notify
+                    .get(module)
+                    .is_some_and(|at| now < at + NOTIFY_EVERY_MS);
+                if let Some(n) = g.notifier.clone().filter(|_| !held) {
+                    g.last_notify.insert(module.clone(), now);
+                    let clip = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+                    n.notify(
+                        &clip(&notify.title, 200),
+                        &clip(notify.body.as_deref().unwrap_or(""), 1000),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A module that just subscribed is sent the provider's latest payload,
+    /// and the players are asked again when there is none yet.
+    fn owe(&self, g: &mut Inner, module: &str, provider: &str) {
+        let out = g.subs.replay(module, provider);
+        if out.is_empty()
+            && provider == "media"
+            && let Some(tx) = &g.media_refresh
+        {
+            let _ = tx.send(MediaCommand::Refresh);
+        }
+        self.deliver(out);
     }
 
     /// Tells the host what each known module should do: run when a notch
@@ -685,10 +872,12 @@ impl Hub {
             let off = notchd_core::config::value_at(&cfg, &format!("{id}.enabled"))
                 == Some(&Value::Bool(false));
             let enabled = !off && (g.mods.standalone(&id) || listed.contains(&id));
-            let config = match notchd_core::config::value_at(&cfg, &id) {
+            let stored = match notchd_core::config::value_at(&cfg, &id) {
                 Some(v @ Value::Object(_)) => v.clone(),
                 _ => json!({}),
             };
+            // A setting the user never touched reads as its default.
+            let config = g.mods.module_config(&id, &stored);
             let told = g.host_told.get(&id);
             if told.map(|t| t.0) != Some(enabled) {
                 host.set_enabled(&id, enabled);
@@ -745,6 +934,8 @@ impl Hub {
             self.poll_config(&mut g);
             let _ = self.publish(&mut g);
             let now = self.clock.now();
+            let held = g.subs.flush(now);
+            self.deliver(held);
             {
                 let Inner {
                     core, store, mods, ..
@@ -756,7 +947,7 @@ impl Hub {
                 }
             }
             let now = self.clock.now();
-            let due = [g.store.next_due(), g.core.next_due()]
+            let due = [g.store.next_due(), g.core.next_due(), g.subs.next_due()]
                 .into_iter()
                 .flatten()
                 .min();

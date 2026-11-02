@@ -69,6 +69,10 @@ A **standalone** module (the OSD) has a fixed job and a place of its own: no not
 
 To write your own, see [docs/modules.md](docs/modules.md).
 
+## Your own modules
+
+A module is a folder in `~/.config/notchd/modules/<id>/` with a `module.json` and a program in any language that prints JSON lines for what the notch shows and reads the clicks, settings and provider data (CPU, media, screens, plan usage) notchd sends it. It reloads when you save, and a crash or a mistake shows in the notch with the log's path. Start from a [sample](docs/examples/modules/) (shell, Python, Node); the guide is [User modules](docs/modules.md#user-modules).
+
 ## Several notches
 
 `notches` lists them, each with its own modules and place: the media player at the top, script activities at the bottom of the laptop screen, say. A notch takes the keys marked *per notch* in the table below; the ones it leaves out come from the top level of the config, then their defaults (`position` key by key). Without `notches` there is one notch, made of the top-level keys.
@@ -150,7 +154,7 @@ omarchy-shell eryk.notchd push '{"id":"deploy","title":"Deploying api","progress
 
 ## Documentation
 
-- [docs/modules.md](docs/modules.md): writing a module
+- [docs/modules.md](docs/modules.md): writing a module, and [user modules](docs/modules.md#user-modules) in any language
 - [docs/standalone.md](docs/standalone.md): the standalone host
 - [docs/hosts.md](docs/hosts.md): what a host provides, for porting notchd to another desktop
 - [docs/settings.md](docs/settings.md): the settings schema, pages and controls

@@ -78,3 +78,8 @@ pub const PROVIDERS: &[&str] = &[
     "components",
     "osd",
 ];
+
+/// The providers a user module can subscribe to: the ones the daemon has
+/// data for. The rest of [`PROVIDERS`] are named by the protocol but have no
+/// feed for modules yet, so a subscribe to them is answered with `error`.
+pub const SUBSCRIBABLE: &[&str] = &["media", "resources", "screens", "usage"];

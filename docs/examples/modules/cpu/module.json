@@ -1,0 +1,7 @@
+{
+  "title": "CPU",
+  "command": ["python3", "run.py"],
+  "priority": 20,
+  "icon": "",
+  "subscribe": ["resources"]
+}
