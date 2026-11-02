@@ -13,6 +13,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -26,6 +27,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// replaces a stale file.
 pub struct Server {
     listener: UnixListener,
+    path: PathBuf,
     hub: Arc<Hub>,
 }
 
@@ -50,6 +52,7 @@ impl Server {
             .map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(Server {
             listener,
+            path: path.clone(),
             hub: Hub::new(&instance.name, &instance.config),
         })
     }
@@ -66,8 +69,16 @@ impl Server {
         for stream in self.listener.incoming() {
             let Ok(stream) = stream else { continue };
             let hub = Arc::clone(&self.hub);
+            let path = self.path.clone();
             thread::spawn(move || {
-                let _ = connection(stream, &hub);
+                if let Ok(true) = connection(stream, &hub) {
+                    // `shutdown`: the reply is flushed. Stop the ticker,
+                    // free the socket and exit. (Module processes are not
+                    // hosted by the daemon yet; the host stops its own.)
+                    hub.stop();
+                    let _ = fs::remove_file(&path);
+                    std::process::exit(0);
+                }
             });
         }
     }
@@ -107,7 +118,8 @@ fn salvage_id(line: &str) -> Option<u64> {
         .as_u64()
 }
 
-fn connection(stream: UnixStream, hub: &Arc<Hub>) -> std::io::Result<()> {
+/// `Ok(true)`: the peer asked the daemon to shut down.
+fn connection(stream: UnixStream, hub: &Arc<Hub>) -> std::io::Result<bool> {
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let mut out = stream.try_clone()?;
     let (id, rx) = hub.register();
@@ -126,17 +138,18 @@ fn connection(stream: UnixStream, hub: &Arc<Hub>) -> std::io::Result<()> {
     result
 }
 
-fn serve_lines(stream: UnixStream, hub: &Hub, id: u64) -> std::io::Result<()> {
+/// `Ok(true)` when the connection asked for `shutdown`.
+fn serve_lines(stream: UnixStream, hub: &Hub, id: u64) -> std::io::Result<bool> {
     let mut reader = BufReader::new(stream);
     loop {
         let line = match read_line(&mut reader)? {
-            None => return Ok(()),
+            None => return Ok(false),
             Some(Err(())) => {
                 hub.send(
                     id,
                     err(None, "args", format!("line over {MAX_LINE_BYTES} bytes")),
                 );
-                return Ok(());
+                return Ok(false);
             }
             Some(Ok(line)) => line,
         };
@@ -164,11 +177,14 @@ fn serve_lines(stream: UnixStream, hub: &Hub, id: u64) -> std::io::Result<()> {
                         want: Some(PROTO),
                     }),
                 );
-                return Ok(());
+                return Ok(false);
             }
             hub.subscribe(id);
             continue;
         }
         hub.handle(id, &msg);
+        if matches!(&msg, ToDaemon::Ipc(r) if r.method == "shutdown") {
+            return Ok(true);
+        }
     }
 }

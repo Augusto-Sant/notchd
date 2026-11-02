@@ -22,10 +22,16 @@ LINT_FILES = shell.qml core/*.qml core/settings/*.qml core/settings/previews/*.q
 # Dev config for `make dev`, so it never touches ~/.config/notchd.
 DEV_CONFIG ?= $(CURDIR)/build/dev-config.json
 
+# The daemon `make dev` and `make restart` build and the hosts start
+# (scripts/ensure-daemon.sh finds it through NOTCHD_BIN).
+DAEMON_BIN = $(CURDIR)/native/target/release/notchd
+# `make dev` runs its own daemon instance, never the user's `default` one.
+DEV_INSTANCE ?= dev
+
 # Each layer records what it cost in build/times/ (scripts/timed.py).
 TIMED = scripts/timed.py
 
-.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate dev restart deps clean
+.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate daemon dev restart deps clean
 
 # The cheap layers first, one after another: a broken rule fails in seconds,
 # before anything costly starts. Then the costly ones at once.
@@ -121,15 +127,28 @@ lint-run:
 validate:
 	@$(TIMED) validate omarchy plugin validate .
 
-# The standalone host (shell.qml) against a scratch config; hot-reloads.
-dev:
-	@mkdir -p build
-	NOTCHD_CONFIG="$(DEV_CONFIG)" quickshell -p .
+# The daemon, release build: what the hosts start with the shell.
+daemon:
+	cargo build --release -p notchd-daemon --manifest-path native/Cargo.toml
 
-# The Omarchy shell does not hot-reload plugin QML. Installs the optional
-# packages first (deps).
-restart: deps
-	omarchy restart shell
+# The standalone host (shell.qml) against a scratch config and its own daemon
+# instance (DEV_INSTANCE, the dev config): the user's `default` daemon and
+# ~/.config/notchd stay untouched. A dev daemon of an earlier build is stopped
+# first, since the daemon outlives the shell; hot-reloads.
+dev: daemon
+	@mkdir -p build
+	@NOTCHD_INSTANCE="$(DEV_INSTANCE)" NOTCHD_CONFIG="$(DEV_CONFIG)" "$(DAEMON_BIN)" ipc shutdown >/dev/null 2>&1 || true
+	NOTCHD_INSTANCE="$(DEV_INSTANCE)" NOTCHD_CONFIG="$(DEV_CONFIG)" NOTCHD_BIN="$(DAEMON_BIN)" quickshell -p .
+
+# The Omarchy shell does not hot-reload plugin QML. Builds the daemon, stops
+# the running one (it outlives the shell, so it would keep the old build) and
+# copies the build to $XDG_DATA_HOME/notchd/bin/notchd, where the plugin looks
+# when NOTCHD_BIN does not reach the shell. Installs the optional packages
+# first (deps).
+restart: deps daemon
+	@"$(DAEMON_BIN)" ipc shutdown >/dev/null 2>&1 || true
+	install -D -m 755 "$(DAEMON_BIN)" "$${XDG_DATA_HOME:-$$HOME/.local/share}/notchd/bin/notchd"
+	NOTCHD_BIN="$(DAEMON_BIN)" omarchy restart shell
 
 # Optional packages the modules use: qmltermwidget, the codex module's
 # terminal. Installed with pacman only when missing (sudo asks then); without

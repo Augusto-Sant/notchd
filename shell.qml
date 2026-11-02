@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import "core"
+import "core/client"
 
 // Standalone host: the notch as its own Quickshell config, for any Wayland
 // compositor with layer-shell. Run it with `qs -p <repo root>`.
@@ -37,6 +38,16 @@ ShellRoot {
       { page: "appearance", section: "Text", key: "theme.fontFamily", type: "string", label: "Font", default: "monospace",
         help: "Use a Nerd Font so module icons render." }
     ]
+  }
+
+  // The daemon, started with the shell and kept past it (docs/hosts.md, "The
+  // daemon"). It runs in shadow: NotchService still decides everything, the
+  // client only connects. A failure is logged once, nothing else shows.
+  DaemonLauncher {
+    id: daemon
+    script: Qt.resolvedUrl("scripts/ensure-daemon.sh")
+    logName: "notchd"
+    clientName: "standalone"
   }
 
   QtObject {

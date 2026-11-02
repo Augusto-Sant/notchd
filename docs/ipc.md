@@ -23,6 +23,7 @@ Every host exposes the same methods on its `ipcTarget`. The CLI depends on the h
 | `recenter` | put every notch back in the middle of the top edge, following focus (removes each `position`) |
 | `set <key> <json>` | change one config key, as the settings window does; an empty value resets it |
 | `state` | as JSON: `navigation` (the notch selected while navigating, else null), `notches`, each with its id, reserved space, workspaces, position (where it is), whether it can be dragged, its modules and its `copies` (screen, mode and current peek of each); each `standalone` module's place and the copies that show it; and every loaded module, with an agent's plan `usage` (its limits, whether they are stale and why) |
+| `shutdown` | the daemon only (`notchd ipc shutdown`; the QML service has no such target): the daemon replies `ok`, closes its socket and exits. What `notchd daemon --ensure` uses to replace a daemon of another version |
 
 ```sh
 omarchy-shell eryk.notchd set hoverOpenDelay 200
