@@ -183,32 +183,151 @@ function spacer(node, ctx) {
     return actor;
 }
 
-// A bar on a line-colored track; `value` absent or null draws the track only.
+// A bar on a line-colored track, as ProgressPrim.qml: horizontal, or
+// vertical (`orientation: "v"`, filling from the bottom); `value` absent or
+// null draws the track only. With an `anchor` ({at, rate}) the bar moves by
+// itself, `value + rate * (now - at)` ten times a second while it is on
+// screen, so a playing position needs no stream of views. With a `seek`
+// action a press, and every motion while it is held, fires it with the
+// fraction where the pointer is. The bar sits in a hit area with 5 px
+// around it, so it is easy to grab.
+const PROGRESS_TICK_MS = 100;
+const SEEK_PAD = 5;
+
 function progress(node, ctx, depth, actor) {
-    const thickness = Number(node.thickness) || 3;
+    const vertical = node.orientation === 'v';
+    const thickness = Number(node.thickness) || 4;
     const hasValue = typeof node.value === 'number';
-    if (actor && !!actor._bar !== hasValue)
+    const seekable = hasValue && typeof node.seek === 'string' && node.seek !== '';
+    // What the actor is made of: another shape is drawn again.
+    const shape = JSON.stringify([vertical, hasValue, seekable]);
+    if (actor && actor._shape !== shape)
         return null;
     if (!actor) {
-        actor = new St.Widget({x_expand: true, y_align: Clutter.ActorAlign.CENTER});
+        actor = new St.Widget({layout_manager: new Clutter.BinLayout(), reactive: seekable});
+        actor._shape = shape;
+        actor._track = new St.Widget();
+        actor.add_child(actor._track);
         if (hasValue) {
             actor._bar = new St.Widget();
-            actor.add_child(actor._bar);
-            actor.connect('notify::allocation', () => sizeBar(actor));
+            actor._track.add_child(actor._bar);
+            actor._track.connect('notify::allocation', () => sizeBar(actor));
         }
+        if (seekable)
+            seekHandlers(actor, vertical, ctx);
+        actor.connect('destroy', () => stopProgress(actor));
     }
-    actor.style = `background-color: ${ctx.theme.css('line')}; border-radius: ${thickness}px; height: ${thickness}px; min-width: 40px;`;
+    const track = actor._track;
+    actor.style = `padding: ${seekable ? SEEK_PAD : 0}px;`;
+    actor._vertical = vertical;
+    if (vertical) {
+        actor.x_expand = false;
+        actor.y_align = Clutter.ActorAlign.CENTER;
+        track.x_align = Clutter.ActorAlign.CENTER;
+        track.style = `background-color: ${ctx.theme.css('line')}; border-radius: ${thickness / 2}px; width: ${thickness}px; height: ${ctx.theme.space(120)}px;`;
+    } else {
+        actor.x_expand = true;
+        actor.y_align = Clutter.ActorAlign.CENTER;
+        track.x_expand = true;
+        track.y_align = Clutter.ActorAlign.CENTER;
+        track.style = `background-color: ${ctx.theme.css('line')}; border-radius: ${thickness / 2}px; height: ${thickness}px; min-width: 40px;`;
+    }
     if (actor._bar) {
-        actor._bar.style = `background-color: ${tone(ctx, node.tone, 'accent')}; border-radius: ${thickness}px;`;
-        actor._value = Math.max(0, Math.min(1, node.value));
+        actor._bar.style = `background-color: ${tone(ctx, node.tone, 'accent')}; border-radius: ${thickness / 2}px;`;
+        const anchor = node.anchor;
+        const rate = anchor && typeof anchor === 'object' ? Number(anchor.rate) : 0;
+        actor._value = node.value;
+        actor._anchor = rate ? {at: Number(anchor.at) || 0, rate} : null;
         sizeBar(actor);
+        if (actor._anchor)
+            startProgress(actor);
+        else
+            stopProgress(actor);
     }
     return actor;
 }
 
+// The fraction drawn now: the value, run on by the anchor, clamped.
+function progressShown(actor) {
+    let v = actor._value;
+    if (actor._anchor)
+        v += actor._anchor.rate * (Date.now() - actor._anchor.at) / 1000;
+    return Math.max(0, Math.min(1, v));
+}
+
 function sizeBar(actor) {
-    const b = actor.get_allocation_box();
-    actor._bar.set_size((b.x2 - b.x1) * actor._value, b.y2 - b.y1);
+    const b = actor._track.get_allocation_box();
+    const w = b.x2 - b.x1;
+    const h = b.y2 - b.y1;
+    const shown = progressShown(actor);
+    if (actor._vertical) {
+        actor._bar.set_position(0, h * (1 - shown));
+        actor._bar.set_size(w, h * shown);
+    } else {
+        actor._bar.set_position(0, 0);
+        actor._bar.set_size(w * shown, h);
+    }
+    actor._shownFraction = shown;
+}
+
+function startProgress(actor) {
+    if (actor._tick)
+        return;
+    actor._tick = GLib.timeout_add(GLib.PRIORITY_DEFAULT, PROGRESS_TICK_MS, () => {
+        if (actor.mapped)
+            sizeBar(actor);
+        return GLib.SOURCE_CONTINUE;
+    });
+}
+
+function stopProgress(actor) {
+    if (actor._tick)
+        GLib.source_remove(actor._tick);
+    actor._tick = 0;
+}
+
+// The press and drag of a seekable bar. The press is the bar's: it stops
+// here, so it never reaches the card (whose press pins the notch and takes
+// a grab that would cancel the drag). The motion and the release come from
+// the stage while the button is held, so a drag may leave the bar.
+function seekHandlers(actor, vertical, ctx) {
+    const fire = event => {
+        const action = actor._notchd?.node.seek;
+        if (!action || !actor._track.get_stage())
+            return;
+        const [x, y] = event.get_coords();
+        const [ok, tx, ty] = actor._track.transform_stage_point(x, y);
+        const b = actor._track.get_allocation_box();
+        const w = b.x2 - b.x1;
+        const h = b.y2 - b.y1;
+        if (!ok || !(w > 0) || !(h > 0))
+            return;
+        const f = vertical ? 1 - ty / h : tx / w;
+        ctx.onAction(action, Math.max(0, Math.min(1, f)));
+    };
+    const release = () => {
+        if (actor._drag)
+            global.stage.disconnect(actor._drag);
+        actor._drag = 0;
+    };
+    actor.connect('destroy', release);
+    actor.connect('button-press-event', (a, event) => {
+        if (event.get_button() !== Clutter.BUTTON_PRIMARY)
+            return Clutter.EVENT_PROPAGATE;
+        fire(event);
+        release();
+        actor._drag = global.stage.connect('captured-event', (stage, e) => {
+            const type = e.type();
+            if (type === Clutter.EventType.MOTION) {
+                fire(e);
+            } else if (type === Clutter.EventType.BUTTON_RELEASE) {
+                release();
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+        return Clutter.EVENT_STOP;
+    });
 }
 
 // A pressable St.Button whose fill follows hover and `selected`: `look(hover)`
@@ -288,8 +407,9 @@ function chip(node, ctx) {
     return actor;
 }
 
-// A local picture path or file:// URI as a GFile, or null (an https:// one
-// and a bundled `asset:` are not loaded yet: the fallback draws).
+// A picture's source as a local GFile: an absolute path or a file:// URI.
+// An http(s):// one is `remoteSource`'s, a bundled `asset:` is not loaded
+// yet (the fallback draws).
 function pictureFile(src) {
     const s = src === undefined || src === null ? '' : String(src);
     if (s.startsWith('/'))
@@ -299,9 +419,111 @@ function pictureFile(src) {
     return null;
 }
 
+function remoteSource(src) {
+    const s = src === undefined || src === null ? '' : String(src);
+    return /^https?:\/\/[^\s]+$/.test(s) ? s : null;
+}
+
+// Pictures from the network live in a cache of their own, named by a hash
+// of the URL, so the next view (or the next session) has them at once. The
+// oldest files go past CACHE_MAX; one is at most CACHE_FILE_MAX bytes.
+const CACHE_MAX = 64;
+const CACHE_FILE_MAX = 8 * 1024 * 1024;
+
+function cacheDir() {
+    return GLib.build_filenamev([GLib.get_user_cache_dir(), 'notchd-gnome']);
+}
+
+function cacheFile(url) {
+    const hash = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, url, -1);
+    return Gio.File.new_for_path(GLib.build_filenamev([cacheDir(), hash]));
+}
+
+function pruneCache() {
+    try {
+        const dir = Gio.File.new_for_path(cacheDir());
+        const files = [];
+        const en = dir.enumerate_children('standard::name,time::modified', Gio.FileQueryInfoFlags.NONE, null);
+        for (let info = en.next_file(null); info; info = en.next_file(null))
+            files.push({name: info.get_name(), time: info.get_modification_date_time()?.to_unix() ?? 0});
+        en.close(null);
+        files.sort((a, b) => b.time - a.time);
+        for (const f of files.slice(CACHE_MAX))
+            dir.get_child(f.name).delete(null);
+    } catch (e) {
+        // A cache that cannot be trimmed only keeps files a while longer.
+    }
+}
+
+let soup = null;
+let session = null;
+let downloads = 0;
+// url -> the callbacks waiting for it: a picture asked for twice while it
+// downloads is fetched once.
+const pending = new Map();
+
+// Calls `done(GFile)` once `url` is in the cache, `done(null)` when it
+// cannot be had. Asynchronous all the way (never a network call on the
+// main loop); `done` may run at once (a cached file), from the main loop.
+function fetchPicture(url, done) {
+    const file = cacheFile(url);
+    if (file.query_exists(null)) {
+        done(file);
+        return;
+    }
+    if (pending.has(url)) {
+        pending.get(url).push(done);
+        return;
+    }
+    pending.set(url, [done]);
+    const finish = result => {
+        const waiting = pending.get(url) ?? [];
+        pending.delete(url);
+        for (const cb of waiting)
+            cb(result);
+    };
+    (async () => {
+        try {
+            soup ??= (await import('gi://Soup?version=3.0')).default;
+            session ??= new soup.Session({timeout: 15, idle_timeout: 15});
+            const msg = soup.Message.new('GET', url);
+            const bytes = await new Promise((resolve, reject) => {
+                session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (s, res) => {
+                    try {
+                        resolve(s.send_and_read_finish(res));
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+            });
+            if (msg.status_code !== 200 || bytes.get_size() === 0 || bytes.get_size() > CACHE_FILE_MAX)
+                throw new Error(`HTTP ${msg.status_code}, ${bytes.get_size()} bytes`);
+            GLib.mkdir_with_parents(cacheDir(), 0o755);
+            await new Promise((resolve, reject) => {
+                file.replace_contents_bytes_async(bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null, (f, res) => {
+                    try {
+                        f.replace_contents_finish(res);
+                        resolve();
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+            });
+            if (++downloads % 16 === 1)
+                pruneCache();
+            finish(file);
+        } catch (e) {
+            console.warn(`notchd: no picture from ${url}: ${e.message}`);
+            finish(null);
+        }
+    })();
+}
+
 // Cover art: the picture cropped (or contained) over a `selected` fill,
-// the `fallback` icon when it cannot be drawn. `radius`: none, small or
-// round (Theme.qml's radiusSmall and radius). As ImagePrim.qml.
+// the `fallback` icon while it loads and when it cannot be had. `radius`:
+// none, small or round (Theme.qml's radiusSmall and radius). A picture from
+// the network (`https://`; the cache above) draws the fallback until it is
+// there, if the actor still is. As ImagePrim.qml.
 function image(node, ctx, depth) {
     const theme = ctx.theme;
     const size = node.size === undefined ? 38 : Number(node.size);
@@ -310,18 +532,42 @@ function image(node, ctx, depth) {
     const corner = node.radius === 'round' ? theme.radius : node.radius === 'small' ? theme.radiusSmall : 0;
     const contain = node.fit === 'contain';
     const actor = new St.Widget({layout_manager: new Clutter.BinLayout(), width: theme.space(w), height: theme.space(h)});
-    const file = pictureFile(node.src);
     let style = `border-radius: ${corner}px;`;
     if (!contain)
         style += ` background-color: ${theme.css('selected')};`;
+    const picture = file => `${style} background-image: url("${file.get_uri()}"); background-size: ${contain ? 'contain' : 'cover'}; background-position: center;`;
+    // `state` is what a test reads: loading, ready or failed.
+    actor._picture = {state: 'failed', src: node.src ?? ''};
+    const url = remoteSource(node.src);
+    const file = pictureFile(node.src) ?? (url ? cacheFile(url) : null);
     if (file && file.query_exists(null)) {
-        style += ` background-image: url("${file.get_uri()}"); background-size: ${contain ? 'contain' : 'cover'}; background-position: center;`;
+        style = picture(file);
+        actor._picture.state = 'ready';
     } else {
         const fallback = render(node.fallback, ctx, depth + 1);
         if (fallback) {
             fallback.x_align = Clutter.ActorAlign.CENTER;
             fallback.y_align = Clutter.ActorAlign.CENTER;
             actor.add_child(fallback);
+        }
+        if (url) {
+            let dead = false;
+            actor.connect('destroy', () => {
+                dead = true;
+            });
+            actor._picture.state = 'loading';
+            fetchPicture(url, got => {
+                // A destroyed actor is not touched.
+                if (dead)
+                    return;
+                if (!got) {
+                    actor._picture.state = 'failed';
+                    return;
+                }
+                actor._picture.state = 'ready';
+                fallback?.destroy();
+                actor.style = picture(got);
+            });
         }
     }
     actor.style = style;

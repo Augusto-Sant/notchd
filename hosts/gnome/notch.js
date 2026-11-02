@@ -525,6 +525,11 @@ class NotchCopy extends St.Widget {
             ...(this._target ?? {x: this.x, y: this.y, w: this.width, h: this.height}),
             card: {w: this._cardW, h: this._cardH}, modal: !!this._modal,
             hasContent: !!this._content.child, shown: this._copy?.shown ?? [],
+            // The view's progress bars and pictures (a test presses a bar
+            // where it is and reads what a picture shows).
+            bars: this._viewActors(a => a._track).map(a => ({...this._boxOf(a._track), seek: !!a.reactive, shown: a._shownFraction ?? null})),
+            texts: this._viewActors(a => a instanceof St.Label).map(a => a.text),
+            images: this._viewActors(a => a._picture).map(a => ({...a._picture, ...this._boxOf(a)})),
             tabs: (this._tabButtons ?? []).filter(({button}) => button.mapped).map(({tab, button}) => {
                 // Allocations summed up to the card: the transformed extents
                 // are NaN in GNOME 46's headless shell.
@@ -537,6 +542,32 @@ class NotchCopy extends St.Widget {
                 return {id: tab.id, picked: tab.picked, x, y, w: button.width, h: button.height};
             }),
         };
+    }
+
+    // The actors under the content `pick` accepts, and where one is: its
+    // allocations summed up to the card (transformed extents are NaN in
+    // GNOME 46's headless shell).
+    _viewActors(pick) {
+        const found = [];
+        const walk = a => {
+            if (pick(a))
+                found.push(a);
+            a.get_children().forEach(walk);
+        };
+        if (this._content)
+            walk(this._content);
+        return found;
+    }
+
+    _boxOf(actor) {
+        let x = this.x, y = this.y;
+        for (let a = actor; a && a !== this; a = a.get_parent()) {
+            const box = a.get_allocation_box();
+            x += box.x1;
+            y += box.y1;
+        }
+        const b = actor.get_allocation_box();
+        return {x, y, w: b.x2 - b.x1, h: b.y2 - b.y1};
     }
 
     release() {
