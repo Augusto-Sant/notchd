@@ -2,7 +2,9 @@
 //! processes, real files in a temp dir, every wait bounded.
 
 use notchd_daemon::modhost::proc::alive;
-use notchd_daemon::modhost::{ErrorKind, ModEvent, ModHost, Options, State, error_row};
+use notchd_daemon::modhost::{
+    ErrorKind, ModEvent, ModHost, ModuleStatus, Options, State, error_row,
+};
 use notchd_proto::module::{LogLevel, ModuleEvent};
 use notchd_proto::{EventValue, Node, Slot, ToModule};
 use notchd_testkit::fake_module::{install, tick_mtime, viewer_script, write, write_script};
@@ -120,6 +122,25 @@ impl Harness {
             assert!(
                 Instant::now() < deadline,
                 "log of {id} never had {needle:?}: {text}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Waits for the host to report `state` for `id`. A process that is gone
+    /// is not yet a module that is: the host notices the exit on its next
+    /// tick and drains the pipes first.
+    fn wait_state(&self, id: &str, state: State) -> ModuleStatus {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let status = self.host.status(id).unwrap();
+            if status.state == state {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{id} never became {state:?}, it is {:?}",
+                status.state
             );
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -328,8 +349,7 @@ fn saving_a_file_restarts_the_module_and_the_old_process_is_gone() {
     h.wait("second view", is_view("ticker", "two"));
     h.wait_dead(old);
     assert_eq!(h.count(started("ticker")), 2);
-    let status = h.host.status("ticker").unwrap();
-    assert_eq!(status.state, State::Running);
+    let status = h.wait_state("ticker", State::Running);
     assert_ne!(status.pid, Some(old));
     // A graceful stop: no crash row for the old one.
     assert_eq!(h.count(is_error("ticker", ErrorKind::Crash)), 0);
@@ -568,7 +588,7 @@ fn disabling_stops_the_process_and_enabling_starts_it() {
     let pid = h.host.status("good").unwrap().pid.unwrap();
     h.host.set_enabled("good", false);
     h.wait_dead(pid);
-    assert_eq!(h.host.status("good").unwrap().state, State::Disabled);
+    h.wait_state("good", State::Disabled);
     assert_eq!(h.count(is_error("good", ErrorKind::Crash)), 0);
     let m = h.mark();
     h.host.set_enabled("good", true);
@@ -602,8 +622,11 @@ fn stop_all_kills_a_stubborn_module_and_everything_it_started() {
     let t = Instant::now();
     h.host.stop_all();
     assert!(t.elapsed() < Duration::from_secs(4), "{:?}", t.elapsed());
+    // SIGKILL is delivered asynchronously: a process of the group that was
+    // not scheduled yet is still there when `stop_all` returns. Wait for it
+    // to actually go (bounded), instead of sampling the instant.
     for pid in pids.iter().chain([&good]) {
-        assert!(!alive(*pid), "pid {pid} survived stop_all");
+        h.wait_dead(*pid);
     }
     // Stubborn ignored stop and SIGTERM, so the log says the group was killed.
     assert!(
@@ -624,7 +647,11 @@ fn dropping_the_host_leaves_no_processes() {
     let pid = h.host.status("good").unwrap().pid.unwrap();
     let Harness { host, _dir, .. } = h;
     drop(host);
-    assert!(!alive(pid));
+    let deadline = Instant::now() + WAIT;
+    while alive(pid) {
+        assert!(Instant::now() < deadline, "pid {pid} survived the drop");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]

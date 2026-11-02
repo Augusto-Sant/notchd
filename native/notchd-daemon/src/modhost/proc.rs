@@ -85,10 +85,24 @@ pub fn signal_group(pgid: u32, sig: i32) {
     }
 }
 
-/// Whether process `pid` still exists (signal 0).
+/// Whether process `pid` still runs. Signal 0 alone says "exists", which a
+/// zombie (dead, waiting for its parent or the subreaper to reap it) also
+/// does, so a zombie counts as gone.
 pub fn alive(pid: u32) -> bool {
     // SAFETY: as above.
-    unsafe { kill(pid as i32, 0) == 0 }
+    if unsafe { kill(pid as i32, 0) } != 0 {
+        return false;
+    }
+    // The state is the first field after the parenthesised name, which may
+    // itself hold spaces and parentheses: look past the last `)`.
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => !stat
+            .rsplit(')')
+            .next()
+            .is_some_and(|rest| matches!(rest.trim_start().chars().next(), Some('Z') | Some('X'))),
+        // Gone between the two checks (or no /proc): trust signal 0.
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 #[cfg(test)]

@@ -36,10 +36,26 @@ pub fn write(modules_dir: &Path, id: &str, manifest: &str, script: &str) -> Path
 }
 
 /// Replaces `run.sh` (a save). The host fingerprints size and mtime, so a
-/// rewrite is noticed when either differs: call [`tick_mtime`] before it.
+/// rewrite is noticed when either differs: a rewrite of equal length whose
+/// mtime did not move (a coarse clock) gets its mtime pushed forward here, so
+/// no sleep is needed to make a save visible.
 pub fn write_script(dir: &Path, script: &str) {
     let path = dir.join("run.sh");
+    let before = fs::metadata(&path)
+        .and_then(|m| Ok((m.len(), m.modified()?)))
+        .ok();
     fs::write(&path, script).expect("write script");
+    if let Some((len, mtime)) = before {
+        let file = fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open script");
+        let now = file.metadata().and_then(|m| m.modified()).unwrap_or(mtime);
+        if len == script.len() as u64 && now <= mtime {
+            file.set_modified(mtime + Duration::from_secs(1))
+                .expect("bump mtime");
+        }
+    }
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
 }
 
@@ -50,8 +66,6 @@ pub fn viewer_script(text: &str) -> String {
     )
 }
 
-/// Sleeps until the filesystem's mtime clock has certainly moved on, so two
-/// writes of equal length still fingerprint differently.
-pub fn tick_mtime() {
-    std::thread::sleep(Duration::from_millis(20));
-}
+/// Kept for callers; [`write_script`] now guarantees a distinct fingerprint
+/// itself, so this no longer sleeps.
+pub fn tick_mtime() {}
