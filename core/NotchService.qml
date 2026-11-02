@@ -226,7 +226,15 @@ Item {
       var ids = svc.availableModuleIds.filter(function(a) { return svc.isLive(a) })
       return "no live module " + id + (ids.length > 0 ? "; live modules: " + ids.join(", ") : "")
     }
-    return svc.moduleById(id) ? svc.daemonIpc("live", [id, command], "ok") : id + " module not loaded"
+    if (!svc.moduleById(id)) return id + " module not loaded"
+    // The host's target cannot wait for the daemon's answer, so the two it
+    // can know here are answered here: the words, and no talking to mute.
+    var word = String(command).trim().split(/\s+/)[0]
+    if (["start", "stop", "toggle", "new", "mute", "unmute"].indexOf(word) === -1)
+      return "usage: live " + id + " start | stop | toggle | new | mute | unmute"
+    if ((word === "mute" || word === "unmute") && svc.client.view(id, "compact") === null)
+      return "not in a conversation"
+    return svc.daemonIpc("live", [id, command], "ok")
   }
   // The folder of this core (its sidecars are run by the daemon from it).
   readonly property string coreDir: Settings.moduleInfoPath(Qt.resolvedUrl("NotchService.qml"), Quickshell.shellDir).replace(/\/[^\/]*$/, "")

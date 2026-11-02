@@ -2513,7 +2513,9 @@ ShellRoot {
         liveSvc.notchIpc("live", ["codex-live", "mute"])
       }],
       [500, function() {
-        root.check(root.liveTexts().indexOf("Muted") !== -1, "the bridge didn't say muted: " + root.liveTexts())
+        // The fake bridge keeps "speaking", which the status line prefers to
+        // "Muted"; the microphone button is what says it.
+        root.check(JSON.stringify(liveSvc.client.view("codex-live", "expanded")).indexOf("Unmute the microphone") !== -1, "the bridge didn't say muted: " + root.liveTexts())
         liveSvc.notchIpc("live", ["codex-live", "stop"])
       }],
       [800, function() {
