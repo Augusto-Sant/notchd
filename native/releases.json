@@ -1,1 +1,12 @@
-{}
+{
+  "0.4.0": {
+    "aarch64-unknown-linux-gnu": {
+      "url": "https://github.com/eryk-vieira/notchd/releases/download/v0.4.0/notchd-0.4.0-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "93aa6d9c1490a80ee46fc5c77f69678e8321f2975cc4ba59137f073bd52da9ac"
+    },
+    "x86_64-unknown-linux-gnu": {
+      "url": "https://github.com/eryk-vieira/notchd/releases/download/v0.4.0/notchd-0.4.0-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "8e3b5417e5268409fee8391414d53ca0d8aef2ef7a67e6fe0c6159d46a2c9777"
+    }
+  }
+}
