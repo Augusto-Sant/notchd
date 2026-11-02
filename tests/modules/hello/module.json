@@ -1,0 +1,6 @@
+{
+  "title": "Hello",
+  "command": ["./run.sh"],
+  "priority": 40,
+  "icon": "H"
+}

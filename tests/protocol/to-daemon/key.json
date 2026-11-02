@@ -1,0 +1,12 @@
+{
+ "message": "key",
+ "valid": [
+  {"t":"key","notch":"main","screen":"DP-1","key":"Tab","mods":["shift"],"text":""},
+  {"t":"key","notch":"main","screen":"DP-1","key":"a","mods":[],"text":"a"},
+  {"t":"key","notch":"main","screen":"DP-1","key":"Escape","mods":["ctrl","alt","meta"],"text":""}
+ ],
+ "invalid": [
+  {"why":"modifier is not a modifier","json":{"t":"key","notch":"main","screen":"DP-1","key":"a","mods":["super"],"text":"a"}},
+  {"why":"mods missing","json":{"t":"key","notch":"main","screen":"DP-1","key":"a","text":"a"}}
+ ]
+}

@@ -79,7 +79,10 @@ ShellRoot {
     { name: "module-voice-dark", page: "modules/local-live", theme: root.dark, bar: true, fields: root.omarchyFields, scrollTo: "end" },
     { name: "components-working-dark", page: "components", theme: root.dark, bar: true, fields: root.omarchyFields, scrollTo: 700 },
     { name: "components-light", page: "components", theme: root.light, bar: true, fields: root.omarchyFields },
-    { name: "agents-dark", agents: true, theme: root.dark }
+    { name: "agents-dark", agents: true, theme: root.dark },
+    // The notch while the daemon is away.
+    { name: "daemon-down-dark", down: true, theme: root.dark },
+    { name: "daemon-down-light", down: true, theme: root.light }
   ]
   property int index: -1
   readonly property var scenario: index >= 0 && index < scenarios.length ? scenarios[index] : null
@@ -95,7 +98,7 @@ ShellRoot {
     function activeWorkspace(screen) { return null }
   }
 
-  NotchService {
+  TestService {
     id: svc
     ipcTarget: "notchd-visual"
     compositor: fakeCompositor
@@ -112,7 +115,7 @@ ShellRoot {
   // ------------------------------------------------------------ notch
   // Real services with the real modules, the media one playing
   // demo-player.py's track: what each module shows on each edge.
-  component DemoService: NotchService {
+  component DemoService: TestService {
     property string tag: ""
     ipcTarget: "notchd-visual-" + tag
     configPath: root.outDir + "/edge-" + tag + ".json"
@@ -162,16 +165,15 @@ ShellRoot {
   readonly property var demoServices: [mediaSvc, activitySvc, osdSvc, openSvc, resourcesSvc, resourcesOpenSvc,
                                        timerSvc, pomodoroSvc, timerIdleSvc, timerDoneSvc, restSvc, navSvc]
 
-  // Demo values instead of this machine's: memory short, the rest fine.
-  function demoResources(m) {
-    var gib = 1024 * 1024 * 1024
-    m.sampling = false
-    m.cpu = 0.34
-    m.cores = 16
-    m.memory = { used: 29.1 * gib, total: 31.2 * gib, fraction: 29.1 / 31.2 }
-    m.disk = { used: 412 * gib, total: 931 * gib, fraction: 412 / 931 }
-    m.pressure = { cpu: { hot: false, streak: 0 }, memory: { hot: true, streak: 1 }, disk: { hot: false, streak: 0 } }
+  // Demo values instead of this machine's (the daemon's test hook stops its
+  // readings): memory short, the rest fine; the peek that turning short asks
+  // for is dismissed, the renders show the views as they rest.
+  function demoResources(svc) {
+    svc.client.ipc("test-resources", ["0.34", String(29.1 / 31.2), String(412 / 931), "16", "31.2", "931"], null)
+    svc.dismissPeek(null)
   }
+  // The daemon's timer, set by hand (its test hook): a countdown state.
+  function demoTimer(svc, state) { svc.client.ipc("test-timer", [JSON.stringify(state)], null) }
 
   // Once the modules are up: an activity on two of them, the volume OSD
   // held open, the last one pinned open.
@@ -181,49 +183,51 @@ ShellRoot {
     onTriggered: {
       var deploy = JSON.stringify({ id: "deploy", icon: "󰜎", title: "Deploying api", subtitle: "staging · 3 of 5",
                                     progress: 64, sticky: true, peek: false })
-      activitySvc.moduleById("activities").push(deploy)
-      openSvc.moduleById("activities").push(deploy)
-      osdSvc.moduleById("osd").show(JSON.stringify({ icon: "volume", value: "62", duration: "600000" }))
+      activitySvc.daemonIpc("push", [deploy], "ok")
+      openSvc.daemonIpc("push", [deploy], "ok")
+      osdSvc.daemonIpc("osd", ["show", JSON.stringify({ icon: "volume", value: "62", duration: "600000" })], "ok")
       openSvc.open()
-      root.demoResources(resourcesSvc.moduleById("resources"))
-      root.demoResources(resourcesOpenSvc.moduleById("resources"))
+      root.demoResources(resourcesSvc)
+      root.demoResources(resourcesOpenSvc)
       resourcesOpenSvc.open()
-      timerSvc.moduleById("timer").run({ action: "start", ms: 18 * 60000 + 42000, label: "Tea" })
-      pomodoroSvc.moduleById("timer").countdown = { status: "running", kind: "pomodoro", phase: "focus", round: 2, rounds: 4,
-                                                    label: "Focus", duration: 25 * 60000, endsAt: Date.now() + 18 * 60000 + 56000 }
+      root.demoTimer(timerSvc, { status: "running", kind: "timer", label: "Tea", duration: 18 * 60000 + 42000,
+                                 endsAt: Date.now() + 18 * 60000 + 42000 })
+      root.demoTimer(pomodoroSvc, { status: "running", kind: "pomodoro", phase: "focus", round: 2, rounds: 4,
+                                    label: "Focus", duration: 25 * 60000, endsAt: Date.now() + 18 * 60000 + 56000 })
       pomodoroSvc.open()
       timerIdleSvc.open()
-      var done = timerDoneSvc.moduleById("timer")
-      done.countdown = { status: "done", kind: "timer", label: "Tea", duration: 3 * 60000 }
-      done.requestPeek(600000)
+      root.demoTimer(timerDoneSvc, { status: "done", kind: "timer", label: "Tea", duration: 3 * 60000 })
+      timerDoneSvc.requestPeek(timerDoneSvc.moduleById("timer"), 600000)
       claudeSvc.setConfigValue("claude.directory", root.outDir)
       claudeSvc.open()
-      // The plan's limits, by hand: offscreen nothing asks the network.
-      claudeSvc.moduleById("claude").usage.apply({ limits: [
+      // The agents live in the daemon: its test hooks (NOTCHD_TEST_HOOKS) give
+      // them a title and the plan's limits by hand (offscreen nothing asks
+      // the network).
+      var hook = function(svc, id, args) { svc.client.ipc("test-" + id, args, null) }
+      hook(claudeSvc, "claude", ["usage", JSON.stringify({ limits: [
         { kind: "session", group: "session", percent: 42, resets_at: new Date(Date.now() + 130 * 60000).toISOString() },
         { kind: "weekly_all", group: "weekly", percent: 83, resets_at: new Date(Date.now() + 3 * 86400000).toISOString() },
         { kind: "weekly_scoped", group: "weekly", percent: 5, resets_at: new Date(Date.now() + 3 * 86400000).toISOString(),
-          scope: { model: { display_name: "Fable" } } } ] })
-      claudeBusySvc.moduleById("claude").status = { working: true, title: "Convert HEIC photos to JPG" }
+          scope: { model: { display_name: "Fable" } } } ] })])
+      hook(claudeBusySvc, "claude", ["title", "◐ Convert HEIC photos to JPG"])
       codexSvc.setConfigValue("codex.directory", root.outDir)
       codexSvc.open()
-      codexBusySvc.moduleById("codex").status = { working: true, title: "Fix the flaky login test" }
+      hook(codexBusySvc, "codex", ["title", "⠹ Fix the flaky login test | proj"])
       liveSvc.open()
       // Talking, with no bridge: its state by hand.
-      liveClosedSvc.moduleById("codex-live").conv = { status: "live", error: "", packages: [], warning: "",
-        transcript: [], working: false, muted: false, level: -100 }
+      hook(liveClosedSvc, "codex-live", ["state", JSON.stringify({ status: "live", error: "", packages: [], warning: "",
+        transcript: [], working: false, muted: false, level: -100 })])
       var agents = [agentsTabsSvc, agentsStackSvc]
       for (var a = 0; a < agents.length; a++) {
         agents[a].setConfigValue("claude.directory", root.outDir)
         agents[a].setConfigValue("codex.directory", root.outDir)
       }
       agentsStackSvc.setConfigValue("tabs", false)
-      agentsClosedSvc.moduleById("claude").status = { working: true, title: "Convert HEIC photos to JPG" }
-      agentsClosedSvc.moduleById("codex").status = { working: false, title: "Fix the flaky login test" }
-      agentsClosedSvc.moduleById("codex").attention = true
+      hook(agentsClosedSvc, "claude", ["title", "◐ Convert HEIC photos to JPG"])
+      hook(agentsClosedSvc, "codex", ["title", "Fix the flaky login test | proj", "attention"])
       agentsSideSvc.setConfigValue("position", { edge: "right", offset: 0.5 })
-      agentsSideSvc.moduleById("claude").status = { working: true, title: "" }
-      agentsSideSvc.moduleById("codex").attention = true
+      hook(agentsSideSvc, "claude", ["title", "◐ Claude Code"])
+      hook(agentsSideSvc, "codex", ["title", "", "attention"])
       agentsTabsSvc.open()
       agentsStackSvc.open()
       navSvc.setConfigValue("notches", [{ id: "Main", modules: ["media"] }, { id: "Computer", modules: ["resources"] }])
@@ -235,7 +239,7 @@ ShellRoot {
     id: navTimer
     interval: 300
     onTriggered: {
-      root.demoResources(navSvc.moduleById("resources"))
+      root.demoResources(navSvc)
       navSvc.navigate()
     }
   }
@@ -498,6 +502,21 @@ ShellRoot {
   }
 
   FloatingWindow {
+    id: downWin
+    visible: !!root.scenario && !!root.scenario.down
+    implicitWidth: downScene.width
+    implicitHeight: downScene.height
+    color: Theme.background
+    Rectangle {
+      id: downScene
+      width: Theme.space(320)
+      height: Theme.space(90)
+      color: Theme.mix(Theme.background, Theme.foreground, 0.12)
+      DaemonDownRow { anchors.centerIn: parent }
+    }
+  }
+
+  FloatingWindow {
     id: agentsWin
     visible: !!root.scenario && !!root.scenario.agents
     implicitWidth: agentsScene.width
@@ -520,7 +539,7 @@ ShellRoot {
   function next() {
     root.index++
     if (!root.scenario) { quitTimer.start(); return }
-    svc.components.refresh()  // the fake installer's canned state
+    svc.settingsOpen = !!root.scenario.page  // the daemon reads the fake installer's canned state while it is open
     Theme.provider = root.scenario.theme
     svc.setConfigValue("workspaces", root.scenario.bar ? [1, 2, 3] : undefined)
     svc.setConfigValue("osd.enabled", false)
@@ -542,14 +561,30 @@ ShellRoot {
     scrollTimer.start()
   }
 
-  Timer { interval: 600; running: true; onTriggered: root.next() }
+  // Every service has a daemon of its own (tests/qml/TestService.qml): the
+  // first scenario starts once each has answered.
+  Timer {
+    id: startTimer
+    property int waited: 0
+    interval: 100
+    repeat: true
+    running: true
+    onTriggered: {
+      var all = [svc, mediaSvc, activitySvc, osdSvc, openSvc, resourcesSvc, resourcesOpenSvc, timerSvc, pomodoroSvc, timerIdleSvc,
+                 timerDoneSvc, restSvc, claudeSvc, claudeBusySvc, codexSvc, codexBusySvc, liveSvc, liveClosedSvc, agentsTabsSvc,
+                 agentsStackSvc, agentsClosedSvc, agentsSideSvc, navSvc]
+      if (++waited < 100 && !all.every(function(s) { return s.daemonReady })) return
+      stop()
+      root.next()
+    }
+  }
   Timer {
     id: grabTimer
     interval: 400
     onTriggered: {
       var name = root.scenario.name
       var target = root.scenario.chat ? chatScene : root.scenario.codex ? codexScene : root.scenario.agents ? agentsScene
-        : root.scenario.live ? liveScene
+        : root.scenario.live ? liveScene : root.scenario.down ? downScene
         : root.scenario.edge ? notchScene : win.contentItem.children[0]
       target.grabToImage(function(result) {
         if (!result.saveToFile(root.outDir + "/" + name + ".png")) console.warn("could not save " + name)

@@ -31,6 +31,13 @@ NotchService {
 
   HyprlandCompositor { id: hyprland }
 
+  // The daemon (docs/hosts.md, "The daemon"): started with the shell and kept
+  // past it, the authority for the config, the settings schema and IPC. The
+  // service runs the script, connects and starts it again when it dies;
+  // meanwhile the notch says "notchd not running".
+  daemonScript: Qt.resolvedUrl("../../scripts/ensure-daemon.sh")
+  daemonClientName: "omarchy"
+
   // Omarchy's theme mapped onto the core's tokens; follows theme switches.
   QtObject {
     id: omarchyTheme

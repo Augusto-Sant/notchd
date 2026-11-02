@@ -1,0 +1,9 @@
+{
+ "message": "surface-close",
+ "valid": [
+  {"t":"surface-close","ref":"term:claude"}
+ ],
+ "invalid": [
+  {"why":"ref missing","json":{"t":"surface-close"}}
+ ]
+}

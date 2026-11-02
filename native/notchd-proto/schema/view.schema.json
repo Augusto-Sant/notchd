@@ -1,0 +1,1316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://notchd.dev/schema/view.schema.json",
+  "title": "notchd view tree, protocol v1",
+  "description": "A module slot's tree of primitives (docs/architecture.md, Primitive tree). Unknown properties are allowed (minor versions add optional ones); an unknown `t` is not. The nesting, node-count and size limits are enforced by the core (notchd-proto's Validate), not expressible here.",
+  "$ref": "#/$defs/Node",
+  "$defs": {
+    "Tone": {
+      "type": "string",
+      "enum": [
+        "foreground",
+        "muted",
+        "faint",
+        "accent",
+        "danger",
+        "success",
+        "line"
+      ]
+    },
+    "Token": {
+      "type": "string",
+      "enum": [
+        "foreground",
+        "background",
+        "accent",
+        "danger",
+        "success",
+        "muted",
+        "faint",
+        "line",
+        "hover",
+        "selected",
+        "surface"
+      ]
+    },
+    "TextSize": {
+      "type": "string",
+      "enum": [
+        "caption",
+        "bodySmall",
+        "body",
+        "heading",
+        "display"
+      ]
+    },
+    "Align": {
+      "type": "string",
+      "enum": [
+        "start",
+        "center",
+        "end"
+      ]
+    },
+    "Color": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Token"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mix": {
+              "type": "array",
+              "minItems": 3,
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/Token"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "mix"
+          ]
+        }
+      ]
+    },
+    "Node": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Row"
+        },
+        {
+          "$ref": "#/$defs/Column"
+        },
+        {
+          "$ref": "#/$defs/Stack"
+        },
+        {
+          "$ref": "#/$defs/Spacer"
+        },
+        {
+          "$ref": "#/$defs/Text"
+        },
+        {
+          "$ref": "#/$defs/Icon"
+        },
+        {
+          "$ref": "#/$defs/Image"
+        },
+        {
+          "$ref": "#/$defs/Progress"
+        },
+        {
+          "$ref": "#/$defs/Meter"
+        },
+        {
+          "$ref": "#/$defs/Equalizer"
+        },
+        {
+          "$ref": "#/$defs/List"
+        },
+        {
+          "$ref": "#/$defs/Button"
+        },
+        {
+          "$ref": "#/$defs/Chip"
+        },
+        {
+          "$ref": "#/$defs/Canvas"
+        },
+        {
+          "$ref": "#/$defs/Surface"
+        }
+      ]
+    },
+    "Children": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Node"
+      }
+    },
+    "Row": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "row"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "children": {
+          "$ref": "#/$defs/Children"
+        },
+        "gap": {
+          "type": "number"
+        },
+        "align": {
+          "$ref": "#/$defs/Align"
+        },
+        "maxWidth": {
+          "type": "number",
+          "description": "At most this wide, in design pixels."
+        }
+      },
+      "required": [
+        "t",
+        "children"
+      ],
+      "description": "Horizontal layout; fill:true on a child takes the rest."
+    },
+    "Column": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "column"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "children": {
+          "$ref": "#/$defs/Children"
+        },
+        "gap": {
+          "type": "number"
+        },
+        "align": {
+          "$ref": "#/$defs/Align"
+        },
+        "maxWidth": {
+          "type": "number",
+          "description": "At most this wide, in design pixels."
+        }
+      },
+      "required": [
+        "t",
+        "children"
+      ]
+    },
+    "Stack": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "stack"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "children": {
+          "$ref": "#/$defs/Children"
+        },
+        "align": {
+          "$ref": "#/$defs/Align"
+        }
+      },
+      "required": [
+        "t",
+        "children"
+      ],
+      "description": "Overlay, centered by default."
+    },
+    "Spacer": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "spacer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "size": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "t"
+      ]
+    },
+    "Text": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "text"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "text": {
+          "type": "string"
+        },
+        "tone": {
+          "$ref": "#/$defs/Tone"
+        },
+        "size": {
+          "$ref": "#/$defs/TextSize"
+        },
+        "tabular": {
+          "type": "boolean"
+        },
+        "elide": {
+          "type": "string",
+          "enum": [
+            "end",
+            "none"
+          ]
+        },
+        "wrap": {
+          "type": "boolean"
+        },
+        "maxWidth": {
+          "type": "number"
+        },
+        "align": {
+          "$ref": "#/$defs/Align"
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "t",
+        "text"
+      ],
+      "description": "Always plain text."
+    },
+    "Icon": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "icon"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "glyph": {
+          "type": "string"
+        },
+        "tone": {
+          "$ref": "#/$defs/Tone"
+        },
+        "size": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "t",
+        "glyph"
+      ]
+    },
+    "Image": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "image"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "src": {
+          "type": "string"
+        },
+        "size": {
+          "type": "number"
+        },
+        "w": {
+          "type": "number"
+        },
+        "h": {
+          "type": "number"
+        },
+        "radius": {
+          "type": "string",
+          "enum": [
+            "none",
+            "small",
+            "round"
+          ]
+        },
+        "fit": {
+          "type": "string",
+          "enum": [
+            "crop",
+            "contain"
+          ]
+        },
+        "fallback": {
+          "$ref": "#/$defs/Icon"
+        }
+      },
+      "required": [
+        "t",
+        "src"
+      ]
+    },
+    "Progress": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "progress"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "orientation": {
+          "type": "string",
+          "enum": [
+            "h",
+            "v"
+          ]
+        },
+        "tone": {
+          "$ref": "#/$defs/Tone"
+        },
+        "thickness": {
+          "type": "number"
+        },
+        "anchor": {
+          "type": "object",
+          "properties": {
+            "at": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rate": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "at",
+            "rate"
+          ]
+        },
+        "seek": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "t"
+      ]
+    },
+    "Meter": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "meter"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "style": {
+          "type": "string",
+          "enum": [
+            "disc"
+          ]
+        },
+        "size": {
+          "type": "number"
+        },
+        "child": {
+          "$ref": "#/$defs/Node"
+        }
+      },
+      "required": [
+        "t",
+        "value"
+      ]
+    },
+    "Equalizer": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "equalizer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number"
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "smooth",
+            "light"
+          ]
+        },
+        "bars": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "t",
+        "active"
+      ]
+    },
+    "List": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "list"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "children": {
+          "$ref": "#/$defs/Children"
+        },
+        "gap": {
+          "type": "number"
+        },
+        "stick": {
+          "type": "string",
+          "enum": [
+            "start",
+            "end"
+          ]
+        },
+        "maxHeight": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "t",
+        "children"
+      ]
+    },
+    "Button": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "button"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "glyph": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "tone": {
+          "$ref": "#/$defs/Tone"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "selected": {
+          "type": "boolean"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "icon",
+            "outline"
+          ]
+        },
+        "big": {
+          "type": "boolean",
+          "description": "A larger round button."
+        }
+      },
+      "required": [
+        "t"
+      ]
+    },
+    "Chip": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "chip"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "selected": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "t",
+        "label"
+      ]
+    },
+    "Canvas": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "canvas"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "w": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "h": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "cmds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cmd"
+          }
+        },
+        "animate": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "fps": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 30
+                }
+              },
+              "required": [
+                "fps"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "t",
+        "w",
+        "h",
+        "cmds"
+      ]
+    },
+    "Surface": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "surface"
+        },
+        "id": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        },
+        "tooltip": {
+          "type": "string"
+        },
+        "fill": {
+          "type": "boolean"
+        },
+        "width": {
+          "type": "number",
+          "description": "A fixed width in design pixels."
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "terminal",
+            "webview"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "w": {
+          "type": "number"
+        },
+        "h": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "t",
+        "kind",
+        "ref"
+      ]
+    },
+    "Cmd": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CmdRect"
+        },
+        {
+          "$ref": "#/$defs/CmdCircle"
+        },
+        {
+          "$ref": "#/$defs/CmdLine"
+        },
+        {
+          "$ref": "#/$defs/CmdPath"
+        },
+        {
+          "$ref": "#/$defs/CmdText"
+        },
+        {
+          "$ref": "#/$defs/CmdClip"
+        },
+        {
+          "$ref": "#/$defs/CmdUnclip"
+        }
+      ]
+    },
+    "CmdRect": {
+      "type": "object",
+      "properties": {
+        "c": {
+          "const": "rect"
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "w": {
+          "type": "number"
+        },
+        "h": {
+          "type": "number"
+        },
+        "r": {
+          "type": "number"
+        },
+        "fill": {
+          "$ref": "#/$defs/Color"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "stroke": {
+          "$ref": "#/$defs/Color"
+        }
+      },
+      "required": [
+        "c",
+        "x",
+        "y",
+        "w",
+        "h"
+      ]
+    },
+    "CmdCircle": {
+      "type": "object",
+      "properties": {
+        "c": {
+          "const": "circle"
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "r": {
+          "type": "number"
+        },
+        "fill": {
+          "$ref": "#/$defs/Color"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "stroke": {
+          "$ref": "#/$defs/Color"
+        }
+      },
+      "required": [
+        "c",
+        "x",
+        "y",
+        "r"
+      ]
+    },
+    "CmdLine": {
+      "type": "object",
+      "properties": {
+        "c": {
+          "const": "line"
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "x1": {
+          "type": "number"
+        },
+        "y1": {
+          "type": "number"
+        },
+        "x2": {
+          "type": "number"
+        },
+        "y2": {
+          "type": "number"
+        },
+        "stroke": {
+          "$ref": "#/$defs/Color"
+        },
+        "width": {
+          "type": "number"
+        },
+        "cap": {
+          "type": "string",
+          "enum": [
+            "butt",
+            "round",
+            "square"
+          ]
+        }
+      },
+      "required": [
+        "c",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "stroke"
+      ]
+    },
+    "CmdPath": {
+      "type": "object",
+      "properties": {
+        "c": {
+          "const": "path"
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "d": {
+          "type": "string"
+        },
+        "fill": {
+          "$ref": "#/$defs/Color"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number",
+          "description": "A fixed height in design pixels."
+        },
+        "minWidth": {
+          "type": "number",
+          "description": "At least this wide, in design pixels."
+        },
+        "stroke": {
+          "$ref": "#/$defs/Color"
+        },
+        "cap": {
+          "type": "string",
+          "enum": [
+            "butt",
+            "round",
+            "square"
+          ]
+        },
+        "join": {
+          "type": "string",
+          "enum": [
+            "miter",
+            "round",
+            "bevel"
+          ]
+        }
+      },
+      "required": [
+        "c",
+        "d"
+      ]
+    },
+    "CmdText": {
+      "type": "object",
+      "properties": {
+        "c": {
+          "const": "text"
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "text": {
+          "type": "string"
+        },
+        "size": {
+          "$ref": "#/$defs/TextSize"
+        },
+        "tone": {
+          "$ref": "#/$defs/Token"
+        }
+      },
+      "required": [
+        "c",
+        "x",
+        "y",
+        "text"
+      ]
+    },
+    "CmdClip": {
+      "type": "object",
+      "properties": {
+        "c": {
+          "const": "clip"
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "w": {
+          "type": "number"
+        },
+        "h": {
+          "type": "number"
+        },
+        "r": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "c",
+        "x",
+        "y",
+        "w",
+        "h"
+      ]
+    },
+    "CmdUnclip": {
+      "type": "object",
+      "properties": {
+        "c": {
+          "const": "unclip"
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "c"
+      ]
+    }
+  }
+}

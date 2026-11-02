@@ -1,0 +1,10 @@
+{
+ "message": "icon",
+ "valid": [
+  {"t":"icon","glyph":"󰎆","tone":"danger","size":16}
+ ],
+ "invalid": [
+  {"why":"glyph missing","json":{"t":"icon","tone":"accent"}},
+  {"why":"size is negative-free but a string","json":{"t":"icon","glyph":"x","size":"big"}}
+ ]
+}

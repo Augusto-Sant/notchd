@@ -4,12 +4,13 @@ import Quickshell
 import Quickshell.Io
 import ".."
 import "Settings.js" as Settings
-import "../Components.js" as Components
 
 // The settings window: a sidebar of pages and, for the current page, its
 // fields grouped by section. Built from NotchService.settingsPages and
-// settingsSchema; every change applies at once and is written back to the
-// config file (NotchService.setConfigValue), so there is no Apply button.
+// settingsSchema (the daemon's `schema`, plus what the QML still builds: see
+// docs/settings.md); every change applies at once and goes to the daemon,
+// which writes the config file (NotchService.setConfigValue), so there is no
+// Apply button.
 //
 // An ordinary toplevel window, so it works on any compositor and takes
 // keyboard input, which the notch overlay never does.
@@ -33,18 +34,10 @@ FloatingWindow {
 
   // ----------------------------------------------------------------- pages
   // Settings.js has the rules.
-  // What the page shows: the service's schema without the fields that wait
-  // on another field's value (`when`), and the choices that wait on the
-  // component of the chosen language locked (Components.gate).
-  readonly property var schema: {
-    var svc = win.svc
-    if (!svc) return []
-    var base = svc.settingsSchema
-    var valueOf = svc.configValue
-    return Components.gate(Settings.shownFields(base, valueOf), svc.components.catalog,
-                           svc.components.loaded ? svc.components.installed : null,
-                           function(key) { return Settings.effectiveValue(base, key, valueOf) })
-  }
+  // What the page shows: the service's schema (the daemon's: the choices
+  // that wait on a component are already locked) without the fields that wait
+  // on another field's value (`when`).
+  readonly property var schema: win.svc ? Settings.shownFields(win.svc.settingsSchema, win.svc.configValue) : []
   readonly property var pages: Settings.visiblePages(win.svc ? win.svc.settingsPages : [], win.schema)
   readonly property var navPages: Settings.navPages(win.pages)
   readonly property string currentPage: Settings.resolvePage(win.pages, win.svc ? win.svc.settingsPage : "")

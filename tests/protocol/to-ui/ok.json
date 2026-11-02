@@ -1,0 +1,11 @@
+{
+ "message": "ok",
+ "valid": [
+  {"t":"ok","id":6,"result":"ok"},
+  {"t":"ok","id":1}
+ ],
+ "invalid": [
+  {"why":"id missing","json":{"t":"ok","result":"ok"}},
+  {"why":"result is not a string","json":{"t":"ok","id":6,"result":1}}
+ ]
+}

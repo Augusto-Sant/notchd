@@ -1,0 +1,10 @@
+{
+ "message": "config-error",
+ "valid": [
+  {"t":"config-error","message":"config.json: Unexpected token } at line 4"}
+ ],
+ "invalid": [
+  {"why":"message missing","json":{"t":"config-error"}},
+  {"why":"message is not a string","json":{"t":"config-error","message":3}}
+ ]
+}

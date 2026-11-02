@@ -17,6 +17,8 @@
 
 The Omarchy host maps its `Color`/`Style`; the standalone host reads the config's `theme` object.
 
+The keys below and the derived tokens are the **token set** every UI implements: the daemon never sends a color, only a token name (a view's `tone`, a canvas's token fill) and the list the UI must know (`welcome.tokens`, [architecture.md](architecture.md#handshake-and-version)). A UI for another OS maps the same tokens to its own source. The theme is not part of the protocol.
+
 ## Derived tokens
 
 Use these instead of ad-hoc alphas, so the notch, modules and settings shade alike on any theme, light or dark.

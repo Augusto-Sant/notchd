@@ -7,8 +7,10 @@
 # The cases are mostly waits on timers, so they run in QMLTEST_JOBS shards at
 # once (default: the CPUs, at most 8), each its own Quickshell and scratch
 # dir, longest first by the last run's times (build/times/qml.tsv, which this
-# writes). QMLTEST_ONLY=<text> runs only the cases whose name contains it;
-# QMLTEST_VERBOSE=1 lists the cases that passed too.
+# writes). Two more shards: the daemon client's (client.qml, a fake daemon) and
+# the notch state's scenarios (scenarios.qml, the real daemon, which `make qmltest` builds).
+# QMLTEST_ONLY=<text> runs only the cases whose name contains it;
+# QMLTEST_VERBOSE=1 lists the cases that passed too; QMLTEST_KEEP=1 keeps the scratch dir.
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -20,7 +22,7 @@ jobs=${QMLTEST_JOBS:-$(( $(nproc) < 8 ? $(nproc) : 8 ))}
 [[ -n ${QMLTEST_ONLY:-} ]] && jobs=1
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/notchd-qmltest.XXXXXX")
-trap 'rm -rf -- "$scratch"' EXIT
+trap 'pkill -f -- "--socket $scratch/" 2>/dev/null || true; [[ -n ${QMLTEST_KEEP:-} ]] || rm -rf -- "$scratch"' EXIT
 
 # One line per shard: the indexes of its cases. Longest first, each to the
 # shard with the least to do; a case not timed yet counts as 2 s.
@@ -47,15 +49,21 @@ EOF
 
 run_shard() {
   local dir=$1 cases=$2
-  mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime"
+  mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime" "$dir/sock"
   ln -s -- "$root/core" "$dir/config/core"
   ln -s -- "$root/hosts" "$dir/config/hosts"
   ln -s -- "$root/tests/qml/shell.qml" "$dir/config/shell.qml"
   ln -s -- "$root/tests/qml/fixtures" "$dir/config/fixtures"
+  cp -- "$root/tests/qml/TestService.qml" "$dir/config/TestService.qml"
+  # A user module for the daemons (their config dir is data/): tests/modules/hello.
+  mkdir -- "$dir/data/modules"
+  cp -r -- "$root/tests/modules/hello" "$dir/data/modules/hello"
+  cp -r -- "$root/tests/modules/gauge" "$dir/data/modules/gauge"
   # Fake `claude` and `codex` terminal UIs (tests/qml/fixtures/bin), state,
   # data, cache and Claude Code's dir in the scratch dir; a fake live bridge
   # and a fake components installer.
-  NOTCHD_QMLTEST_CASES="$cases" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
+  NOTCHD_TEST_DAEMON="$daemon_bin" NOTCHD_TEST_SOCKETS="$dir/sock" NOTCHD_TEST_HOOKS=1 \
+    NOTCHD_QMLTEST_CASES="$cases" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
     NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
     CLAUDE_CONFIG_DIR="$dir/data/claude" \
     NOTCHD_LIVE_BRIDGE="$root/tests/qml/fixtures/bin/codex-live" NOTCHD_FAKE_LIVE_ARGS="$dir/data/live-args" \
@@ -64,8 +72,52 @@ run_shard() {
     PATH="$root/tests/qml/fixtures/bin:$PATH" \
     NOTCHD_FAKE_CLAUDE_ARGS="$dir/data/claude-args" NOTCHD_FAKE_CODEX_ARGS="$dir/data/codex-args" "$root/scripts/isolated.sh" "$dir/runtime" \
     timeout -k 5 90 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
+  # The services' daemons (tests/qml/TestService.qml) outlive the shell: stop them.
+  pkill -f -- "--socket $dir/sock" 2>/dev/null || true
 }
 
+# The client's cases (tests/qml/client.qml) are one more shard, with the fake
+# daemon (tests/qml/fake-daemon.mjs) on a socket in the shard's own scratch dir.
+# Cut off like the others (isolated.sh); the daemon is killed when the shard
+# ends, whatever happens, and every wait is bounded.
+run_client_shard() {
+  local dir=$1 daemon_pid="" i
+  mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime" "$dir/sock"
+  ln -s -- "$root/core" "$dir/config/core"
+  ln -s -- "$root/tests/qml/client.qml" "$dir/config/shell.qml"
+  node "$root/tests/qml/fake-daemon.mjs" "$dir/sock/d.sock" > "$dir/daemon.log" 2>&1 &
+  daemon_pid=$!
+  for ((i = 0; i < 100; i++)); do
+    [[ -S $dir/sock/d.sock.ctl ]] && break
+    sleep 0.05
+  done
+  NOTCHD_QMLTEST_SOCKET="$dir/sock/d.sock" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
+    NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
+    "$root/scripts/isolated.sh" "$dir/runtime" timeout -k 5 90 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
+  kill "$daemon_pid" 2>/dev/null || true
+  wait "$daemon_pid" 2>/dev/null || true
+}
+
+# The scenarios shard (tests/qml/scenarios.qml): the notch state, decided by
+# the real daemon and bound by the QML, scenario by scenario. The test starts
+# its own daemon per scenario (a socket in this shard's scratch dir) and stops
+# it; whatever is left is killed here when the shard ends. The binary is
+# `make daemon`'s (NOTCHD_BIN overrides).
+daemon_bin=${NOTCHD_BIN:-$root/native/target/release/notchd}
+run_scenarios_shard() {
+  local dir=$1
+  mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime" "$dir/sock"
+  ln -s -- "$root/core" "$dir/config/core"
+  ln -s -- "$root/tests/qml/scenarios.qml" "$dir/config/shell.qml"
+  ln -s -- "$root/tests/qml/fixtures" "$dir/config/fixtures"
+  NOTCHD_QMLTEST_SOCKETS="$dir/sock" NOTCHD_QMLTEST_DAEMON="$daemon_bin" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
+    NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
+    "$root/scripts/isolated.sh" "$dir/runtime" timeout -k 5 120 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
+  pkill -f -- "--socket $dir/sock" 2>/dev/null || true
+}
+
+command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
+[[ -x $daemon_bin ]] || { echo "no daemon at $daemon_bin: run make daemon" >&2; exit 1; }
 n=0
 pids=()
 while IFS= read -r cases; do
@@ -73,6 +125,12 @@ while IFS= read -r cases; do
   pids+=("$!")
   n=$((n + 1))
 done < "$scratch/shards"
+run_client_shard "$scratch/$n" &
+pids+=("$!")
+n=$((n + 1))
+run_scenarios_shard "$scratch/$n" &
+pids+=("$!")
+n=$((n + 1))
 wait "${pids[@]}"
 
 status=0
@@ -85,7 +143,18 @@ for ((i = 0; i < n; i++)); do
   fi
   # The offscreen backend's lack of window masks is expected (the pointer
   # tests use a window).
-  problems=$(grep -E '^\s*(WARN|ERROR)' "$log" | grep -vE 'window masks' || true)
+  # qmltermwidget warns "Process <pid> did not die with SIGHUP" when a view is
+  # closed after its `notchd attach` already ended by itself (the program
+  # ended or was replaced, so the daemon closed the connection) but the
+  # widget has not yet handled the exit: a loaded machine hits it. Traced:
+  # the process had logged its own close and left before any signal; one
+  # that ignores SIGHUP is tested in native/notchd-daemon/tests/terminals.rs.
+  problems=$(grep -E '^\s*(WARN|ERROR)' "$log" | grep -vE 'window masks|did not die with SIGHUP' || true)
+  # The client's cases drop and refuse the connection on purpose: Quickshell
+  # warns of each socket error, and the client of the junk line it is sent.
+  if [[ -f $(dirname -- "$log")/daemon.log || -d $(dirname -- "$log")/sock ]]; then
+    problems=$(grep -vE 'quickshell\.io\.socket: Socket error|notchd client: ignoring a line|qmltest: the notchd daemon did not start|notchd-qmltest-daemon: ignoring ' <<< "$problems" || true)
+  fi
   if [[ -n $problems ]]; then
     echo "QML warnings during the tests (shard $i):" >&2
     echo "$problems" >&2

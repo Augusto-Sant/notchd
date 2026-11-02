@@ -15,24 +15,31 @@ QMLLINT ?= $(firstword $(wildcard /usr/lib/qt6/bin/qmllint /usr/lib64/qt6/bin/qm
 # The Omarchy host imports qs.Commons/qs.Ui, which only exist inside the
 # Omarchy shell, so lint skips it; `make restart` and the shell log cover it.
 LINT_FILES = shell.qml core/*.qml core/settings/*.qml core/settings/previews/*.qml \
-	core/modules/*.qml
+	$(wildcard core/client/*.qml core/client/prims/*.qml)
 # Not core/terminal/: it imports QMLTermWidget, whose package ships no type
 # information for qmllint. The QML tests load it where it is installed.
 
 # Dev config for `make dev`, so it never touches ~/.config/notchd.
 DEV_CONFIG ?= $(CURDIR)/build/dev-config.json
 
+# The daemon `make dev` and `make restart` build and the hosts start
+# (scripts/ensure-daemon.sh finds it through NOTCHD_BIN).
+DAEMON_BIN = $(CURDIR)/native/target/release/notchd
+# `make dev` runs its own daemon instance, never the user's `default` one.
+DEV_INSTANCE ?= dev
+
 # Each layer records what it cost in build/times/ (scripts/timed.py).
 TIMED = scripts/timed.py
 
-.PHONY: check test integration qmltest visual times hero icons bench lint lint-run validate dev restart deps clean
+.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate daemon dev restart deps clean
 
 # The cheap layers first, one after another: a broken rule fails in seconds,
 # before anything costly starts. Then the costly ones at once.
-check: lint validate test
+check: lint validate test rust
 	@$(MAKE) --no-print-directory -j3 -O integration qmltest visual
 
-# Unit layer: the pure-JS rules (core/*.js, core/settings/*.js) in Node, and
+# Unit layer: the UI-side JS (core/*.js, core/settings/*.js, core/client/) in
+# Node, the Rust core's rules and modules (native/, cargo test), and
 # the Python bridges' and installer's rules as functions (tests/*_test.py,
 # every TestCase without `tier = "integration"`). No processes, no servers.
 test:
@@ -41,23 +48,31 @@ test:
 	  --test-reporter=./scripts/node-times.mjs --test-reporter-destination=build/times/node.tsv \
 	  tests/*.test.mjs
 	@$(TIMED) py-unit scripts/pytests.py unit
+	@$(TIMED) rust cargo test --manifest-path native/Cargo.toml --quiet
+
+# The Rust workspace (native/): format, clippy with warnings as errors, every
+# crate's tests. Cheap, so it sits with the first layers of `make check`.
+rust:
+	@$(TIMED) rust-fmt cargo fmt --all --check --manifest-path native/Cargo.toml
+	@$(TIMED) rust-clippy cargo clippy --workspace --all-targets --manifest-path native/Cargo.toml --quiet -- -D warnings
+	@$(TIMED) rust-test cargo test --workspace --manifest-path native/Cargo.toml --quiet
 
 # Integration layer: the live bridges and the components' installer run as
 # processes against fakes (a fake LocalAI, pacman, downloads from a local
 # server: nothing real is installed), on parallel workers. TestCases with
 # `tier = "integration"`.
-integration:
+integration: daemon
 	@$(TIMED) py-integration scripts/pytests.py integration
 
 # QML behaviour tests (tests/qml/shell.qml), offscreen, in parallel shards:
 # bindings, signals and animations the Node tests can't reach. Regression
 # tests live here. QMLTEST_ONLY=<part of a name> runs only those cases.
-qmltest:
+qmltest: daemon
 	@$(TIMED) qml scripts/qml-test.sh
 
 # Renders the settings window offscreen into build/visual/; fails on any QML
 # warning, so it also proves the core loads.
-visual:
+visual: daemon
 	@$(TIMED) visual scripts/visual-test.sh
 
 # The pyramid from the last run of each layer: tests, wall and CPU time per
@@ -70,7 +85,7 @@ times:
 # demo media player on a private D-Bus, over Omarchy's Gruvbox wallpaper
 # (WALLPAPER=<image> for another). Rerun after a visual change to the notch
 # and commit the image.
-hero:
+hero: daemon
 	scripts/hero.sh
 
 # The app icon at every hicolor size, plus notchd.ico, from
@@ -112,15 +127,36 @@ lint-run:
 validate:
 	@$(TIMED) validate omarchy plugin validate .
 
-# The standalone host (shell.qml) against a scratch config; hot-reloads.
-dev:
-	@mkdir -p build
-	NOTCHD_CONFIG="$(DEV_CONFIG)" quickshell -p .
+# The daemon, release build: what the hosts start with the shell.
+daemon:
+	cargo build --release -p notchd-daemon --manifest-path native/Cargo.toml
 
-# The Omarchy shell does not hot-reload plugin QML. Installs the optional
-# packages first (deps).
-restart: deps
-	omarchy restart shell
+# The standalone host (shell.qml) against a scratch config and its own daemon
+# instance (DEV_INSTANCE, the dev config): the user's `default` daemon and
+# ~/.config/notchd stay untouched. A dev daemon of an earlier build is stopped
+# first, since the daemon outlives the shell; hot-reloads.
+dev: daemon
+	@mkdir -p build
+	@NOTCHD_INSTANCE="$(DEV_INSTANCE)" NOTCHD_CONFIG="$(DEV_CONFIG)" "$(DAEMON_BIN)" ipc shutdown >/dev/null 2>&1 || true
+	NOTCHD_INSTANCE="$(DEV_INSTANCE)" NOTCHD_CONFIG="$(DEV_CONFIG)" NOTCHD_BIN="$(DAEMON_BIN)" quickshell -p .
+
+# The Omarchy shell does not hot-reload plugin QML. Builds the daemon, stops
+# the running one (it outlives the shell, so it would keep the old build) and
+# copies the build to $XDG_DATA_HOME/notchd/bin/notchd, where the plugin looks
+# when NOTCHD_BIN does not reach the shell. Installs the optional packages
+# first (deps).
+# The daemon is replaced only when the build differs from the installed one:
+# an unchanged daemon keeps running, with its terminal and agent sessions.
+restart: deps daemon
+	@installed="$${XDG_DATA_HOME:-$$HOME/.local/share}/notchd/bin/notchd"; \
+	if cmp -s "$(DAEMON_BIN)" "$$installed"; then \
+	  echo "notchd unchanged: the daemon and its sessions stay"; \
+	else \
+	  "$(DAEMON_BIN)" ipc shutdown >/dev/null 2>&1 || true; \
+	  install -D -m 755 "$(DAEMON_BIN)" "$$installed"; \
+	  echo "notchd rebuilt: the daemon restarts (its sessions end)"; \
+	fi
+	NOTCHD_BIN="$(DAEMON_BIN)" omarchy restart shell
 
 # Optional packages the modules use: qmltermwidget, the codex module's
 # terminal. Installed with pacman only when missing (sudo asks then); without

@@ -1,0 +1,9 @@
+{
+ "message": "error",
+ "valid": [
+  {"t":"error","message":"network down"}
+ ],
+ "invalid": [
+  {"why":"message missing","json":{"t":"error"}}
+ ]
+}

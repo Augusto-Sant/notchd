@@ -1,0 +1,10 @@
+{
+ "message": "provider",
+ "valid": [
+  {"t":"provider","name":"resources","data":{"cpu":0.12,"disk":{"path":"/","total":500000000000,"used":300000000000},"mem":{"total":16000000000,"used":6500000000}}}
+ ],
+ "invalid": [
+  {"why":"name missing","json":{"t":"provider","data":{}}},
+  {"why":"data missing","json":{"t":"provider","name":"media"}}
+ ]
+}

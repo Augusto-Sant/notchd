@@ -1,0 +1,7 @@
+{
+  "title": "Gauge",
+  "command": ["./run.sh"],
+  "priority": 20,
+  "icon": "G",
+  "settings": [{ "key": "unit", "type": "string", "label": "Unit", "default": "kg" }]
+}

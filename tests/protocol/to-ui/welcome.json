@@ -1,0 +1,13 @@
+{
+ "message": "welcome",
+ "valid": [
+  {"t":"welcome","proto":1,"daemon":"0.4.0","instance":"default","config":"/home/eryk/.config/notchd/config.json","tokens":["foreground","background","accent"]},
+  {"t":"welcome","proto":1,"daemon":"0.4.0","instance":"default","config":"/home/eryk/.config/notchd/config.json","tokens":["foreground","background","accent","danger","success","muted","faint","line","hover","selected","surface"]},
+  {"t":"welcome","proto":1,"daemon":"0.4.0","instance":"default","config":"/c.json","tokens":["foreground"],"exe":"/usr/bin/notchd"}
+ ],
+ "invalid": [
+  {"why":"a different major is refused","json":{"t":"welcome","proto":2,"daemon":"0.4.0","instance":"default","config":"/c.json","tokens":[]}},
+  {"why":"tokens missing","json":{"t":"welcome","proto":1,"daemon":"0.4.0","instance":"default","config":"/c.json"}},
+  {"why":"proto is a string","json":{"t":"welcome","proto":"1","daemon":"0.4.0","instance":"default","config":"/c.json","tokens":[]}}
+ ]
+}

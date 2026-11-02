@@ -1,0 +1,8 @@
+{
+  "title": "Good",
+  "command": ["./run.sh"],
+  "priority": 40,
+  "icon": "G",
+  "permissions": [],
+  "env": { "GREETING": "hi" }
+}

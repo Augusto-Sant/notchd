@@ -1,0 +1,14 @@
+{
+ "message": "view",
+ "valid": [
+  {"t":"view","module":"timer","slot":"compact","rev":112,"tree":{"t":"row","gap":8,"children":[{"t":"icon","glyph":"󰔛","tone":"accent"},{"t":"text","text":"24:31","tone":"foreground","size":"bodySmall","tabular":true}]}},
+  {"t":"view","module":"timer","slot":"verticalPeek","rev":113,"tree":null}
+ ],
+ "invalid": [
+  {"why":"slot is not a slot","json":{"t":"view","module":"timer","slot":"tiny","rev":1,"tree":null}},
+  {"why":"unknown primitive","json":{"t":"view","module":"timer","slot":"compact","rev":1,"tree":{"t":"marquee","text":"x"}}},
+  {"why":"progress value over 1","json":{"t":"view","module":"timer","slot":"compact","rev":1,"tree":{"t":"progress","value":2}}},
+  {"why":"tone is not a tone","json":{"t":"view","module":"timer","slot":"compact","rev":1,"tree":{"t":"text","text":"x","tone":"pink"}}},
+  {"why":"module missing","json":{"t":"view","slot":"compact","rev":1,"tree":null}}
+ ]
+}

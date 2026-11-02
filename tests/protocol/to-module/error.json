@@ -1,0 +1,10 @@
+{
+ "message": "error",
+ "valid": [
+  {"t":"error","code":"provider"},
+  {"t":"error","code":"provider","message":"no provider named x"}
+ ],
+ "invalid": [
+  {"why":"code missing","json":{"t":"error","message":"x"}}
+ ]
+}

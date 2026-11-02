@@ -1,0 +1,14 @@
+{
+ "message": "drag",
+ "valid": [
+  {"t":"drag","notch":"main","screen":"DP-1","ev":"start"},
+  {"t":"drag","notch":"main","screen":"DP-1","ev":"drop","position":{"edge":"left","offset":0.3,"screen":"DP-2"}},
+  {"t":"drag","notch":"main","screen":"DP-1","ev":"cancel"}
+ ],
+ "invalid": [
+  {"why":"ev is not start, drop or cancel","json":{"t":"drag","notch":"main","screen":"DP-1","ev":"move","position":{"edge":"left","offset":0.3,"screen":"DP-2"}}},
+  {"why":"a drop needs its position","json":{"t":"drag","notch":"main","screen":"DP-1","ev":"drop"}},
+  {"why":"only a drop has a position","json":{"t":"drag","notch":"main","screen":"DP-1","ev":"start","position":{"edge":"left","offset":0.3,"screen":"DP-2"}}},
+  {"why":"edge is not an edge","json":{"t":"drag","notch":"main","screen":"DP-1","ev":"drop","position":{"edge":"up","offset":0.3,"screen":"DP-2"}}}
+ ]
+}

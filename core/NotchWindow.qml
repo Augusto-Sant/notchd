@@ -8,13 +8,13 @@ import "Position.js" as Position
 // names, at its offset along it (off the host's bar where they share an
 // edge). Hidden over a fullscreen app and, closed, where its workspace
 // doesn't take it; peeks and the open notch show regardless. The copy holds
-// the state and NotchCard draws it; this places the card, routes the
+// the daemon's state and NotchCard draws it; this places the card, routes the
 // pointer and handles the drag.
 //
 // The window covers the whole screen on the overlay layer but its input mask
 // is just the notch, so everything else stays click-through. What the closed
-// notch keeps clear of windows (reserveSpace) goes out as `reserve`;
-// NotchSurface holds the space for every copy.
+// notch keeps clear of windows (reserveSpace) is the daemon's to decide, from
+// the depths this reports (`measure`); NotchSurface holds the space it says.
 Scope {
   id: root
 
@@ -150,20 +150,12 @@ Scope {
   }
 
   // ------------------------------------------------------- reserved space
-  ReservedSpace {
-    id: reserveSpace
-    notch: root.copy
+  // The daemon works out what windows keep clear of the closed notch from the
+  // depths this card measures; NotchSurface holds the space it says.
+  DepthReport {
+    copy: root.copy
     notchCard: card
   }
-
-  // What windows keep clear of this copy: `space` px along `edge` of each
-  // of `screens` (NotchCopy.reservedScreens). The reserve keeps to where the
-  // notch is, not where a drag would put it.
-  readonly property var reserve: ({
-    screens: root.copy ? root.copy.reservedScreens : [],
-    edge: root.notch ? root.notch.edge : "top",
-    space: reserveSpace.space
-  })
 
   // ---------------------------------------------------------------- window
   KeepShown {
@@ -300,15 +292,16 @@ Scope {
       }
       onDragEnded: {
         var notch = root.notch
+        var drop = null
         if (notch && root.dragPlacement) {
-          var drop = Object.assign({}, root.dragPlacement)
+          drop = Object.assign({}, root.dragPlacement)
           drop.screen = notch.everyScreen ? Position.ALL_SCREENS
             : (Quickshell.screens || []).length > 1 ? root.dragScreen : ""
-          notch.moveTo(drop)
         }
         root.dragPlacement = null
         root.dragScreen = ""
-        if (root.copy) root.copy.setDragging(false)
+        // The daemon puts it there (and lets in the workspace the screen shows).
+        if (root.copy) root.copy.setDragging(false, drop)
       }
       opacity: root.concealed || root.dragAway ? 0 : 1
       Behavior on opacity { NumberAnimation { duration: 160 } }

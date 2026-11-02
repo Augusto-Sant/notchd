@@ -24,7 +24,13 @@ ShellRoot {
     id: service
     ipcTarget: "notchd"
     logName: "notchd"
-    configPath: Quickshell.env("NOTCHD_CONFIG") || service.defaultConfigPath
+    // The daemon (docs/hosts.md, "The daemon"): started with the shell and
+    // kept past it, the authority for the config (NOTCHD_CONFIG, else the
+    // user's config dir), the settings schema and IPC. The service runs the
+    // script, connects and starts it again when it dies; meanwhile the notch
+    // says "notchd not running".
+    daemonScript: Qt.resolvedUrl("scripts/ensure-daemon.sh")
+    daemonClientName: "standalone"
     compositor: compositorLoader.item
     hostSettingsSchema: [
       { page: "general", section: "Layout", key: "topOffset", type: "integer", label: "Top offset",

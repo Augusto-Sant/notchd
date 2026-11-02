@@ -1,0 +1,14 @@
+{
+ "message": "event",
+ "valid": [
+  {"t":"event","module":"timer","slot":"expanded","action":"toggle","value":null},
+  {"t":"event","module":"media","slot":"expanded","action":"seek","value":0.42},
+  {"t":"event","module":"timer","slot":"expanded","action":"preset","value":"300"},
+  {"t":"event","module":"media","slot":"compact","action":"mute","value":true}
+ ],
+ "invalid": [
+  {"why":"value is an object","json":{"t":"event","module":"m","slot":"expanded","action":"a","value":{"x":1}}},
+  {"why":"value missing","json":{"t":"event","module":"m","slot":"expanded","action":"a"}},
+  {"why":"slot is not a slot","json":{"t":"event","module":"m","slot":"big","action":"a","value":null}}
+ ]
+}

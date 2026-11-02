@@ -1,0 +1,11 @@
+{
+ "message": "event",
+ "valid": [
+  {"t":"event","slot":"expanded","action":"refresh","value":null},
+  {"t":"event","slot":"compact","action":"seek","value":0.5}
+ ],
+ "invalid": [
+  {"why":"action missing","json":{"t":"event","slot":"expanded","value":null}},
+  {"why":"slot missing","json":{"t":"event","action":"a","value":null}}
+ ]
+}

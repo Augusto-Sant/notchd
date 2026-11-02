@@ -1,0 +1,15 @@
+{
+ "message": "catalog",
+ "valid": [
+  {"t":"catalog","modules":[{"moduleId":"media","settings":[],"title":"Now playing"}]},
+  {"t":"catalog","modules":[]},
+  {"t":"catalog","modules":[],"defaultModules":["claude","codex"]},
+  {"t":"catalog","modules":[],"coreDir":"/home/me/.config/notchd/core"}
+ ],
+ "invalid": [
+  {"why":"modules missing","json":{"t":"catalog"}},
+  {"why":"defaultModules is not a list of ids","json":{"t":"catalog","modules":[],"defaultModules":"media"}},
+  {"why":"coreDir is not a path","json":{"t":"catalog","modules":[],"coreDir":3}},
+  {"why":"modules is not a list","json":{"t":"catalog","modules":{"moduleId":"media"}}}
+ ]
+}

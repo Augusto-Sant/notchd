@@ -1,0 +1,11 @@
+{
+ "message": "pin",
+ "valid": [
+  {"t":"pin","notch":"main","screen":"DP-1","on":true},
+  {"t":"pin","notch":"main","screen":"","on":false}
+ ],
+ "invalid": [
+  {"why":"on is not a bool","json":{"t":"pin","notch":"main","screen":"DP-1","on":"yes"}},
+  {"why":"on missing","json":{"t":"pin","notch":"main","screen":"DP-1"}}
+ ]
+}

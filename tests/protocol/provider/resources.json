@@ -1,0 +1,10 @@
+{
+ "message": "resources",
+ "valid": [
+  {"cpu":0.12,"mem":{"used":6500000000,"total":16000000000},"disk":{"used":300000000000,"total":500000000000,"path":"/"}}
+ ],
+ "invalid": [
+  {"why":"mem is a fraction","json":{"cpu":0.12,"mem":0.41,"disk":{"used":1,"total":2,"path":"/"}}},
+  {"why":"disk without path","json":{"cpu":0,"mem":{"used":1,"total":2},"disk":{"used":1,"total":2}}}
+ ]
+}

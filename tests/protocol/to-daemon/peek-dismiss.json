@@ -1,0 +1,10 @@
+{
+ "message": "peek-dismiss",
+ "valid": [
+  {"t":"peek-dismiss","module":"media"},
+  {"t":"peek-dismiss"}
+ ],
+ "invalid": [
+  {"why":"module is not a string","json":{"t":"peek-dismiss","module":7}}
+ ]
+}

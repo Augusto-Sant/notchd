@@ -241,7 +241,7 @@ function withWorkspace(list, ws) {
 // ---------------------------------------------------------------- terminals
 // Terminals of your own: `"terminals": { "<id>": { "command", "title" } }`.
 // Each is a module that runs `command` in a terminal in the notch
-// (TerminalModule, terminal/CustomTerminal.qml), shown by a notch that lists its
+// (a module of the daemon, native/notchd-modules/src/terminal.rs), shown by a notch that lists its
 // id like any module, with its settings under its id ("btop": { "width" }).
 // The id is a config key then, so it can't be one the config already has
 // (RESERVED_KEYS, and the host's `taken`: its modules and its own keys),

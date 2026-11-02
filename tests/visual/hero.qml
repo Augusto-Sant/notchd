@@ -28,7 +28,7 @@ ShellRoot {
   })
   Component.onCompleted: Theme.provider = root.palette
 
-  component Service: NotchService {
+  component Service: TestService {
     property string tag: ""
     ipcTarget: "notchd-hero-" + tag
     configPath: root.outDir + "/hero-" + tag + ".json"
@@ -263,27 +263,27 @@ ShellRoot {
   Timer {
     interval: 1500; running: true
     onTriggered: {
-      activitySvc.moduleById("activities").push(JSON.stringify({
+      activitySvc.daemonIpc("push", [JSON.stringify({
         id: "train", icon: "󰚩", title: "Fine-tuning a LoRA", subtitle: "epoch 2 of 3 · loss 1.42",
-        progress: 64, duration: 600000 }))
+        progress: 64, duration: 600000 })], "ok")
       // Agents in notchd's folder here, not the real one.
       var services = [compactSvc, usageSvc, expandedSvc]
       for (var i = 0; i < services.length; i++) {
         services[i].setConfigValue("claude.directory", root.outDir)
         services[i].setConfigValue("codex.directory", root.outDir)
       }
-      compactSvc.moduleById("claude").status = { working: true, title: "Port to Rust" }
-      var codex = compactSvc.moduleById("codex")
-      codex.status = { working: false, title: "Fix flaky CI" }
-      codex.attention = true
+      // The agents live in the daemon: its test hooks (NOTCHD_TEST_HOOKS)
+      // give them a title and an answer of the usage endpoint by hand.
+      var hook = function(svc, id, args) { svc.client.ipc("test-" + id, args, null) }
+      hook(compactSvc, "claude", ["title", "◐ Port to Rust"])
+      hook(compactSvc, "codex", ["title", "Fix flaky CI | notchd", "attention"])
       // The week passes the warning between two answers: the peek.
-      var claude = usageSvc.moduleById("claude")
-      claude.usage.apply(root.limits(76))
-      claude.usage.apply(root.limits(83))
-      claude.requestPeek(600000)
+      hook(usageSvc, "claude", ["usage", JSON.stringify(root.limits(76))])
+      hook(usageSvc, "claude", ["usage", JSON.stringify(root.limits(83))])
+      hook(usageSvc, "claude", ["peek", "600000"])
       expandedSvc.setConfigValue("claude.width", 700)
       expandedSvc.setConfigValue("claude.height", 215)
-      expandedSvc.moduleById("claude").usage.apply(root.limits(83))
+      hook(expandedSvc, "claude", ["usage", JSON.stringify(root.limits(83))])
       expandedSvc.open()
       expandedSvc.firstCopy.showTab("claude")
       grabTimer.start()

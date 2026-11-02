@@ -113,7 +113,7 @@ function modulePageId(moduleId) { return "modules/" + moduleId }
 // a place of its own), whether it is an `agent` (a coding agent in a
 // terminal: `"agent": { "command": ... }`, which brings the fields every
 // agent has, agentSettings; `"usage"` there names where its plan usage
-// comes from, core/Usage.js, as `usage`) and whether it is `live` (a spoken
+// comes from, native/notchd-core/src/usage.rs, as `usage`) and whether it is `live` (a spoken
 // conversation with an agent: `"live": { "command": ... }`, which brings
 // liveSettings). Anything malformed is dropped, so a bad file
 // costs the module its page and nothing else; `error` says why.
@@ -264,7 +264,7 @@ function localLiveSettings(name, next) {
   ]
 }
 
-// The fields of a program in a terminal (TerminalModule), an agent or one
+// The fields of a program in a terminal (native/notchd-modules/src/term.rs), an agent or one
 // of your own: folder, command (`command` its default), when it stops,
 // size, font. `name` names it in the texts; `emptyDir` says where it
 // starts without a folder, `idle` what stopping when idle does.
@@ -330,76 +330,28 @@ function settingDefault(fields, key) {
   return undefined
 }
 
-// What a standalone module's page has before its own fields: a switch, and
-// where it shows. Keys under its id: "<id>.enabled", "<id>.position".
-// `edgePreview`: the url of the edge cards' picture.
-function standaloneFields(id, edgePreview) {
-  var page = modulePageId(id)
-  return [
-    { page: page, key: id + ".enabled", type: "boolean", label: "Enabled", "default": true,
-      help: "Off, it does not load at all." },
-    { page: page, section: "Position", key: id + ".position.edge", type: "choice", display: "cards",
-      label: "Edge", "default": "top",
-      help: "Where it shows, on the screen you work on. No notch shows it: it has a place of its own, over any notch that hangs there.",
-      options: ["top", "bottom", "left", "right"].map(function(e) {
-        return { value: e, label: e.charAt(0).toUpperCase() + e.slice(1), preview: edgePreview }
-      }) },
-    { page: page, section: "Position", key: id + ".position.offset", type: "number", display: "percent",
-      label: "Along the edge", "default": 0.5, min: 0, max: 1, step: 0.01,
-      help: "0 % is its left (or top) end, 50 % the middle." }
-  ]
-}
-
-// A field's references to other fields of its module (`when.key`, `by.key`,
-// an option's `needs` value "@key") put under the module's id, as its own key is.
-function moduleRefs(field, moduleId) {
-  var out = Object.assign({}, field)
-  ;["when", "by"].forEach(function(name) {
-    if (field[name] && field[name].key) out[name] = Object.assign({}, field[name], { key: moduleId + "." + field[name].key })
+// What the host knows of a user module, which has no JSON file of its own:
+// the title the daemon announced, and its manifest's `settings` and whether
+// it is `standalone`, read back from the daemon's schema (the fields of its
+// page, "modules/<id>": their keys without the id; the three a standalone
+// module always has are recognised and left out).
+function userModuleInfo(id, title, schemaFields) {
+  var page = modulePageId(id), prefix = id + "."
+  var own = Array.prototype.filter.call(schemaFields || [], function(f) {
+    return !!f && pageOf(f) === page && String(f.key || "").indexOf(prefix) === 0
   })
-  if (Array.isArray(field.options)) out.options = field.options.map(function(o) {
-    if (!Array.isArray(o.needs)) return o
-    return Object.assign({}, o, { needs: o.needs.map(function(n) {
-      if (typeof n === "string") return n
-      var m = {}
-      Object.keys(n).forEach(function(k) {
-        m[k] = typeof n[k] === "string" && n[k].charAt(0) === "@" ? "@" + moduleId + "." + n[k].slice(1) : n[k]
-      })
-      return m
-    }) })
+  var standalone = own.some(function(f) { return f.key === prefix + "position.edge" })
+  var settings = []
+  own.forEach(function(f) {
+    var key = String(f.key).slice(prefix.length)
+    if (standalone && (key === "enabled" || key === "position.edge" || key === "position.offset")) return
+    var field = Object.assign({}, f, { key: key })
+    delete field.value
+    delete field.visible
+    delete field.locked
+    settings.push(field)
   })
-  return out
-}
-
-// The settings fields of every module (`modules`: [{ moduleId, title,
-// settings, standalone }], from their JSON files), with their keys under
-// the module's id (but an `absolute` one's, a config key as given), on the module's own page unless they name another (then
-// under its title); a standalone module's switch and position first.
-function moduleFields(modules, edgePreview) {
-  var out = []
-  Array.prototype.forEach.call(modules || [], function(m) {
-    if (!m || !m.moduleId) return
-    if (m.standalone) out = out.concat(standaloneFields(m.moduleId, edgePreview))
-    Array.prototype.forEach.call(m.settings || [], function(f) {
-      var field = Object.assign({}, f)
-      if (f.key && !f.absolute) field.key = m.moduleId + "." + f.key
-      if (!f.absolute) field = moduleRefs(field, m.moduleId)
-      if (!field.page) field.page = modulePageId(m.moduleId)
-      else if (!field.section) field.section = m.title || m.moduleId
-      out.push(field)
-    })
-  })
-  return out
-}
-
-// A page per module, titled after it; one without fields stays hidden,
-// like any page.
-function modulePages(modules) {
-  var out = []
-  Array.prototype.forEach.call(modules || [], function(m) {
-    if (m && m.moduleId) out.push({ id: modulePageId(m.moduleId), label: m.title || m.moduleId })
-  })
-  return out
+  return { title: title, settings: settings, standalone: standalone }
 }
 
 // A module's title: its own (the loaded module's, or its JSON file's),
@@ -556,4 +508,49 @@ function snapToStep(v, min, max, step) {
 // the field's default, so the config never stores defaults.
 function storedValue(field, value) {
   return field && field["default"] !== undefined && value === field["default"] ? undefined : value
+}
+
+// ------------------------------------------------- the daemon's schema
+// The daemon builds the settings schema (the `schema` message: pages and
+// fields) from the config, the screens and the modules it knows: the core's
+// pages, a page per notch, and a user module's own. What it does not carry
+// yet the QML adds (NotchService): the Components page, the built-in modules'
+// pages (their choices wait on components: `needs`), the host's own fields
+// and the edge cards' previews. These put the halves together.
+
+// The module a page is the settings of ("modules/media" is "media"), else "".
+function pageModule(id) {
+  var m = /^modules\/(.+)$/.exec(String(id || ""))
+  return m ? m[1] : ""
+}
+
+// The pages of the window: the core's and the host's, then a page per notch
+// (the daemon's), the built-in modules' (from the catalog) and the daemon's
+// pages of a user module. `daemonPages` is the schema's `pages`.
+function windowPages(core, host, daemonPages, catalog) {
+  var subs = Array.prototype.filter.call(daemonPages || [], function(p) { return !!p && !!p.sub })
+  function page(p) { return { id: p.id, label: p.label, icon: p.icon } }
+  var notches = subs.filter(function(p) { return notchIndexOfPage(p.id) !== -1 })
+  var modules = subs.filter(function(p) { return pageModule(p.id) !== "" })
+  return mergePages(core, host).concat(notches.map(page), modules.map(page))
+}
+
+// The fields of the window the daemon's schema gives: all but the built-in
+// modules' own, as the loose descriptors the controls read (without the
+// daemon's resolved `value`, `visible` and `locked`: the window reads the
+// config for them). The edge cards get `preview`, a QML file the daemon
+// cannot name.
+function windowFields(daemonFields, catalog, edgePreview) {
+  var out = []
+  Array.prototype.forEach.call(daemonFields || [], function(f) {
+    var field = Object.assign({}, f)
+    delete field.value
+    delete field.visible
+    delete field.locked
+    if (field.type === "choice" && field.display === "cards" && field.options
+        && /(^|\.)position\.edge$/.test(String(field.key || "")))
+      field.options = Array.prototype.map.call(field.options, function(o) { return Object.assign({}, o, { preview: edgePreview }) })
+    out.push(field)
+  })
+  return out
 }

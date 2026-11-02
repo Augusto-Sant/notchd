@@ -1,0 +1,10 @@
+{
+ "message": "line",
+ "valid": [
+  {"c":"line","x1":0,"y1":0,"x2":10,"y2":10,"stroke":"muted","width":1,"cap":"butt"}
+ ],
+ "invalid": [
+  {"why":"stroke missing","json":{"c":"line","x1":0,"y1":0,"x2":1,"y2":1}},
+  {"why":"cap is not a cap","json":{"c":"line","x1":0,"y1":0,"x2":1,"y2":1,"stroke":"line","cap":"flat"}}
+ ]
+}

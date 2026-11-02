@@ -1,8 +1,9 @@
 import QtQuick
 
 // Base type for every notch module. A module is a QML file whose root is a
-// NotchModule: a built-in in core/modules/, or one a host ships (see
-// NotchService.hostModules). List its id in the config's "modules" to load it.
+// NotchModule: a module a host ships, as QML (see NotchService.hostModules).
+// The built-ins run in the daemon (native/notchd-modules) and are drawn by
+// CoreModule.qml. List a module's id in the config's "modules" to load it.
 //
 // The notch shows, by state:
 //   rest      nothing active: a small lip at its edge
@@ -20,6 +21,10 @@ import QtQuick
 Item {
   id: module
   visible: false
+
+  // Its facts and views are the daemon's (CoreModule): the service does not
+  // report them back.
+  property bool daemonOwned: false
 
   // Set by the notch when the module loads.
   property var notch: null

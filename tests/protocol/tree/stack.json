@@ -1,0 +1,9 @@
+{
+ "message": "stack",
+ "valid": [
+  {"t":"stack","align":"center","children":[{"t":"meter","value":0.5},{"t":"icon","glyph":"󰔛"}]}
+ ],
+ "invalid": [
+  {"why":"children missing","json":{"t":"stack"}}
+ ]
+}

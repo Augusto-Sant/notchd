@@ -1,0 +1,11 @@
+{
+ "message": "peek",
+ "valid": [
+  {"t":"peek","ms":3000,"slot":"peek"},
+  {"t":"peek","ms":1500}
+ ],
+ "invalid": [
+  {"why":"ms missing","json":{"t":"peek"}},
+  {"why":"ms is negative","json":{"t":"peek","ms":-1}}
+ ]
+}

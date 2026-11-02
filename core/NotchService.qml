@@ -2,11 +2,9 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "settings"
+import "client"
 import "Config.js" as Config
-import "State.js" as State
-import "Navigate.js" as Navigate
-import "Live.js" as Live
-import "Components.js" as Components
+import "Terminal.js" as Terminal
 import "settings/Settings.js" as Settings
 
 // The notches' source of truth: config, modules, the notches (Notch, one per
@@ -23,14 +21,27 @@ Item {
   // ------------------------------------------------------------------ host
   // IPC target scripts call (`qs ipc call <target> push ...`).
   property string ipcTarget: "notchd"
-  // Absolute path of the JSON config. Watched; edits apply live. Defaults
-  // to the user's config dir, so settings survive plugin updates and never
-  // land in the source tree. A missing file means every key at its default.
+  // The JSON config's path, as the daemon says it (its `welcome`): the
+  // daemon reads, watches and writes it (below), so edits apply live. It
+  // defaults to the user's config dir, so settings survive plugin updates and
+  // never land in the source tree. A missing file means every key at its
+  // default. Shown by the settings window; before the daemon answers, the
+  // default one.
   readonly property string defaultConfigPath: {
     var base = Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")
     return base + "/notchd/config.json"
   }
-  property string configPath: svc.defaultConfigPath
+  property string configPath: svc.client.welcome && svc.client.welcome.config ? svc.client.welcome.config : svc.defaultConfigPath
+  // The daemon this service is a client of (docs/hosts.md, "The daemon"): the
+  // host gives the ensure script (a file URL) and its client name; the
+  // service runs it, reconnects and brings the daemon back when it dies.
+  // `daemonCommand` replaces what runs (tests: a daemon on a scratch socket).
+  property url daemonScript
+  property string daemonClientName: "quickshell"
+  property var daemonCommand: null
+  // How long without a daemon before the notch says so (`daemonDown`), so a
+  // start does not flash it.
+  property int daemonDownDelay: 1500
   // Extra modules the host ships, as { id: url }. They win over built-ins
   // with the same id.
   property var hostModules: ({})
@@ -56,39 +67,56 @@ Item {
   property var hostSettingsPages: []
 
   // -------------------------------------------------------------- built-ins
-  readonly property var builtinModules: ({
-    media: Qt.resolvedUrl("modules/media.qml"),
-    activities: Qt.resolvedUrl("modules/activities.qml"),
-    resources: Qt.resolvedUrl("modules/resources.qml"),
-    timer: Qt.resolvedUrl("modules/timer.qml"),
-    claude: Qt.resolvedUrl("modules/claude.qml"),
-    codex: Qt.resolvedUrl("modules/codex.qml"),
-    "codex-live": Qt.resolvedUrl("modules/codex-live.qml"),
-    "local-live": Qt.resolvedUrl("modules/local-live.qml")
-  })
+  // The built-in modules, all in the daemon (native/notchd-modules): no QML
+  // file, only core/modules/<id>.json, which gives the settings page its
+  // title and fields and the service its defaults. The daemon announces each
+  // (`module`) and the service makes a CoreModule for it.
+  readonly property var coreModuleIds: ["activities", "claude", "codex", "codex-live", "local-live", "media", "resources", "timer"]
 
+  // The QML file of a module the host ships (hostModules); built-ins have none.
   function moduleUrl(id) {
-    if (svc.hostModules && svc.hostModules[id]) return svc.hostModules[id]
-    if (svc.builtinModules[id]) return svc.builtinModules[id]
-    return svc.isTerminal(id) ? Qt.resolvedUrl("terminal/CustomTerminal.qml") : ""
+    return svc.hostModules && svc.hostModules[id] ? svc.hostModules[id] : ""
   }
+  // Where a module's JSON file is: beside its QML when the host ships one,
+  // else core/modules/<id>.json for a built-in; "" for an unknown id.
+  function infoPathOf(id) {
+    var u = svc.moduleUrl(id)
+    if (String(u) !== "") return svc.moduleInfoPath(u)
+    return svc.coreModuleIds.indexOf(id) !== -1 ? svc.coreDir + "/modules/" + id + ".json" : ""
+  }
+  // What loads a module: its QML file, else a CoreModule when the daemon has
+  // announced it (a built-in of its own, or a user module).
+  function loadUrl(id) {
+    var u = svc.moduleUrl(id)
+    if (String(u) !== "") return u
+    return svc.daemonModuleIds.indexOf(id) !== -1 ? Qt.resolvedUrl("CoreModule.qml") : ""
+  }
+  // Every module the daemon runs, as it announced them.
+  readonly property var daemonModuleIds: Object.keys(svc.client.modules || {})
 
-  // Every module that has a file: built-ins first, then the host's. Its
-  // title and settings fields are in a JSON file next to its QML
-  // (media.json), read whether it loads or not (moduleInfo).
+  // Every module that has a JSON file: built-ins first, then the host's. Its
+  // title and settings fields are in it (media.json), read whether it loads
+  // or not (moduleInfo).
   readonly property var fileModuleIds: {
-    var out = Object.keys(svc.builtinModules)
+    var out = svc.coreModuleIds.slice()
     var host = Object.keys(svc.hostModules || {})
     for (var i = 0; i < host.length; i++)
       if (out.indexOf(host[i]) === -1) out.push(host[i])
     return out
   }
-  // Every module this host can load: those, then the config's terminals.
-  readonly property var availableModuleIds: svc.fileModuleIds.concat(svc.terminalSpecs.map(function(t) { return t.id }))
+  // The modules this host knows of itself: those, then the config's terminals.
+  readonly property var ownModuleIds: svc.fileModuleIds.concat(svc.terminalSpecs.map(function(t) { return t.id }))
+  // The user modules (folders of `modules/` in the config dir): the daemon
+  // announces them (`module`) and has their settings page in its schema, so
+  // that is all the host has of them. Not the host's to report in `catalog`.
+  readonly property var userModuleIds: svc.daemonModuleIds
+    .filter(function(id) { return svc.ownModuleIds.indexOf(id) === -1 }).sort()
+  // Every module this host can load.
+  readonly property var availableModuleIds: svc.ownModuleIds.concat(svc.userModuleIds)
 
   // Terminals of your own, from the config's `terminals` (Config.terminals):
-  // [{ id, title, command }]. Each loads terminal/CustomTerminal.qml, its info made
-  // from its entry (Settings.terminalInfo) instead of read from a file.
+  // [{ id, title, command }]. Each is a module of the daemon (a terminal), its
+  // info made from its entry (Settings.terminalInfo) instead of read from a file.
   property var terminalSpecs: []
   function isTerminal(id) {
     return svc.terminalSpecs.some(function(t) { return t.id === id })
@@ -121,6 +149,11 @@ Item {
   readonly property var moduleInfo: {
     var out = Object.assign({}, svc.fileModuleInfo)
     svc.terminalSpecs.forEach(function(t) { out[t.id] = Settings.terminalInfo(t) })
+    var fields = svc.daemonSchema ? svc.daemonSchema.fields : []
+    svc.userModuleIds.forEach(function(id) {
+      var m = svc.client.modules[id]
+      out[id] = Settings.userModuleInfo(id, m ? m.title : "", fields)
+    })
     return out
   }
   // Every module has its file read (or found missing): modules load only
@@ -135,26 +168,48 @@ Item {
   onConfigResolvedChanged: svc.refreshModuleIds()
   // Every module with its title and fields: [{ moduleId, title, settings,
   // standalone, agent, live, terminal }].
-  readonly property var moduleCatalog: svc.availableModuleIds.map(function(id) {
+  function catalogEntry(id) {
     var info = svc.moduleInfo[id] || {}
     return { moduleId: id, title: Settings.moduleTitle(id, info), settings: info.settings || [],
              standalone: !!info.standalone, agent: !!info.agent, live: !!info.live, terminal: !!info.terminal }
-  })
-  // Agents ask their plan usage over the network, with the logins their
-  // CLIs keep (AgentUsage). Off offscreen (scripts/isolated.sh sets
-  // NOTCHD_OFFLINE): tests and renders never read a real login.
-  property bool usageLive: Quickshell.env("NOTCHD_OFFLINE") !== "1"
-  // Agents (`"agent"` in their file): coding agents in a terminal
-  // (TerminalModule), with the fields every agent has and the `agent` IPC.
+  }
+  readonly property var moduleCatalog: svc.availableModuleIds.map(svc.catalogEntry)
+  // What the daemon is told (`catalog`): without the user modules, which it
+  // knows better, its own defs winning in its schema.
+  readonly property var reportedCatalog: svc.ownModuleIds.map(svc.catalogEntry)
+  // Agents (`"agent"` in their file): coding agents in a terminal, modules
+  // of the daemon (native/notchd-modules/src/{claude,codex}.rs), with the
+  // fields every agent has and the `agent` IPC. They ask their plan usage
+  // over the network in the daemon, with the logins their CLIs keep (off
+  // offscreen: scripts/isolated.sh sets NOTCHD_OFFLINE, which the daemon
+  // reads, so tests and renders never read a real login).
   function isAgent(id) { return !!svc.moduleInfo[id] && !!svc.moduleInfo[id].agent }
-  // An agent's IPC command (TerminalModule.command): "ok", or what was wrong.
+  // The terminal view needs the optional qmltermwidget package. The daemon
+  // is told (`hello`'s `surfaces`), so a command that needs one says so.
+  property bool terminalAvailable: svc.probeTerminal()
+  function probeTerminal() {
+    try {
+      Qt.createQmlObject(Terminal.PROBE, svc, "terminal-probe").destroy()
+      return true
+    } catch (e) {
+      return false
+    }
+  }
+  Binding {
+    target: svc.client
+    property: "caps"
+    value: ({ primitives: [], surfaces: svc.terminalAvailable ? ["terminal"] : [], webview: false, canvas: false })
+  }
+  // An agent's IPC command: the daemon's module answers it (`notchd ipc
+  // agent <id> <command>` has its answers: the usage, `the terminal needs
+  // the qmltermwidget package`...). The host's target cannot wait for it, so
+  // this sends the command and answers "ok", unless it already knows better.
   function agentCommand(id, command) {
     if (!svc.isAgent(id)) {
       var agents = svc.availableModuleIds.filter(function(a) { return svc.isAgent(a) })
       return "no agent " + id + (agents.length > 0 ? "; agents: " + agents.join(", ") : "")
     }
-    var m = svc.moduleById(id)
-    return m ? m.command(command) : id + " module not loaded"
+    return svc.moduleById(id) ? svc.daemonIpc("agent", [id, command], "ok") : id + " module not loaded"
   }
   // The same for a terminal of your own (`terminals`).
   function terminalCommand(id, command) {
@@ -162,47 +217,33 @@ Item {
       var ids = svc.terminalSpecs.map(function(t) { return t.id })
       return "no terminal " + id + (ids.length > 0 ? "; terminals: " + ids.join(", ") : "")
     }
-    var m = svc.moduleById(id)
-    return m ? m.command(command) : id + " module not loaded"
+    return svc.moduleById(id) ? svc.daemonIpc("terminal", [id, command], "ok") : id + " module not loaded"
   }
 
   // ---------------------------------------------------------------- live
-  // Spoken conversations (`"live"` in their file, LiveModule): the bridge
-  // that carries the voice (core/live/codex-live.py; the QML tests put a
-  // fake in its place) and the `live` IPC.
-  readonly property string liveBridge: Quickshell.env("NOTCHD_LIVE_BRIDGE")
-    || Live.localPath(Qt.resolvedUrl("live/codex-live.py"), Quickshell.shellDir)
-  // The local one (core/live/local-live.py: Voxtype and LocalAI).
-  readonly property string localLiveBridge: Quickshell.env("NOTCHD_LOCAL_LIVE_BRIDGE")
-    || Live.localPath(Qt.resolvedUrl("live/local-live.py"), Quickshell.shellDir)
-  // The optional components the voice modules need (Components.js): the
-  // installer (core/components/install.py; the QML tests put a fake in its
-  // place), their registry, and their state while the settings are open.
-  readonly property string componentsInstaller: Quickshell.env("NOTCHD_COMPONENTS_INSTALLER")
-    || Live.localPath(Qt.resolvedUrl("components/install.py"), Quickshell.shellDir)
-  readonly property ComponentStore components: ComponentStore {
-    installer: svc.componentsInstaller
-    catalogPath: Live.localPath(Qt.resolvedUrl("components/components.json"), Quickshell.shellDir)
-    watching: svc.settingsOpen
-  }
+  // Spoken conversations (`"live"` in their file) are modules of the daemon
+  // (native/notchd-modules/src/voice.rs), which runs their bridges
+  // (core/live/*.py) and the optional components' installer; `live` and
+  // `component` are its IPC.
   function isLive(id) { return !!svc.moduleInfo[id] && !!svc.moduleInfo[id].live }
-  // A live module's IPC command (LiveModule.command): "ok", or what was
-  // wrong.
+  // A live module's IPC command: the daemon's module answers it.
   function liveCommand(id, command) {
     if (!svc.isLive(id)) {
       var ids = svc.availableModuleIds.filter(function(a) { return svc.isLive(a) })
       return "no live module " + id + (ids.length > 0 ? "; live modules: " + ids.join(", ") : "")
     }
-    var m = svc.moduleById(id)
-    return m ? m.command(command) : id + " module not loaded"
+    if (!svc.moduleById(id)) return id + " module not loaded"
+    // The host's target cannot wait for the daemon's answer, so the two it
+    // can know here are answered here: the words, and no talking to mute.
+    var word = String(command).trim().split(/\s+/)[0]
+    if (["start", "stop", "toggle", "new", "mute", "unmute"].indexOf(word) === -1)
+      return "usage: live " + id + " start | stop | toggle | new | mute | unmute"
+    if ((word === "mute" || word === "unmute") && svc.client.view(id, "compact") === null)
+      return "not in a conversation"
+    return svc.daemonIpc("live", [id, command], "ok")
   }
-  // A notch is open on `module` by a click or a shortcut (pinned, showing
-  // it): a live module talks only then.
-  function liveOpen(module) {
-    return svc.copies.some(function(c) {
-      return c.pinned && c.mode === "expanded" && c.shownModules.indexOf(module) !== -1
-    })
-  }
+  // The folder of this core (its sidecars are run by the daemon from it).
+  readonly property string coreDir: Settings.moduleInfoPath(Qt.resolvedUrl("NotchService.qml"), Quickshell.shellDir).replace(/\/[^\/]*$/, "")
 
   // Standalone modules (`"standalone": true` in their file) have a place of
   // their own, a notch that shows only them, and no notch of the config
@@ -238,7 +279,7 @@ Item {
     model: svc.fileModuleIds
     delegate: FileView {
       required property string modelData
-      path: svc.moduleInfoPath(svc.moduleUrl(modelData))
+      path: svc.infoPathOf(modelData)
       blockLoading: true
       printErrors: false
       onLoaded: {
@@ -249,8 +290,8 @@ Item {
       onLoadFailed: svc.setModuleInfo(modelData, { title: "", settings: [] })
       // A module url in a form moduleInfoPath doesn't know would lose its
       // title and settings without a word.
-      Component.onCompleted: if (path === "" && String(svc.moduleUrl(modelData)) !== "")
-        console.warn(svc.logName + ": no settings file for module '" + modelData + "' at " + svc.moduleUrl(modelData))
+      Component.onCompleted: if (path === "")
+        console.warn(svc.logName + ": no settings file for module '" + modelData + "'")
     }
   }
 
@@ -259,9 +300,13 @@ Item {
   property var config: ({})
   property int hoverOpenDelay: Config.DEFAULTS.hoverOpenDelay
   property int hoverCloseDelay: Config.DEFAULTS.hoverCloseDelay
-  // Every notch, resolved (Config.notches), and their ids.
+  // Every notch of the config, resolved (Config.notches): the keys the
+  // daemon's `state` does not carry (a notch's own config key prefix, its
+  // workspaces, `reserveSpace`, `idleIcons`).
   property var notchSpecs: Config.notches({}, svc.defaultModules)
-  property var notchIds: svc.notchSpecs.map(function(n) { return n.id })
+  // The ids of the notches, as the daemon's `state` lists them (config
+  // order): a notch exists once the daemon has said so.
+  property var notchIds: []
   // The modules to load: every one some notch shows, and the standalone
   // ones switched on (Config.moduleLoadList).
   property var moduleIds: []
@@ -269,6 +314,8 @@ Item {
   // `standaloneIds` follows them (the OSD was left out at startup).
   function loadList(specs) {
     var standalone = svc.availableModuleIds.filter(function(id) { return svc.isStandalone(id) })
+    // A user module that is standalone says so to the daemon, not in a file.
+    svc.standaloneStateIds.forEach(function(id) { if (standalone.indexOf(id) === -1) standalone.push(id) })
     var enabled = standalone.filter(function(id) { return svc.standaloneEnabled(id) })
     return Config.moduleLoadList(specs, standalone, enabled)
   }
@@ -280,12 +327,13 @@ Item {
   }
 
   // Keys missing from the config fall back to their defaults, so deleting a
-  // key in the file (or the settings window) resets it. Config.resolve and
-  // Config.notches have the rules. The id and module lists are only
-  // replaced when they change: a new list would make every notch and module
-  // again, losing what they show.
-  function applyConfig(cfg) {
-    var r = Config.resolve(cfg)
+  // key in the file (or the settings window) resets it. The daemon's
+  // `resolved` has the values it works out (the hover delays); Config.notches
+  // gives the keys of a notch the daemon's `state` does not carry. The module
+  // list is only replaced when it changes: a new list would make every
+  // module again, losing what it shows.
+  function applyConfig(cfg, resolved) {
+    var r = resolved || Config.resolve(cfg)
     var specs = Config.notches(cfg, svc.defaultModules)
     var terminals = Config.terminals(cfg, svc.takenIds())
     var errors = terminals.errors.join("; ")
@@ -296,76 +344,287 @@ Item {
     svc.hoverOpenDelay = r.hoverOpenDelay
     svc.hoverCloseDelay = r.hoverCloseDelay
     svc.notchSpecs = specs
-    var ids = specs.map(function(n) { return n.id })
-    if (!svc.sameList(ids, svc.notchIds)) svc.notchIds = ids
     var modules = svc.loadList(specs)
     if (!svc.sameList(modules, svc.moduleIds)) svc.moduleIds = modules
   }
 
-  function loadConfig(text) {
-    // Our own pending edit is newer than whatever the file says right now.
-    if (saveTimer.running) return
-    var parsed = Config.parse(text)
-    if (parsed.ok) svc.applyConfig(parsed.config)
-    else console.warn(svc.logName + ": ignoring " + svc.configPath + ": " + parsed.error)
+  // -------------------------------------------------------------- daemon
+  // The daemon reads, watches and writes the config file and builds the
+  // settings schema (docs/architecture.md, "Protocol: core to UI"); this
+  // service holds what it sends (`config`, `schema`) and sends it every edit.
+  readonly property DaemonLauncher launcher: DaemonLauncher {
+    id: daemonLauncher
+    script: svc.daemonScript
+    command: svc.daemonCommand !== null ? svc.daemonCommand : ["bash", daemonLauncher.scriptPath]
+    enabled: svc.daemonCommand !== null || String(svc.daemonScript) !== ""
+    logName: svc.logName
+    clientName: svc.daemonClientName
   }
+  readonly property DaemonClient client: daemonLauncher.client
+  // The last `schema` message: kept while the daemon is away, like the config.
+  property var daemonSchema: null
 
-  FileView {
-    id: configFile
-    path: svc.configPath
-    watchChanges: true
-    printErrors: false
-    onLoaded: { missingConfigRetry.stop(); svc.loadConfig(text()); svc.configResolved = true }
-    onLoadFailed: { missingConfigRetry.start(); svc.configResolved = true }
-    onFileChanged: reload()
-    onSaveFailed: function(error) { console.warn(svc.logName + ": could not write " + svc.configPath + ": " + error) }
-    // A file that didn't exist when the view loaded isn't watched yet; a
-    // reload after the first save starts watching it.
-    onSaved: reload()
-  }
-
-  // While the file is missing, look again now and then, so creating it by
-  // hand is picked up without a restart.
+  // No daemon: it never came up, or it went away and is being started again.
+  // The notch says so (DaemonDown), after `daemonDownDelay` so a start (or a
+  // restart that takes a moment) does not flash it.
+  readonly property bool daemonDown: svc.daemonAway && svc.daemonDownShown
+  readonly property bool daemonAway: !svc.client.ready
+  property bool daemonDownShown: false
   Timer {
-    id: missingConfigRetry
-    interval: 2000
-    repeat: true
-    onTriggered: configFile.reload()
+    interval: svc.daemonDownDelay
+    running: svc.daemonAway
+    onTriggered: svc.daemonDownShown = true
+  }
+  onDaemonAwayChanged: if (!svc.daemonAway) svc.daemonDownShown = false
+
+  Connections {
+    target: svc.client
+    function onUpdated(t, key, msg) {
+      // Lists in a message that came through a signal are sequences, not
+      // arrays (Array.isArray is false for them): plain copies.
+      if (t === "config") svc.daemonConfig(svc.plain(msg))
+      else if (t === "schema") svc.daemonSchema = svc.plain(msg)
+      else if (t === "state") svc.applyState(svc.plain(msg))
+    }
+    // A config file the daemon could not parse: it keeps the last good one
+    // and says which file and why; so do we.
+    function onMessage(msg) {
+      if (msg.t === "config-error") console.warn(svc.logName + ": ignoring " + msg.message)
+    }
+    function onWelcomed(welcome) {
+      svc.reportCatalog()
+      svc.reportSettings()
+      // A daemon that came back knows none of the screens or modules: all of it again.
+      svc.screensSent = ""
+      svc.factsSent = ""
+      svc.flushReports()
+      svc.flushConfig()
+    }
+  }
+
+  // ------------------------------------------------------ the notch state
+  // The daemon decides the notches' state (docs/architecture.md, "State: full
+  // updates per entity"): modes, hover timers, peeks and where they go,
+  // pinning, tabs, navigation, which screen each copy is on, the space to
+  // reserve. This holds its last `state` and the UI binds to it (Notch,
+  // NotchCopy, NotchSurface); what it sends are raw inputs. While the daemon
+  // is away the last state stays, so the notch is frozen where it was
+  // instead of blank, and is replaced by the new daemon's as it connects.
+  property var notchState: null
+  // id -> the daemon's notch, and its standalone modules' (by module id).
+  readonly property var notchInfo: svc.byId(svc.notchState ? svc.notchState.notches : [])
+  readonly property var standaloneInfo: svc.byId(svc.notchState ? svc.notchState.standalone : [])
+  // The visitor's copies (by screen).
+  readonly property var visitorInfo: svc.notchState ? svc.notchState.visitor : []
+  // The standalone modules that have a notch, as the daemon says: stable,
+  // like `notchIds`, so a new state does not make every notch again.
+  property var standaloneStateIds: []
+  onStandaloneStateIdsChanged: svc.refreshModuleIds()
+  // { "<screen>|<edge>": depth }: what windows keep clear (NotchSurface).
+  property var reserveZones: ({})
+
+  function byId(list) {
+    var out = {}
+    for (var i = 0; i < list.length; i++) out[list[i].id] = list[i]
+    return out
+  }
+
+  function applyState(msg) {
+    svc.notchState = msg
+    var ids = msg.notches.map(function(n) { return n.id })
+    if (!svc.sameList(ids, svc.notchIds)) svc.notchIds = ids
+    var standalone = msg.standalone.map(function(n) { return n.id })
+    if (!svc.sameList(standalone, svc.standaloneStateIds)) svc.standaloneStateIds = standalone
+    var zones = {}
+    for (var i = 0; i < msg.reserve.length; i++) zones[msg.reserve[i].screen + "|" + msg.reserve[i].edge] = msg.reserve[i].depth
+    if (!svc.sameList(zones, svc.reserveZones)) svc.reserveZones = zones
+    svc.followSettings(msg)
+  }
+
+  // The settings window follows the daemon when it opens or moves it (the
+  // `s` key in navigation, `ipc settings`), not when the daemon only echoes
+  // what this window reported a moment ago.
+  property var settingsReports: []
+  property string settingsSeen: "false|general"
+  function followSettings(msg) {
+    var key = msg.settingsOpen + "|" + msg.settingsPage
+    if (key === svc.settingsSeen) return
+    svc.settingsSeen = key
+    var now = Date.now()
+    svc.settingsReports = svc.settingsReports.filter(function(r) { return now - r.at < 2000 })
+    if (svc.settingsReports.some(function(r) { return r.key === key })) return
+    // The daemon already has it: nothing to report back.
+    svc.settingsFollowing = true
+    if (msg.settingsOpen && msg.settingsPage !== svc.settingsPage) svc.settingsPage = msg.settingsPage
+    if (msg.settingsOpen !== svc.settingsOpen) svc.settingsOpen = msg.settingsOpen
+    svc.settingsFollowing = false
+  }
+  property bool settingsFollowing: false
+
+  // What the modules this UI loads say of themselves (`facts`): sent when
+  // they change and again whenever the daemon (re)connects, and before a
+  // peek request, so the daemon never decides on a module as it was.
+  readonly property string factsReport: JSON.stringify(svc.modules.filter(function(m) { return !m.daemonOwned }).map(function(m) {
+    return {
+      id: m.moduleId, priority: m.priority, active: m.active, compact: !!m.compact, peek: !!m.peek,
+      icon: !!m.icon, expanded: !!m.expanded, attention: m.attention, urgentPeek: m.urgentPeek,
+      peekOnFocusedScreen: m.peekOnFocusedScreen, standalone: svc.isStandalone(m.moduleId)
+    }
+  }))
+  property string factsSent: ""
+  onFactsReportChanged: Qt.callLater(svc.reportFacts)
+  function reportFacts() {
+    if (!svc.client.ready || svc.factsSent === svc.factsReport) return
+    svc.factsSent = svc.factsReport
+    svc.client.facts(JSON.parse(svc.factsReport))
+  }
+
+  // The config the daemon sent. While edits of ours are on their way it is
+  // the one before them: the optimistic copy stays until they are answered
+  // (`settleConfig`).
+  function daemonConfig(msg) {
+    var first = !svc.configResolved
+    svc.configResolved = true
+    if (svc.configSyncing) return
+    // Our copy usually is it already (our own edit, echoed): nothing changes.
+    if (first || !svc.sameConfig(msg.cfg, svc.config)) svc.applyConfig(msg.cfg, msg.resolved)
+  }
+
+  // Two configs with the same keys and values, whatever their key order (the
+  // daemon sends them sorted).
+  function sameConfig(a, b) { return svc.canonical(a) === svc.canonical(b) }
+  function plain(v) { return JSON.parse(JSON.stringify(v)) }
+  function canonical(v) {
+    if (Array.isArray(v)) return "[" + v.map(svc.canonical).join(",") + "]"
+    if (v !== null && typeof v === "object")
+      return "{" + Object.keys(v).sort().map(function(k) { return JSON.stringify(k) + ":" + svc.canonical(v[k]) }).join(",") + "}"
+    return JSON.stringify(v)
+  }
+
+  // What the daemon needs to know of this UI to build the schema: the modules
+  // it loads itself (`catalog`), the screens and the compositor's workspaces
+  // (`screens`), the settings window's page (`settings`). Sent when they
+  // change and again whenever the daemon (re)connects.
+  readonly property string catalogReport: JSON.stringify(svc.reportedCatalog)
+  onCatalogReportChanged: Qt.callLater(svc.reportCatalog)
+  onDefaultModulesChanged: Qt.callLater(svc.reportCatalog)
+  function reportCatalog() {
+    if (svc.client.ready) svc.client.send({ t: "catalog", modules: JSON.parse(svc.catalogReport), defaultModules: svc.defaultModules, coreDir: svc.coreDir })
+  }
+  readonly property string screensReport: {
+    var c = svc.compositor
+    var fullscreen = []
+    var workspaces = {}
+    var screens = (svc.screens || []).map(function(s, i) {
+      if (c && c.hasFullscreen(s)) fullscreen.push(s.name)
+      var ws = c && c.supportsWorkspaces ? c.activeWorkspace(s) : null
+      if (ws) workspaces[s.name] = { id: String(ws.id), name: String(ws.name !== undefined ? ws.name : ws.id) }
+      return { name: s.name, x: s.x || 0, y: s.y || 0, w: s.width || 0, h: s.height || 0, scale: s.devicePixelRatio || 1 }
+    })
+    return JSON.stringify({
+      t: "screens", screens: screens, focused: c ? String(c.focusedScreenName || "") : "",
+      fullscreen: fullscreen, workspaces: workspaces,
+      known: c && c.supportsWorkspaces ? Array.prototype.map.call(c.knownWorkspaces || [], String) : [],
+      supportsWorkspaces: !!(c && c.supportsWorkspaces), barEdge: svc.barEdge
+    })
+  }
+  onScreensReportChanged: Qt.callLater(svc.reportScreens)
+  property string screensSent: ""
+  function reportScreens() {
+    if (!svc.client.ready || svc.screensSent === svc.screensReport) return
+    svc.screensSent = svc.screensReport
+    svc.client.send(JSON.parse(svc.screensReport))
+  }
+  // What the daemon decides on is what this UI last told it: before an
+  // input that depends on the config, the screens or the modules (a peek
+  // goes to the focused screen, to the notches that show the module), what
+  // is waiting to be sent goes first.
+  function flushReports() {
+    svc.flushConfig()
+    svc.reportScreens()
+    svc.reportFacts()
+  }
+  function reportSettings() {
+    if (!svc.client.ready || svc.settingsFollowing) return
+    svc.settingsReports = svc.settingsReports.concat([{ key: svc.settingsOpen + "|" + svc.settingsPage, at: Date.now() }])
+    svc.client.send({ t: "settings", open: svc.settingsOpen, page: svc.settingsPage })
   }
 
   // ------------------------------------------------------- config editing
   // Dotted keys reach into objects: "theme.foreground".
   function configValue(key) { return Config.valueAt(svc.config, key) }
 
-  // Applies at once and writes the file shortly after, so dragging a slider
-  // doesn't write on every step. `undefined` removes the key (back to its
-  // default); emptied parent objects are removed too.
+  // Every write goes to the daemon (`set`), which edits the config as
+  // `Config.withValue` does, writes the file atomically and sends the result
+  // to every UI. Here it applies at once, so the window and the notch do not
+  // wait for the round trip; sets to one key are coalesced and sent shortly
+  // after (`saveTimer`), so dragging a slider does not write on every step.
+  // `undefined` removes the key (back to its default); emptied parent
+  // objects are removed too.
+  property var pendingSets: []
+  property int setsInFlight: 0
+  readonly property bool configSyncing: svc.pendingSets.length > 0 || svc.setsInFlight > 0
+
   function setConfigValue(key, value) {
-    svc.replaceConfig(Config.withValue(svc.config, key, value))
+    svc.applyConfig(Config.withValue(svc.config, key, value))
+    svc.queueSet(key, value)
   }
 
-  // The whole config at once, applied and then written.
+  // The whole config at once: each top-level key that differs is a `set`.
   function replaceConfig(cfg) {
+    var old = svc.config
     svc.applyConfig(cfg)
+    var keys = Object.keys(old)
+    Object.keys(cfg).forEach(function(k) { if (keys.indexOf(k) === -1) keys.push(k) })
+    keys.forEach(function(k) {
+      if (JSON.stringify(old[k]) !== JSON.stringify(cfg[k])) svc.queueSet(k, cfg[k])
+    })
+  }
+
+  function queueSet(key, value) {
+    var queue = svc.pendingSets.filter(function(e) { return e.key !== key })
+    queue.push({ key: key, value: value })
+    svc.pendingSets = queue
     saveTimer.restart()
   }
 
   Timer {
     id: saveTimer
-    interval: 250
-    onTriggered: {
-      // The config dir may not exist yet on the first save.
-      ensureConfigDir.command = ["mkdir", "-p", svc.configPath.replace(/\/[^\/]*$/, "")]
-      ensureConfigDir.running = true
-    }
+    interval: 120
+    onTriggered: svc.flushConfig()
   }
 
-  Process {
-    id: ensureConfigDir
-    onExited: function(code) {
-      if (code !== 0) console.warn(svc.logName + ": could not create the config dir for " + svc.configPath)
-      configFile.setText(JSON.stringify(svc.config, null, 2) + "\n")
+  // Sends what is queued, if the daemon is there; else it waits for it.
+  function flushConfig() {
+    saveTimer.stop()
+    if (!svc.client.ready || svc.pendingSets.length === 0) return
+    var queue = svc.pendingSets
+    svc.pendingSets = []
+    queue.forEach(function(e) {
+      svc.setsInFlight++
+      svc.client.set(e.key, e.value, function(reply) { svc.setAnswered(e, reply) })
+    })
+  }
+
+  function setAnswered(entry, reply) {
+    svc.setsInFlight--
+    if (reply.t === "err") {
+      // The connection dropped first: send it again once it is back, unless a
+      // later edit of the key is waiting.
+      if (reply.code === "disconnected") {
+        if (!svc.pendingSets.some(function(e) { return e.key === entry.key })) svc.pendingSets = [entry].concat(svc.pendingSets)
+      } else {
+        console.warn(svc.logName + ": could not write " + svc.configPath + ": " + (reply.message || reply.code))
+      }
     }
+    svc.settleConfig()
+  }
+
+  // Nothing of ours is left on its way: the daemon's config is the config
+  // (what its `with_value` made of the edits), whatever our copy says.
+  function settleConfig() {
+    if (svc.configSyncing || !svc.client.config) return
+    if (!svc.sameConfig(svc.client.config.cfg, svc.config)) svc.applyConfig(svc.client.config.cfg, svc.client.config.resolved)
   }
 
   // --------------------------------------------------------------- settings
@@ -382,12 +641,17 @@ Item {
   ]
   // Then a sub-page per notch ("notch/<index>") and per module
   // ("modules/<id>"), for their own fields, reached from the Notches and
-  // Modules pages.
-  readonly property var settingsPages: Settings.mergePages(svc.corePages, svc.hostSettingsPages)
-    .concat(svc.notches.map(function(n) { return { id: Settings.notchPageId(n.index), label: n.notchId } }),
-            Settings.modulePages(svc.moduleCatalog))
+  // Modules pages. The daemon's schema has the notches' and the user
+  // modules'; the built-in modules' pages are built here.
+  readonly property var settingsPages: Settings.windowPages(svc.corePages, svc.hostSettingsPages,
+    svc.daemonSchema ? svc.daemonSchema.pages : [], svc.moduleCatalog)
 
-  // The fields the settings window shows, built from these descriptors:
+  // The fields the settings window shows come from the daemon's `schema`
+  // (the core's pages, a notch's, a user module's: Settings.windowFields),
+  // and what it does not carry yet is built here: the Components page, the
+  // built-in modules' pages, the host's own fields, the edge cards' previews
+  // (remaining for later slices: they move with the modules and components).
+  // A descriptor is:
   //   key        config key (dotted for nested objects)
   //   type       "choice" | "integer" | "boolean" | "string" | "color"
   //              | "modules" | "workspaces" | "notches" (the notch list)
@@ -408,96 +672,10 @@ Item {
   // the top-level key it inherits.
   // "general" has what applies to every notch, "modules" every module the
   // host can load, each module's own fields on its page under it.
-  readonly property var coreSettingsSchema: {
-    var out = []
-    var n = svc.settingsNotchObject
-    var prefix = n && n.spec ? n.spec.prefix : ""
-    function key(k) { return prefix + k }
-    function inherited(k, fallback) {
-      if (prefix === "") return fallback
-      var v = Config.valueAt(svc.config, k)
-      return v === undefined ? fallback : v
-    }
-    var several = svc.notches.length > 1
-    // The picked notch's page, under Notches.
-    var own = Settings.notchPageId(n ? n.index : 0)
-
-    out.push({ page: "notch", key: "notches", type: "notches", label: "Notches",
-               help: several ? "Each has its own modules and place; the gear opens its settings."
-                             : "The gear opens the notch's settings. Add a notch to show other modules somewhere else, each with its own place." })
-    if (prefix !== "")
-      out.push({ page: own, key: key("id"), type: "string", label: "Name",
-                 default: Config.defaultNotchId(n.index),
-                 help: "What IPC calls it: openNotch, closeNotch and toggleNotch take it, so renaming it breaks a shortcut that names it. An agent opens by its own id instead: agent <id> toggle." })
-    out.push({ page: own, section: "Modules", key: key("modules"), type: "modules", label: "Loaded modules",
-               default: inherited("modules", svc.defaultModules),
-               help: (several ? "What this notch shows. A module may show in several notches. Their order breaks ties in the expanded view."
-                              : "Switched-on modules load. Their order breaks ties in the expanded view.")
-                     + (svc.standaloneIds.length > 0 ? " Standalone modules, such as " + svc.moduleCatalog.filter(function(m) { return m.standalone })
-                          .map(function(m) { return m.title }).join(", ") + ", have a place of their own: see the Modules page." : "") })
-    out.push({ page: own, section: "Layout", key: key("reserveSpace"), type: "boolean",
-               label: "Keep windows clear", default: inherited("reserveSpace", Config.DEFAULTS.reserveSpace),
-               help: "Windows keep clear of the closed notch instead of going under it, along its whole edge: a sliver at rest, more while a module is active. Peeks and the open notch still cover them." })
-    out.push({ page: own, section: "Layout", key: key("tabs"), type: "boolean",
-               label: "Tabs", default: inherited("tabs", Config.DEFAULTS.tabs),
-               help: "Open, the notch shows one module at a time, with a tab for each, instead of all of them one above the other; closed, every active module side by side. Opening the notch from a module (a shortcut, IPC) picks its tab. Only a notch with several modules has tabs." })
-    out.push({ page: own, section: "Layout", key: key("idleIcons"), type: "boolean",
-               label: "Icons for idle modules", default: inherited("idleIcons", Config.DEFAULTS.idleIcons),
-               help: "A module with nothing to show closed, like a timer that isn't running, shows its icon in the closed notch. Off, it stays out until it has something." })
-    out.push({ page: own, section: "Position", key: key("position.edge"), type: "choice", display: "cards",
-               label: "Edge", default: inherited("position.edge", "top"),
-               help: "The screen edge the notch hangs from. On a side edge, an active module without a vertical view shows a dot.",
-               options: ["top", "bottom", "left", "right"].map(function(e) {
-                 return { value: e, label: e.charAt(0).toUpperCase() + e.slice(1),
-                          preview: Qt.resolvedUrl("settings/previews/Edge.qml") }
-               }) })
-    out.push({ page: own, section: "Position", key: key("position.offset"), type: "number", display: "percent",
-               label: "Along the edge", default: inherited("position.offset", 0.5), min: 0, max: 1, step: 0.01,
-               help: "Where on the edge: 0 % is its left (or top) end, 50 % the middle." })
-    var screens = svc.screens
-    if (screens.length > 1)
-      out.push({ page: own, section: "Position", key: key("position.screen"), type: "choice",
-                 label: "Screen", default: inherited("position.screen", ""),
-                 help: "Where the notch stays. Following focus, it moves to the screen you work on. On a screen of its own, it stays there, peeks included; on a screen without a notch that shows it, a peek appears at the top. On every screen, each screen has its own copy, and a peek shows on the focused one.",
-                 options: [{ value: "", label: "Follow focus" }, { value: "all", label: "Every screen" }].concat(screens.map(function(s) {
-                   return { value: s.name, label: s.name }
-                 })) })
-    out.push({ page: own, section: "Position", key: key("draggable"), type: "boolean",
-               label: "Drag to move", default: inherited("draggable", Config.DEFAULTS.draggable),
-               help: "Hold the notch for a moment, then drag it to any edge of the screen; it snaps to the nearest one, and to the middle when close to it. A quick click only pins it." })
-    if (svc.compositor && svc.compositor.supportsWorkspaces)
-      out.push({ page: own, section: "Layout", key: key("workspaces"), type: "workspaces",
-                 label: "Workspaces", default: inherited("workspaces", undefined),
-                 help: "Where the closed notch shows; none picked means every workspace. Peeks and the open notch show on any." })
-    out.push({ page: "general", section: "Hover", key: "hoverOpenDelay", type: "integer", label: "Open delay",
-               help: several ? "How long the pointer rests on a notch before it expands. For every notch."
-                             : "How long the pointer rests on the notch before it expands.",
-               default: Config.DEFAULTS.hoverOpenDelay, min: 0, max: 1000, step: 10, unit: "ms" })
-    out.push({ page: "general", section: "Hover", key: "hoverCloseDelay", type: "integer", label: "Close delay",
-               help: several ? "How long it stays open after the pointer leaves. For every notch."
-                             : "How long it stays open after the pointer leaves.",
-               default: Config.DEFAULTS.hoverCloseDelay, min: 0, max: 2000, step: 10, unit: "ms" })
-    out.push({ page: "modules", type: "moduleCatalog", part: "notch", label: "Notch modules",
-               help: "Shown by notches: which ones a notch shows is set on its page, under Notches. The gear opens a module's own settings." })
-    if (svc.moduleCatalog.some(function(m) { return Settings.moduleKind(m) === "agent" }))
-      out.push({ page: "modules", type: "moduleCatalog", part: "agent", label: "Agents",
-                 help: "Coding agents, each in its own terminal. Notches show them like any module; a notch of their own suits them best. The gear opens an agent's folder, command and size. A shortcut opens one with agent <id> toggle." })
-    out.push({ page: "modules", type: "moduleCatalog", part: "terminal", label: "Terminals",
-               help: "Commands of your own, each in a terminal: btop, a dev server, a shell. Add terminal makes one running your shell; its gear changes its command, folder and size. A notch shows it once the notch's page lists it. A shortcut opens one with terminal <id> toggle." })
-    if (svc.standaloneIds.length > 0)
-      out.push({ page: "modules", type: "moduleCatalog", part: "standalone", label: "Standalone modules",
-                 help: "Each has a place of its own, over any notch that hangs there, and no notch shows it. Its page switches it on and places it." })
-    return out
-  }
-  // Component rows filled in from the registry, and the choices that wait on
-  // a component locked until it is installed (Components.decorate). It
-  // follows the set of installed components, never an installation's
-  // progress.
-  readonly property var settingsSchema: Components.decorate(svc.coreSettingsSchema
-    .concat(Components.overviewFields(svc.components.catalog, svc.components.settled),
-            Settings.moduleFields(svc.moduleCatalog, Qt.resolvedUrl("settings/previews/Edge.qml")),
-            svc.hostSettingsSchema || []),
-    svc.components.catalog, svc.components.loaded ? svc.components.installed : null, svc.moduleTitles)
+  // The daemon's schema has every page, the Components page and the
+  // components' rows included (with their state); the host adds its own fields.
+  readonly property var settingsSchema: Settings.windowFields(svc.daemonSchema ? svc.daemonSchema.fields : [], svc.moduleCatalog, Qt.resolvedUrl("settings/previews/Edge.qml"))
+    .concat(svc.hostSettingsSchema || [])
   // id -> title of every module, for the texts that name them.
   readonly property var moduleTitles: {
     var out = {}
@@ -510,12 +688,14 @@ Item {
   property string settingsPage: "general"
   // The notch the window edits, by index; showing a notch's page picks it.
   property int settingsNotch: 0
+  // The daemon builds the schema for the notch the page names, so it is told
+  // of the page, and of the window opening and closing (its `state`).
   onSettingsPageChanged: {
     var index = Settings.notchIndexOfPage(svc.settingsPage)
     if (index !== -1) svc.settingsNotch = index
+    svc.reportSettings()
   }
-  readonly property var settingsNotchObject: svc.notches.length > 0
-    ? svc.notches[Math.max(0, Math.min(svc.settingsNotch, svc.notches.length - 1))] : null
+  onSettingsOpenChanged: svc.reportSettings()
   // `index`: the notch to edit, if given; the window then shows its page.
   function openSettings(index) {
     if (typeof index === "number") {
@@ -556,11 +736,11 @@ Item {
   }
   // A notch per standalone module switched on: on every screen where its
   // position says, hidden until it peeks, and drawn over the notches there
-  // (NotchSurface, Position.coveredByStandalone).
+  // (NotchSurface, Position.coveredByStandalone). The daemon says which.
   Variants {
     id: standaloneVariants
     readonly property var owner: svc
-    model: svc.configResolved && svc.moduleInfoReady ? svc.standaloneIds.filter(function(id) { return svc.moduleIds.indexOf(id) !== -1 }) : []
+    model: svc.configResolved && svc.moduleInfoReady ? svc.standaloneStateIds : []
     Notch {
       required property var modelData
       svc: standaloneVariants.owner
@@ -575,8 +755,8 @@ Item {
   }
 
   // The default notch: a notch of its own at the top of every screen, hidden
-  // until it shows a peek where no notch with that module does
-  // (State.needsVisitor, State.focusedPeek).
+  // until it shows a peek where no notch with that module does (the daemon
+  // routes it).
   Notch {
     id: visitorNotch
     // Through `owner`, as above.
@@ -631,191 +811,110 @@ Item {
     return svc.copies.some(function(c) { return c.mode === "peek" && c.peekModule === module })
   }
 
-  // A module's peek goes to every notch that shows the module (on the copy
-  // on the focused screen of one that has a copy per screen), and to the
-  // visitor when none of them peeks on the focused screen. A module that
-  // peeks on the focused screen only peeks once: in the first notch there
-  // that shows it, else in the visitor (State.focusedPeek). A standalone
-  // module's goes to its own notch, on the focused screen.
+  // ------------------------------------------------- what the UI tells it
+  // A module's peek is the daemon's to route: to every notch that shows the
+  // module (on the copy on the focused screen of one that has a copy per
+  // screen), and to the visitor when none of them peeks on the focused
+  // screen; a module that peeks on the focused screen only peeks once; a
+  // standalone module's goes to its own notch. The module's facts go first,
+  // so it decides on the module as it is.
   function requestPeek(module, ms) {
-    var own = module ? svc.standaloneNotch(module.moduleId) : null
-    if (own) { own.requestPeek(module, ms); return }
-    if (module && svc.isStandalone(module.moduleId)) return
-    var places = []
-    var owners = []
-    for (var i = 0; i < svc.notches.length; i++) {
-      if (!svc.notches[i].hasModule(module)) continue
-      places.push(svc.notches[i].peekPlace())
-      owners.push(svc.notches[i])
-    }
-    var focused = svc.compositor ? svc.compositor.focusedScreenName : ""
-    if (module && module.peekOnFocusedScreen) {
-      var at = State.focusedPeek(places, focused)
-      if (at >= 0) { owners[at].requestPeek(module, ms); return }
-      visitorNotch.requestPeek(module, ms)
-      return
-    }
-    for (var j = 0; j < owners.length; j++) owners[j].requestPeek(module, ms)
-    if (State.needsVisitor(places, focused)) visitorNotch.requestPeek(module, ms)
+    if (!module) return
+    svc.flushReports()
+    svc.client.peek(module.moduleId, ms)
   }
   function dismissPeek(module) {
-    for (var i = 0; i < svc.notches.length; i++) svc.notches[i].dismissPeek(module)
-    visitorNotch.dismissPeek(module)
-    for (var j = 0; j < svc.standaloneNotches.length; j++) svc.standaloneNotches[j].dismissPeek(module)
+    svc.flushReports()
+    svc.client.peekDismiss(module ? module.moduleId : "")
   }
 
   // A module you type into asks for the keyboard (a press on its field):
-  // every copy open on it pins, so its window takes the keyboard
-  // (State.keyboardFocus) and the pointer leaving doesn't close it.
+  // every copy open on it pins, so its window takes the keyboard and the
+  // pointer leaving doesn't close it.
   function requestKeyboard(module) {
-    for (var i = 0; i < svc.copies.length; i++) {
-      var copy = svc.copies[i]
-      if (copy.mode === "expanded" && copy.shownModules.indexOf(module) !== -1) copy.open()
-    }
+    svc.flushReports()
+    svc.client.moduleNotch(module.moduleId, "keyboard")
   }
 
   // A module opens the first notch of the config that shows it, or closes
-  // every one that does (NotchModule.openNotch / closeNotch).
-  function openModule(module) {
-    for (var i = 0; i < svc.notches.length; i++)
-      if (svc.notches[i].hasModule(module)) { svc.notches[i].open(module); return true }
+  // every one that does (NotchModule.openNotch / closeNotch). Whether one
+  // does is the daemon's `state`: the answer is that of the last one.
+  function showsModule(module) {
+    var list = svc.notchState ? svc.notchState.notches : []
+    for (var i = 0; i < list.length; i++)
+      if (list[i].modules.indexOf(module.moduleId) !== -1) return true
     return false
   }
+  function openModule(module) {
+    if (!svc.showsModule(module)) return false
+    svc.flushReports()
+    svc.client.moduleNotch(module.moduleId, "open")
+    return true
+  }
   function closeModule(module) {
-    for (var i = 0; i < svc.notches.length; i++)
-      if (svc.notches[i].hasModule(module)) svc.notches[i].close()
+    svc.flushReports()
+    svc.client.moduleNotch(module.moduleId, "close")
+  }
+
+  // An IPC method of a module of the daemon (`push`, `clear`, `timer`, `osd`):
+  // sent at once, answered with `answer` (the host's target cannot wait).
+  function daemonIpc(method, args, answer) {
+    if (answer !== "ok") return answer
+    return svc.notchIpc(method, args) ? "ok" : "notchd is not running"
+  }
+  // A module's own "not loaded" answer, which needs no daemon: the load list
+  // is known here. Else `answer`. Without it, a command for a module no notch
+  // lists answered `ok` and did nothing.
+  function loadedAnswer(id, answer) {
+    return svc.moduleIds.indexOf(id) === -1 ? id + " module not loaded" : answer
+  }
+  // What `push` answers to a payload that is not a JSON object.
+  function pushAnswer(json) {
+    var o
+    try { o = JSON.parse(String(json || "")) } catch (e) { return "invalid json" }
+    return o && typeof o === "object" && !Array.isArray(o) ? "ok" : "invalid json"
   }
 
   // Without a notch named, open and toggle act on the first notch and close
-  // closes them all.
-  function open() { if (svc.notches.length > 0) svc.notches[0].open() }
-  function close() { for (var i = 0; i < svc.notches.length; i++) svc.notches[i].close() }
-  function toggle() { if (svc.notches.length > 0) svc.notches[0].toggle() }
+  // closes them all. The daemon does it (`ipc`); false when it is not there.
+  function notchIpc(method, args) {
+    svc.flushReports()
+    return svc.client.ipc(method, args || [], null) >= 0
+  }
+  function open() { svc.notchIpc("open") }
+  function close() { svc.notchIpc("close") }
+  function toggle() { svc.notchIpc("toggle") }
 
   // ------------------------------------------------------------ navigation
   // A shortcut (IPC `navigate`) highlights every notch with its number and
-  // the keyboard picks one (Navigate.js): its copy on the focused screen
-  // opens as a preview, Tab walks its tabs, Enter pins it open (the others
-  // close) and Escape leaves everything as it was. Keys also open the
-  // selected notch's settings, remove it (asked twice) and move it
-  // (`navMode` "move": the edge, along it, the screen; Escape puts it
-  // back). NotchSurface's navigation window holds the keyboard meanwhile
-  // and hands keys to navKey().
-  property bool navigating: false
-  // "select", "move" or "remove" (Navigate.step).
-  property string navMode: "select"
-  // Where the notch being moved was: { notch, position, workspaces }, its
-  // own config keys as they were, put back on Escape.
-  property var navMoveFrom: null
+  // the keyboard picks one: its copy on the focused screen opens as a
+  // preview, Tab walks its tabs, Enter pins it open (the others close) and
+  // Escape leaves everything as it was. Keys also open the selected notch's
+  // settings, remove it (asked twice) and move it (mode "move": the edge,
+  // along it, the screen; Escape puts it back). The daemon decides it all
+  // (its `state.navigation`); NotchSurface's navigation window holds the
+  // keyboard meanwhile and hands keys to navKey().
+  readonly property var navigation: svc.notchState ? svc.notchState.navigation : null
+  readonly property bool navigating: !!svc.navigation
+  // "select", "move" or "remove".
+  readonly property string navMode: svc.navigation ? svc.navigation.mode : "select"
   // The selected notch, by index in `notches`.
-  property int navSelected: -1
-  // Each copy's tab as navigation started, given back on Escape.
-  property var navTabs: []
+  readonly property int navSelected: svc.navigation ? svc.navigation.selected : -1
   readonly property var navNotch: svc.navigating && svc.navSelected >= 0 && svc.navSelected < svc.notches.length
     ? svc.notches[svc.navSelected] : null
 
-  function startNavigation() {
-    if (svc.notches.length === 0) return "no notches"
-    var focused = svc.compositor ? svc.compositor.focusedScreenName : ""
-    svc.navSelected = Navigate.start(svc.notches.map(function(n) {
-      return {
-        open: n.copies.some(function(c) { return c.isOpen }),
-        screens: n.copies.map(function(c) { return c.screenName })
-      }
-    }), focused)
-    var tabs = []
-    for (var i = 0; i < svc.notches.length; i++)
-      for (var j = 0; j < svc.notches[i].copies.length; j++)
-        tabs.push({ copy: svc.notches[i].copies[j], tab: svc.notches[i].copies[j].tab })
-    svc.navTabs = tabs
-    svc.navMode = "select"
-    svc.navMoveFrom = null
-    svc.navigating = true
-    return "ok"
-  }
-  // Just after navigation ends: as its window goes, the compositor hands
-  // focus back to the window you were in, taking it from an agent Enter
-  // just opened; that agent asks again instead of closing
-  // (State.keyboardChange).
-  property bool navSettling: false
-  Timer { id: navSettleTimer; interval: 600; onTriggered: svc.navSettling = false }
-  // `restore`: give each copy back the tab it had (Escape), and a notch
-  // being moved its place.
-  function endNavigation(restore) {
-    if (!svc.navigating) return
-    if (restore) svc.undoMove()
-    svc.navMoveFrom = null
-    svc.navMode = "select"
-    svc.navSettling = true
-    navSettleTimer.restart()
-    svc.navigating = false
-    if (restore)
-      for (var i = 0; i < svc.navTabs.length; i++)
-        if (svc.navTabs[i].copy) svc.navTabs[i].copy.showTab(svc.navTabs[i].tab)
-    svc.navTabs = []
-  }
+  // Starts it, or leaves it as Escape does: "ok", or what was wrong.
   function navigate() {
-    if (svc.navigating) { svc.endNavigation(true); return "ok" }
-    return svc.startNavigation()
+    if (!svc.navigating && svc.notchIds.length === 0) return "no notches"
+    return svc.notchIpc("navigate") ? "ok" : "notchd is not running"
   }
-  // The selected notch's copy that previews.
-  function navCopy() { return svc.navNotch ? svc.navNotch.focusedCopy() : null }
-  // A key (Navigate.keyName) while navigating.
-  function navKey(key) {
-    if (!svc.navigating) return
-    var copy = svc.navCopy()
-    var tabs = copy ? copy.tabModules.map(function(m) { return m.moduleId }) : []
-    var shown = copy && copy.shownModules.length > 0 ? copy.shownModules[0].moduleId : ""
-    var next = Navigate.step({ mode: svc.navMode, selected: svc.navSelected, count: svc.notches.length,
-                               tabs: tabs, tab: shown }, key)
-    var notch = svc.navNotch
-    if (next.action === "leave") { svc.endNavigation(true); return }
-    if (next.action === "open") {
-      svc.endNavigation(false)
-      for (var i = 0; i < svc.notches.length; i++) if (svc.notches[i] !== notch) svc.notches[i].close()
-      if (notch) notch.open()
-      return
-    }
-    if (next.action === "settings") {
-      var index = svc.navSelected
-      svc.endNavigation(true)
-      svc.openSettings(index)
-      return
-    }
-    if (next.action === "remove" && notch) {
-      // Its copies go with it: no tab to give back on Escape.
-      svc.navTabs = svc.navTabs.filter(function(e) { return notch.copies.indexOf(e.copy) === -1 })
-      svc.removeNotch(svc.navSelected)
-    }
-    if (next.action === "moveStart" && notch) {
-      svc.navMoveFrom = {
-        notch: notch,
-        position: svc.plainValue(notch.configKey("position")),
-        workspaces: svc.plainValue(notch.configKey("workspaces"))
-      }
-    }
-    if (next.action === "move" && notch) {
-      notch.moveTo(Navigate.moveTarget(notch.placement, next.move,
-        svc.screens.map(function(s) { return s.name }), copy ? copy.screenName : ""))
-    }
-    if (next.action === "moveDone") svc.navMoveFrom = null
-    if (next.action === "moveCancel") { svc.undoMove(); svc.navMoveFrom = null }
-    svc.navMode = next.mode
-    svc.navSelected = next.selected
-    if (next.tab !== "" && next.tab !== shown && copy) copy.showTab(next.tab)
+  // A key while navigating, as the daemon names it (Protocol.wireKey).
+  function navKey(key, mods) {
+    svc.flushReports()
+    svc.client.key("", "", key, mods || [], "")
   }
-  // A config key's value as it is, copied (undefined when it isn't set).
-  function plainValue(key) {
-    var v = svc.configValue(key)
-    return v === undefined ? undefined : JSON.parse(JSON.stringify(v))
-  }
-  // A notch being moved goes back where it was, its workspaces too.
-  function undoMove() {
-    var from = svc.navMoveFrom
-    if (!from || !from.notch) return
-    from.notch.setValue("workspaces", from.workspaces)
-    from.notch.setValue("position", from.position)
-  }
+  // The window that has the keyboard for it went away: navigation ends.
+  function endNavigation() { if (svc.navigating) svc.navigate() }
 
   // --------------------------------------------------------------- modules
   property var modules: []
@@ -843,20 +942,26 @@ Item {
     model: svc.configResolved && svc.moduleInfoReady ? svc.moduleIds : []
     delegate: Loader {
       required property string modelData
-      source: svc.moduleUrl(modelData)
+      source: svc.loadUrl(modelData)
       onLoaded: {
         var module = item as NotchModule
         if (!module) { console.warn(svc.logName + ": module '" + modelData + "' is not a NotchModule"); return }
         module.notch = svc
         if (module.moduleId === "") module.moduleId = modelData
-        if (module.title === "") {
+        if (module.title === "" && !module.daemonOwned) {
           var id = module.moduleId
           module.title = Qt.binding(function() { return Settings.moduleTitle(id, svc.moduleInfo[id]) })
         }
         svc.rebuildModules()
       }
       onStatusChanged: if (status === Loader.Error) console.warn(svc.logName + ": module '" + modelData + "' failed to load")
-      Component.onCompleted: if (String(source) === "") console.warn(svc.logName + ": unknown module '" + modelData + "'")
+      // The daemon may not have announced a module of its own yet: unknown
+      // only if it still has not a moment after it is connected.
+      readonly property Timer unknown: Timer {
+        interval: 3000
+        running: String(parent.source) === "" && svc.client.ready
+        onTriggered: console.warn(svc.logName + ": unknown module '" + parent.modelData + "'")
+      }
       Component.onDestruction: Qt.callLater(svc.rebuildModules)
     }
   }
@@ -886,37 +991,38 @@ Item {
     }
     // Change one config key, as the settings window does. `value` is JSON
     // ("200", "\"notch\"", "[\"media\"]"); empty resets the key to its default.
+    // The daemon owns the config: this answers as its `set` method does (an
+    // IPC handler cannot wait for a reply) and sends the edit at once.
     function set(key: string, value: string): string {
       if (!key) return "usage: set <key> <json value>"
-      if (value === "") { svc.setConfigValue(key, undefined); return "ok" }
-      try { svc.setConfigValue(key, JSON.parse(value)) } catch (e) { return "not JSON: " + value }
+      if (value === "") { svc.setConfigValue(key, undefined); svc.flushConfig(); return "ok" }
+      var parsed
+      try { parsed = JSON.parse(value) } catch (e) { return "not JSON: " + value }
+      svc.setConfigValue(key, parsed)
+      svc.flushConfig()
       return "ok"
     }
-    // Generic activities, for scripts: see modules/activities.qml.
-    function push(json: string): string {
-      var m = svc.moduleById("activities")
-      return m ? m.push(json) : "activities module not loaded"
-    }
-    function clear(id: string): string {
-      var m = svc.moduleById("activities")
-      return m ? m.clear(id) : "activities module not loaded"
-    }
-    // The timer module: "25m", "3m Tea", "pomodoro", "toggle", "+5m",
-    // "skip", "stop"; see modules/timer.qml.
-    function timer(command: string): string {
-      var m = svc.moduleById("timer")
-      return m ? m.command(command) : "timer module not loaded"
-    }
+    // Generic activities, for scripts, and the timer ("25m", "3m Tea",
+    // "pomodoro", "toggle", "+5m", "skip", "stop"): the daemon's modules
+    // (native/notchd-modules). An IPC handler cannot wait for the daemon's
+    // answer, so these send the method and answer `ok` (`invalid json` for a
+    // push that is not, which is known here); `notchd ipc <method>` has the
+    // module's own answer (`no timer running`...). A module no notch loads answers
+    // `<id> module not loaded` here, as before (svc.loadedAnswer).
+    function push(json: string): string { return svc.daemonIpc("push", [json], svc.loadedAnswer("activities", svc.pushAnswer(json))) }
+    function clear(id: string): string { return svc.daemonIpc("clear", [id], svc.loadedAnswer("activities", "ok")) }
+    function timer(command: string): string { return svc.daemonIpc("timer", [command], svc.loadedAnswer("timer", "ok")) }
     // An agent, by its module's id: "toggle" opens or closes its notch,
     // "new" starts a new session, "ask <question>" opens the notch and types
-    // it in; see TerminalModule.qml. `claude` and `codex` are the same.
+    // it in; see native/notchd-modules/src/term.rs. `claude` and `codex` are
+    // the same.
     function agent(id: string, command: string): string { return svc.agentCommand(id, command) }
     // A terminal of your own (`terminals`), by its id: the same commands.
     function terminal(id: string, command: string): string { return svc.terminalCommand(id, command) }
     function claude(command: string): string { return svc.agentCommand("claude", command) }
     function codex(command: string): string { return svc.agentCommand("codex", command) }
     // A spoken conversation, by its module's id: "start" opens its notch and
-    // starts talking, "stop", "toggle", "mute", "unmute"; see LiveModule.qml.
+    // starts talking, "stop", "toggle", "mute", "unmute"; see native/notchd-modules/src/voice.rs.
     function live(id: string, command: string): string { return svc.liveCommand(id, command) }
     function state(): string {
       return JSON.stringify({
@@ -950,11 +1056,7 @@ Item {
           }
         }),
         modules: svc.modules.map(function(m) {
-          var out = { id: m.moduleId, active: m.active, priority: m.priority }
-          // An agent's plan usage (AgentUsage): its limits, and why they are stale.
-          var u = m.usage
-          if (u && u.active) out.usage = { limits: u.limits, stale: u.stale, problem: u.problem, fetchedAt: u.fetchedAt }
-          return out
+          return { id: m.moduleId, active: m.active, priority: m.priority }
         })
       })
     }

@@ -1,0 +1,12 @@
+{
+ "message": "pointer",
+ "valid": [
+  {"t":"pointer","notch":"main","screen":"DP-1","ev":"enter"},
+  {"t":"pointer","notch":"main","screen":"DP-1","ev":"leave"},
+  {"t":"pointer","notch":"main","screen":"DP-1","ev":"press"}
+ ],
+ "invalid": [
+  {"why":"ev is not an ev","json":{"t":"pointer","notch":"main","screen":"DP-1","ev":"hover"}},
+  {"why":"screen missing","json":{"t":"pointer","notch":"main","ev":"enter"}}
+ ]
+}

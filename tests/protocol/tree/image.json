@@ -1,0 +1,12 @@
+{
+ "message": "image",
+ "valid": [
+  {"t":"image","src":"/tmp/cover.jpg"},
+  {"t":"image","src":"https://example.com/a.png","size":48,"w":48,"h":48,"radius":"small","fit":"crop","fallback":{"t":"icon","glyph":"󰎆","tone":"muted"}}
+ ],
+ "invalid": [
+  {"why":"src missing","json":{"t":"image","size":48}},
+  {"why":"radius is not a radius","json":{"t":"image","src":"/a.png","radius":"pill"}},
+  {"why":"fallback is not an icon","json":{"t":"image","src":"/a.png","fallback":{"t":"text","text":"x"}}}
+ ]
+}

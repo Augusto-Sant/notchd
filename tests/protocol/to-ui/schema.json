@@ -1,0 +1,12 @@
+{
+ "message": "schema",
+ "valid": [
+  {"t":"schema","rev":3,"pages":[{"id":"general","label":"General","icon":"","sub":false},{"id":"modules/media","label":"Now playing","icon":"","sub":true}],"fields":[{"page":"general","section":"Hover","key":"hoverOpenDelay","type":"integer","label":"Open delay","min":0,"max":2000,"step":20,"unit":"ms","default":120,"value":120,"visible":true,"locked":null}]},
+  {"t":"schema","rev":4,"pages":[{"id":"general","label":"General","icon":"","sub":false}],"fields":[{"page":"general","section":"Notch","key":"compact","type":"choice","label":"Closed notch","help":"When the compact view shows.","options":[{"value":"always","label":"Always"},{"value":"playing","label":"While playing","preview":"p.png","disabled":true}],"display":"chips","default":"always","value":"playing","visible":true,"locked":null,"when":{"key":"mode","is":["a","b"]}},{"page":"components","section":"Voice","type":"component","label":"LocalAI","visible":true,"locked":"needs libpulse","component":"localai","row":{"buttons":["install"],"status":"absent","title":"LocalAI"}},{"page":"modules","section":"","type":"moduleCatalog","label":"Notch modules","visible":true,"locked":null,"part":"notch"},{"page":"general","section":"Notch","type":"note","label":"Restart to apply","visible":false,"locked":null},{"page":"general","section":"Look","key":"opacity","type":"number","label":"Opacity","display":"percent","min":0,"max":1,"step":0.05,"default":1,"value":0.85,"visible":true,"locked":null}]}
+ ],
+ "invalid": [
+  {"why":"unknown field type","json":{"t":"schema","rev":1,"pages":[],"fields":[{"page":"g","section":"s","type":"slider","label":"x","visible":true,"locked":null}]}},
+  {"why":"field without visible","json":{"t":"schema","rev":1,"pages":[],"fields":[{"page":"g","section":"s","type":"note","label":"x","locked":null}]}},
+  {"why":"page without sub","json":{"t":"schema","rev":1,"pages":[{"id":"g","label":"G","icon":""}],"fields":[]}}
+ ]
+}

@@ -25,15 +25,17 @@ for tool in quickshell magick dbus-run-session python3; do
 done
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/notchd-hero.XXXXXX")
-trap 'rm -rf -- "$scratch"' EXIT
-mkdir -- "$scratch/config" "$scratch/out" "$scratch/demo"
+trap 'pkill -f -- "--socket $scratch/" 2>/dev/null || true; rm -rf -- "$scratch"' EXIT
+mkdir -- "$scratch/config" "$scratch/out" "$scratch/demo" "$scratch/sock"
 ln -s -- "$root/core" "$scratch/config/core"
 ln -s -- "$root/hosts" "$scratch/config/hosts"
 ln -s -- "$root/tests/visual/hero.qml" "$scratch/config/shell.qml"
+cp -- "$root/tests/qml/TestService.qml" "$scratch/config/TestService.qml"
 
 # Cut off from the session, with the demo player as the only MPRIS player,
 # and the demo `claude` and `codex` (tests/visual/bin), state in the scratch dir.
-NOTCHD_VISUAL_DIR="$scratch/out" NOTCHD_HERO_FILE="$scratch/out/hero.png" \
+NOTCHD_TEST_DAEMON="$root/native/target/release/notchd" NOTCHD_TEST_SOCKETS="$scratch/sock" NOTCHD_TEST_HOOKS=1 \
+  NOTCHD_VISUAL_DIR="$scratch/out" NOTCHD_HERO_FILE="$scratch/out/hero.png" \
   XDG_STATE_HOME="$scratch/out/state" CLAUDE_CONFIG_DIR="$scratch/out/claude" \
   PATH="$root/tests/visual/bin:$PATH" \
   "$root/scripts/with-demo-player.sh" "$scratch/demo" "$scratch/log" \

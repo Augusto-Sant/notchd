@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["notchd-proto", "notchd-core", "notchd-modules", "notchd-providers", "notchd-daemon", "notchd-testkit"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+# preserve_order: objects keep file order, so editing the user's config never
+# reorders it and lists derived from objects come out in the order written.
+serde_json = { version = "1", features = ["preserve_order"] }

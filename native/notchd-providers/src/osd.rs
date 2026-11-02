@@ -1,0 +1,1 @@
+//! The `osd` provider trait.

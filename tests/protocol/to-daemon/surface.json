@@ -1,0 +1,11 @@
+{
+ "message": "surface",
+ "valid": [
+  {"t":"surface","ref":"term:claude","ev":"input","b64":"bHMK"},
+  {"t":"surface","ref":"term:claude","ev":"resize","cols":100,"rows":30}
+ ],
+ "invalid": [
+  {"why":"resize without rows","json":{"t":"surface","ref":"term:claude","ev":"resize","cols":100}},
+  {"why":"input without b64","json":{"t":"surface","ref":"term:claude","ev":"input"}}
+ ]
+}

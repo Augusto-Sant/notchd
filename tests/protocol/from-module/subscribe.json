@@ -1,0 +1,10 @@
+{
+ "message": "subscribe",
+ "valid": [
+  {"t":"subscribe","name":"media"}
+ ],
+ "invalid": [
+  {"why":"name missing","json":{"t":"subscribe"}},
+  {"why":"unknown provider","json":{"t":"subscribe","name":"weather"}}
+ ]
+}

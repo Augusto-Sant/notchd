@@ -1,0 +1,11 @@
+{
+ "message": "rect",
+ "valid": [
+  {"c":"rect","x":0,"y":0,"w":10,"h":10},
+  {"c":"rect","x":0,"y":0,"w":10,"h":10,"r":4,"fill":"surface","stroke":"line","width":1,"opacity":0.5}
+ ],
+ "invalid": [
+  {"why":"w missing","json":{"c":"rect","x":0,"y":0,"h":10}},
+  {"why":"fill is a color name outside the tokens","json":{"c":"rect","x":0,"y":0,"w":1,"h":1,"fill":"red"}}
+ ]
+}
