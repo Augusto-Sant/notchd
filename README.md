@@ -10,10 +10,11 @@ It is a **notch framework, not a shell**. Modules show what the system is alread
 
 ## Install
 
-notchd runs inside a *host*: the desktop-specific wiring around the generic UI core. The host starts the daemon with the shell (`scripts/ensure-daemon.sh`), which looks for the `notchd` binary in `$NOTCHD_BIN`, on `PATH`, then in `~/.local/share/notchd/bin/`, and failing all three downloads the release the plugin's version pins, checking its SHA-256 against `native/releases.json`. **No release is published yet** (`releases.json` is empty), so for now build the daemon: `make daemon` (needs the Rust toolchain, see [DEVELOPMENT.md](DEVELOPMENT.md#prerequisites)) puts it in `native/target/release/`, and `make restart` (Omarchy) also installs it where the host looks. Without a daemon the notch shows "notchd not running".
+notchd runs inside a *host*: the desktop-specific wiring around the generic UI core. The host starts the daemon with the shell (`scripts/ensure-daemon.sh`), which looks for the `notchd` binary in `$NOTCHD_BIN`, on `PATH`, then in `~/.local/share/notchd/bin/`, and failing all three downloads the release the plugin's version pins, checking its SHA-256 against `native/releases.json`. To build it yourself instead: `make daemon` (needs the Rust toolchain, see [DEVELOPMENT.md](DEVELOPMENT.md#prerequisites)) puts it in `native/target/release/`, and `make restart` (Omarchy) also installs it where the host looks. Without a daemon the notch shows "notchd not running".
 
 - **Omarchy**: the repository is an Omarchy shell plugin (`eryk.notchd`), with volume/brightness OSD and a button in the bar for the notches and the settings. See [hosts/omarchy](hosts/omarchy/README.md).
 - **Any other Wayland compositor with layer-shell**: the repository is also a standalone Quickshell config (`qs -p <checkout>`). See [docs/standalone.md](docs/standalone.md).
+- **Not supported yet: GNOME** (Ubuntu's and Fedora's default desktop). GNOME does not offer layer-shell, so the notch cannot draw there; a GNOME Shell extension (another UI for the same daemon) and an AppImage for other distributions are planned. The optional voice components install with `pacman` and the AUR, so they are Arch-only for now.
 
 ## States
 

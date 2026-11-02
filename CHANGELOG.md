@@ -4,6 +4,8 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-11-02
+
 ### Added
 
 - You can write your own modules, in any language: a folder in `~/.config/notchd/modules/<id>/` with a `module.json` and a program that prints JSON lines for the notch and reads its clicks. Settings declared in `module.json` get a page in the settings window and reach the module as `config`; it can subscribe to CPU and memory, the media players, the screens and the agents' plan usage, post a desktop notification and peek. It reloads when you save, and errors show in the notch with a Restart button and the log's path. Samples in `docs/examples/modules/` (shell, Python, Node); the guide is "User modules" in `docs/modules.md`.

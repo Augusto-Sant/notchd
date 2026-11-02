@@ -272,3 +272,14 @@ The plugin pins the daemon it downloads: `native/releases.json` (`{ "<version>":
 ### Documentation
 
 A change updates the doc that describes it, in the same commit: `README.md` for users, `docs/` for reference, this file for workflow, `CLAUDE.md` for a new invariant. `grep` for the name you changed.
+
+## Releasing
+
+`manifest.json`'s `version` is the version, and `native/notchd-daemon/Cargo.toml`'s `version` is the same number (a unit test in `tests/fetch_daemon_test.py` fails when they differ): the plugin wants the daemon of its own version.
+
+The plugin pins the daemon it downloads: `native/releases.json` (`{ "<version>": { "<target>": { "url", "sha256" } } }`) is the only source of checksums, changed only by a reviewed merge to main, so a tampered release asset fails the check. `scripts/fetch-daemon.py` reads it (see [docs/architecture.md](docs/architecture.md#distribution)).
+
+1. `make check` passes.
+2. Bump `version` in `manifest.json` and in `native/notchd-daemon/Cargo.toml` (then `cargo build` to refresh `native/Cargo.lock`). Rename `[Unreleased]` in `CHANGELOG.md` to `[X.Y.Z] — YYYY-MM-DD` and open a new empty one.
+3. Land it on main, tag main `git tag -a vX.Y.Z -m "vX.Y.Z"` and push the tag. Tags are never moved.
+4. `.github/workflows/release.yml` builds `notchd` on an x86_64 and an aarch64 runner, uploads `notchd-X.Y.Z-<target>.tar.gz` and its `.sha256` to the GitHub release, and opens a PR on `release-pin-vX.Y.Z` adding the version to `native/releases.json`. Compare the hashes with the release's `.sha256` files and merge it. Until then the plugin on main answers "no release for this version". (Needs "Allow GitHub Actions to create pull requests" in the repo's Actions settings.)
