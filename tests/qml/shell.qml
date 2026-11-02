@@ -129,7 +129,8 @@ ShellRoot {
       { name: "live: stop holds until the notch closes; mute goes to the bridge; IPC words and errors", run: root.liveStopAndCommands },
       { name: "live: without its packages it says what to install, and the config stays as it was", run: root.liveMissingPackages },
       { name: "live: a new session ends the one running, clears the transcript and starts another", run: root.liveNewSession },
-      { name: "live: the local voice starts its own bridge with its settings", run: root.localLiveArgs }
+      { name: "live: the local voice starts its own bridge with its settings", run: root.localLiveArgs },
+      { name: "components: the settings rows show the installer's state, install, cancel and remove (twice) through it, and lock a voice until it is installed", run: root.componentRows }
     ]
     Qt.callLater(root.next)
   }
@@ -1842,7 +1843,8 @@ ShellRoot {
   function localLiveArgs() {
     var m = localLiveSvc.moduleById("local-live")
     localLiveSvc.replaceConfig({ "local-live": { agent: "claude", session: "new", directory: "~/talk", language: "en",
-                                                 voice: "~/v.onnx" } })
+                                                 speechModel: "small", voiceModel: "pocket-pt", otherVoiceModel: "mine",
+                                                 voice: "rafael", localaiUrl: "http://127.0.0.1:9" } })
     localLiveSvc.open()
     root.steps([
       [800, function() {
@@ -1855,7 +1857,11 @@ ShellRoot {
         root.check(args[args.indexOf("--session") + 1] === "new", "the session: " + args)
         root.check(args[args.indexOf("--cwd") + 1] === home + "/talk", "the folder: " + args)
         root.check(args[args.indexOf("--lang") + 1] === "en", "the language: " + args)
-        root.check(args[args.indexOf("--voice") + 1] === home + "/v.onnx", "the voice: " + args)
+        root.check(args[args.indexOf("--speech-model") + 1] === "small", "the speech model: " + args)
+        root.check(args[args.indexOf("--voice-model") + 1] === "mine", "a model of your own wins: " + args)
+        root.check(args[args.indexOf("--voice") + 1] === "rafael", "the voice: " + args)
+        root.check(args[args.indexOf("--localai-url") + 1] === "http://127.0.0.1:9", "the address: " + args)
+        root.check(args.indexOf("--whisper-model") === -1 && args.indexOf("--tts") === -1, "an old engine's argument: " + args)
         root.check(args.indexOf("--codex") === -1, "a codex-live argument: " + args)
         localLiveSvc.close()
       }],
@@ -1864,6 +1870,125 @@ ShellRoot {
       localLiveSvc.replaceConfig({})
       root.done()
     })
+  }
+
+  // The optional components (core/ComponentStore.qml, settings/ComponentRow.qml)
+  // against a fake installer (fixtures/bin/components): the state it reports
+  // reaches the rows, their buttons run it, and a choice that needs a
+  // component is locked until it is installed.
+  NotchService {
+    id: componentSvc
+    ipcTarget: "notchd-qmltest-components"
+    configPath: root.dir + "/components.json"
+    compositor: workspace4
+    defaultModules: ["local-live"]
+  }
+  FileView {
+    id: componentLog
+    path: root.dir + "/components/log"
+    blockLoading: true
+    printErrors: false
+  }
+  FloatingWindow {
+    implicitWidth: 700
+    implicitHeight: 200
+    Item { id: componentHost; anchors.fill: parent }
+  }
+  Component {
+    id: settingsWindowComponent
+    SettingsWindow { svc: componentSvc }
+  }
+  Component {
+    id: componentRowComponent
+    ComponentRow { svc: componentSvc }
+  }
+  function componentLog_() {
+    componentLog.reload()
+    componentLog.waitForJob()
+    return componentLog.text().split("\n").filter(function(l) { return l !== "" })
+  }
+  function componentRows() {
+    var store = componentSvc.components
+    root.check(store.catalog.length > 6, "the catalog was not read: " + store.catalog.length)
+    root.check(componentSvc.settingsPages.some(function(p) { return p.id === "components" }), "no Components page")
+    // not read yet: nothing locked, rows say so
+    var before = componentSvc.settingsSchema.filter(function(f) { return f.key === "local-live.voiceModel" })[0]
+    root.check(!!before && !before.options[1].disabled, "a voice locked before the state was read")
+    var rows = []
+    function row(id) {
+      var item = componentRowComponent.createObject(componentHost, { field: { type: "component", component: id } })
+      rows.push(item)
+      return item
+    }
+    store.refresh()
+    root.steps([
+      [600, function() {
+        root.check(store.loaded, "the state was not read")
+        var small = row("localai")
+        var medium = row("voice-pocket-pt")
+        var voice = row("voice-piper-pt-br")
+        var base = row("voxtype")
+        var pulse = row("libpulse")
+        root.check(small.info.text === "Installed (197 MB)", "installed: " + small.info.text)
+        root.check(medium.info.text === "Downloading 42 % (644 MB of 1.5 GB)" && medium.working, "downloading: " + medium.info.text)
+        root.check(medium.info.actions.length === 1 && medium.info.actions[0].id === "cancel", "a download has Cancel only")
+        root.check(voice.info.state === "failed" && voice.info.text.indexOf("could not download") !== -1, "failed: " + voice.info.text)
+        root.check(pulse.info.text === "Installed by the system" && pulse.info.actions.length === 0, "a system package is never removed here")
+        root.check(base.info.text === "Not installed" && base.info.actions[0].id === "install", "missing: " + base.info.text)
+        // the settings schema: rows filled in from the registry, a voice locked
+        var schema = componentSvc.settingsSchema
+        var field = schema.filter(function(f) { return f.component === "localai" && f.page === "modules/local-live" })[0]
+        root.check(!!field && field.label === "LocalAI" && field.help.indexOf("For Voice") !== -1, "row not filled: " + JSON.stringify(field))
+        var tts = schema.filter(function(f) { return f.key === "local-live.voiceModel" })[0]
+        // the choices that wait on the chosen language's voice are locked by the window, not the service
+        root.check(tts.options[0].disabled !== true && tts.options[1].disabled !== true && tts.options[2].disabled !== true,
+                   "the service locked what depends on a language: " + JSON.stringify(tts.options))
+        // the Voice page: the chosen language's voices only, its choices locked until they are installed
+        var win = settingsWindowComponent.createObject(root)
+        rows.push(win)
+        function voiceRows() {
+          return win.schema.filter(function(f) { return f.type === "component" && f.page === "modules/local-live" && f.component.indexOf("voice-") === 0 })
+            .map(function(f) { return f.component })
+        }
+        function engineLocks() {
+          var f = win.schema.filter(function(x) { return x.key === "local-live.voiceModel" })[0]
+          return f.options.map(function(o) { return o.disabled === true })
+        }
+        root.check(JSON.stringify(voiceRows()) === JSON.stringify(["voice-piper-pt-br", "voice-pocket-pt"]), "pt voices: " + JSON.stringify(voiceRows()))
+        root.check(JSON.stringify(engineLocks()) === "[false,true,true]", "pt locks: " + JSON.stringify(engineLocks()))
+        componentSvc.setConfigValue("local-live.voiceLanguage", "en")
+        root.check(JSON.stringify(voiceRows()) === JSON.stringify(["voice-piper-en", "voice-pocket-en"]), "en voices (a language edit rebuilds the page): " + JSON.stringify(voiceRows()))
+        root.check(JSON.stringify(engineLocks()) === "[false,true,false]", "en locks (Pocket installed): " + JSON.stringify(engineLocks()))
+        componentSvc.setConfigValue("local-live.voiceLanguage", undefined)
+        root.check(JSON.stringify(voiceRows()) === JSON.stringify(["voice-piper-pt-br", "voice-pocket-pt"]), "back to pt: " + JSON.stringify(voiceRows()))
+        root.check(schema.filter(function(f) { return f.page === "components" && f.type === "component" }).length === store.catalog.length, "the overview misses components")
+        // Install runs the installer; the row follows its state
+        base.act("install")
+      }],
+      [700, function() {
+        var base = rows[3]
+        root.check(root.componentLog_().indexOf("install voxtype") !== -1, "install not run: " + root.componentLog_())
+        root.check(base.working && base.info.percent === 10, "no progress after Install: " + base.info.text)
+        // Cancel
+        base.act("cancel")
+      }],
+      [700, function() {
+        var base = rows[3]
+        root.check(root.componentLog_().indexOf("cancel voxtype") !== -1, "cancel not run: " + root.componentLog_())
+        root.check(base.info.state === "missing", "still working after Cancel: " + base.info.text)
+        // Remove asks twice
+        var small = rows[0]
+        small.act("remove")
+        root.check(small.confirming && root.componentLog_().indexOf("remove localai") === -1, "removed on the first click")
+        small.act("remove")
+      }],
+      [700, function() {
+        var small = rows[0]
+        root.check(root.componentLog_().indexOf("remove localai") !== -1, "remove not run on the second click")
+        root.check(small.info.state === "missing" && !small.confirming, "still installed after Remove: " + small.info.text)
+        rows.forEach(function(r) { r.destroy() })
+      }]
+    ], function() { root.done() })
   }
 
   function liveTalks() {
@@ -1954,7 +2079,8 @@ ShellRoot {
     root.steps([
       [800, function() {
         root.check(m.bridge === null && !m.running, "it kept running: " + JSON.stringify(m.conv))
-        root.check(/Install gst-plugins-bad, libnice \(make live-deps\)\.$/.test(Live.errorText(m.conv)), "error: " + JSON.stringify(m.conv))
+        root.check(/Install WebRTC and audio in Settings › Components\.$/.test(m.errorText), "error: " + m.errorText)
+        root.check(m.errorText.indexOf("make ") === -1, "it still says make: " + m.errorText)
         root.check(m.statusText === "Stopped", "status: " + m.statusText)
         root.check(JSON.stringify(liveSvc.config) === JSON.stringify({ "codex-live": { command: "missing-codex" } }),
                    "the config changed: " + JSON.stringify(liveSvc.config))

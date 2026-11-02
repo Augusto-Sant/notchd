@@ -6,6 +6,7 @@ import "Config.js" as Config
 import "State.js" as State
 import "Navigate.js" as Navigate
 import "Live.js" as Live
+import "Components.js" as Components
 import "settings/Settings.js" as Settings
 
 // The notches' source of truth: config, modules, the notches (Notch, one per
@@ -171,9 +172,19 @@ Item {
   // fake in its place) and the `live` IPC.
   readonly property string liveBridge: Quickshell.env("NOTCHD_LIVE_BRIDGE")
     || Live.localPath(Qt.resolvedUrl("live/codex-live.py"), Quickshell.shellDir)
-  // The local one (core/live/local-live.py: whisper.cpp and Piper).
+  // The local one (core/live/local-live.py: Voxtype and LocalAI).
   readonly property string localLiveBridge: Quickshell.env("NOTCHD_LOCAL_LIVE_BRIDGE")
     || Live.localPath(Qt.resolvedUrl("live/local-live.py"), Quickshell.shellDir)
+  // The optional components the voice modules need (Components.js): the
+  // installer (core/components/install.py; the QML tests put a fake in its
+  // place), their registry, and their state while the settings are open.
+  readonly property string componentsInstaller: Quickshell.env("NOTCHD_COMPONENTS_INSTALLER")
+    || Live.localPath(Qt.resolvedUrl("components/install.py"), Quickshell.shellDir)
+  readonly property ComponentStore components: ComponentStore {
+    installer: svc.componentsInstaller
+    catalogPath: Live.localPath(Qt.resolvedUrl("components/components.json"), Quickshell.shellDir)
+    watching: svc.settingsOpen
+  }
   function isLive(id) { return !!svc.moduleInfo[id] && !!svc.moduleInfo[id].live }
   // A live module's IPC command (LiveModule.command): "ok", or what was
   // wrong.
@@ -366,6 +377,7 @@ Item {
     { id: "general", label: "General", icon: 0xF0493 },      // nf-md-cog
     { id: "notch", label: "Notches", icon: 0xF0379 },        // nf-md-monitor
     { id: "modules", label: "Modules", icon: 0xF0A66 },      // nf-md-puzzle_outline
+    { id: "components", label: "Components", icon: 0xF03D6 }, // nf-md-package_variant_closed
     { id: "appearance", label: "Appearance", icon: 0xF0E0C } // nf-md-palette_outline
   ]
   // Then a sub-page per notch ("notch/<index>") and per module
@@ -477,9 +489,21 @@ Item {
                  help: "Each has a place of its own, over any notch that hangs there, and no notch shows it. Its page switches it on and places it." })
     return out
   }
-  readonly property var settingsSchema: svc.coreSettingsSchema
-    .concat(Settings.moduleFields(svc.moduleCatalog, Qt.resolvedUrl("settings/previews/Edge.qml")),
-            svc.hostSettingsSchema || [])
+  // Component rows filled in from the registry, and the choices that wait on
+  // a component locked until it is installed (Components.decorate). It
+  // follows the set of installed components, never an installation's
+  // progress.
+  readonly property var settingsSchema: Components.decorate(svc.coreSettingsSchema
+    .concat(Components.overviewFields(svc.components.catalog, svc.components.settled),
+            Settings.moduleFields(svc.moduleCatalog, Qt.resolvedUrl("settings/previews/Edge.qml")),
+            svc.hostSettingsSchema || []),
+    svc.components.catalog, svc.components.loaded ? svc.components.installed : null, svc.moduleTitles)
+  // id -> title of every module, for the texts that name them.
+  readonly property var moduleTitles: {
+    var out = {}
+    svc.moduleCatalog.forEach(function(m) { out[m.moduleId] = m.title })
+    return out
+  }
 
   property bool settingsOpen: false
   // The page the window shows; kept here so it survives closing the window.

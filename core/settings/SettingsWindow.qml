@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import ".."
 import "Settings.js" as Settings
+import "../Components.js" as Components
 
 // The settings window: a sidebar of pages and, for the current page, its
 // fields grouped by section. Built from NotchService.settingsPages and
@@ -32,7 +33,18 @@ FloatingWindow {
 
   // ----------------------------------------------------------------- pages
   // Settings.js has the rules.
-  readonly property var schema: win.svc ? win.svc.settingsSchema : []
+  // What the page shows: the service's schema without the fields that wait
+  // on another field's value (`when`), and the choices that wait on the
+  // component of the chosen language locked (Components.gate).
+  readonly property var schema: {
+    var svc = win.svc
+    if (!svc) return []
+    var base = svc.settingsSchema
+    var valueOf = svc.configValue
+    return Components.gate(Settings.shownFields(base, valueOf), svc.components.catalog,
+                           svc.components.loaded ? svc.components.installed : null,
+                           function(key) { return Settings.effectiveValue(base, key, valueOf) })
+  }
   readonly property var pages: Settings.visiblePages(win.svc ? win.svc.settingsPages : [], win.schema)
   readonly property var navPages: Settings.navPages(win.pages)
   readonly property string currentPage: Settings.resolvePage(win.pages, win.svc ? win.svc.settingsPage : "")

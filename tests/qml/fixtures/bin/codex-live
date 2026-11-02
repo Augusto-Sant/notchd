@@ -16,7 +16,7 @@ while [ $# -gt 0 ]; do
 done
 echo '{"status": "starting"}'
 case "$codex" in
-  *missing*) echo '{"error": "Codex Live needs packages that aren'"'"'t installed.", "packages": ["gst-plugins-bad", "libnice"]}'; exit 2 ;;
+  *missing*) echo '{"error": "Codex Live needs packages that aren'"'"'t installed.", "packages": ["gst-plugins-bad", "libnice"], "components": ["codex-live-audio"]}'; exit 2 ;;
 esac
 echo '{"status": "connecting"}'
 echo '{"status": "live"}'

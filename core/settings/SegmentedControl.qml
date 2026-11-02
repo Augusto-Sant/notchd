@@ -25,10 +25,12 @@ Rectangle {
         id: segment
         required property var modelData
         readonly property bool isSelected: control.value === modelData.value
+        // An option that waits on something (a component to install) is shown, not pickable.
+        readonly property bool off: modelData.disabled === true
         width: optionText.implicitWidth + Theme.space(28)
         height: control.height - Theme.space(8)
         radius: Theme.radiusSmall
-        color: isSelected ? Theme.selected : (area.containsMouse ? Theme.hover : "transparent")
+        color: isSelected ? Theme.selected : (area.containsMouse && !segment.off ? Theme.hover : "transparent")
         border.width: isSelected ? 1 : 0
         border.color: Theme.line
         Label {
@@ -37,14 +39,14 @@ Rectangle {
           text: segment.modelData.label || String(segment.modelData.value)
           wrapMode: Text.NoWrap
           font.pixelSize: Theme.font.bodySmall
-          color: segment.isSelected ? Theme.foreground : Theme.muted
+          color: segment.isSelected ? Theme.foreground : (segment.off ? Theme.faint : Theme.muted)
         }
         MouseArea {
           id: area
           anchors.fill: parent
           hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: control.edited(segment.modelData.value)
+          cursorShape: segment.off ? Qt.ArrowCursor : Qt.PointingHandCursor
+          onClicked: if (!segment.off) control.edited(segment.modelData.value)
         }
       }
     }

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { load, plain } from './load.mjs';
 
 const Live = load('core/Live.js');
@@ -26,10 +27,36 @@ test('localBridgeArgs: defaults are the bridge\'s own; options in order, ~ expan
     ['python3', '/c/live/local-live.py', '--agent', 'codex', '--session', 'last', '--access', 'read-only']);
   assert.deepEqual(plain(Live.localBridgeArgs('/t/bin/local-live', {
     agent: 'claude', command: ' claude --model x ', session: ' abc ', cwd: '~/code', access: 'workspace-write',
-    whisperModel: '~/m/ggml.bin', voice: '/v/pt.onnx', lang: ' en '
+    lang: ' en ', speechModel: ' small ', voiceModel: 'pocket', voiceLanguage: ' en ', voice: ' rafael ', url: ' http://127.0.0.1:8080 '
   }, '/home/u')), ['/t/bin/local-live', '--agent', 'claude', '--command', 'claude --model x', '--session', 'abc',
-    '--cwd', '/home/u/code', '--access', 'workspace-write', '--whisper-model', '/home/u/m/ggml.bin',
-    '--voice', '/v/pt.onnx', '--lang', 'en']);
+    '--cwd', '/home/u/code', '--access', 'workspace-write', '--lang', 'en', '--speech-model', 'small',
+    '--voice-engine', 'pocket', '--voice-lang', 'en', '--voice', 'rafael', '--localai-url', 'http://127.0.0.1:8080']);
+});
+
+test('localBridgeArgs: a model of your own wins over the engine; the language goes with the engine', () => {
+  const args = (o) => plain(Live.localBridgeArgs('b', o, '/h')).slice(7);
+  assert.deepEqual(args({ voiceModel: 'pocket', otherVoiceModel: ' my-voice ' }), ['--voice-model', 'my-voice']);
+  assert.deepEqual(args({ voiceModel: 'piper', otherVoiceModel: '' }), ['--voice-engine', 'piper']);
+  assert.deepEqual(args({ voiceModel: 'piper', voiceLanguage: 'de' }), ['--voice-engine', 'piper', '--voice-lang', 'de']);
+  assert.deepEqual(args({ voiceModel: '', otherVoiceModel: '  ' }), []);
+  assert.deepEqual(args({ voiceLanguage: 'fr' }), ['--voice-lang', 'fr']);
+  assert.deepEqual(args({ voiceModel: 'some-model' }), ['--voice-model', 'some-model']);
+  assert.deepEqual(args({ tts: 'chatterbox', whisperModel: '/m.bin', reference: '/r.wav' }), []);
+});
+
+test('localBridgeArgs: the model names an older version stored mean their engine, now in the chosen language', () => {
+  const args = (o) => plain(Live.localBridgeArgs('b', o, '/h')).slice(7);
+  assert.deepEqual(args({ voiceModel: 'voice-pt_BR-faber-medium', voiceLanguage: 'en' }), ['--voice-engine', 'piper', '--voice-lang', 'en']);
+  assert.deepEqual(args({ voiceModel: 'pocket-pt' }), ['--voice-engine', 'pocket']);
+  // what they map to are the registry's own Portuguese voices
+  const catalog = JSON.parse(fs.readFileSync(new URL('../core/components/components.json', import.meta.url), 'utf8')).components;
+  for (const [model, engine] of Object.entries(plain(Live.LEGACY_VOICE_MODELS))) {
+    const c = catalog.find((x) => x.model && x.model.name === model);
+    assert.ok(c, model);
+    assert.deepEqual([c.engine, c.language], [engine, 'pt']);
+  }
+  assert.equal(Live.voiceEngine(' piper '), 'piper');
+  assert.equal(Live.voiceEngine('hasOwnProperty'), '');
 });
 
 test('localBridgeArgs: an unknown agent is codex, an unknown access read-only', () => {
@@ -37,9 +64,15 @@ test('localBridgeArgs: an unknown agent is codex, an unknown access read-only', 
   assert.deepEqual(args, ['b', '--agent', 'codex', '--session', 'last', '--access', 'read-only']);
 });
 
-test('errorText: the local bridge says how to install itself, once', () => {
-  const state = { error: 'Voice needs packages. Install whisper-cpp (make local-live-deps).', packages: ['whisper-cpp'] };
-  assert.equal(Live.errorText(state), state.error);
+test('errorText: components named by the bridge become the hint, not a make target', () => {
+  const state = { error: 'Voice needs packages that aren\'t installed.', packages: ['voxtype-bin'], components: ['voxtype'] };
+  assert.equal(Live.errorText(state, 'Install Voxtype in Settings \u203a Components.'),
+    'Voice needs packages that aren\'t installed. Install Voxtype in Settings \u203a Components.');
+  // without the catalog's hint it still names the ids
+  assert.equal(Live.errorText(state), 'Voice needs packages that aren\'t installed. Install voxtype in the settings.');
+  // packages from a bridge that names no components
+  assert.equal(Live.errorText({ error: 'x.', packages: ['a', 'b'] }), 'x. Install a, b.');
+  assert.doesNotMatch(Live.errorText(state, 'h'), /make /);
 });
 
 test('parseLine: an object, else null', () => {
@@ -71,10 +104,12 @@ test('reduce: muted says so while listening', () => {
   assert.equal(Live.statusText(s), 'Muted');
 });
 
-test('reduce: an error, with the packages to install', () => {
-  const s = run([{ status: 'starting' }, { error: 'Codex Live needs packages that aren\'t installed.', packages: ['gst-plugins-bad'] }, { status: 'closed' }]);
+test('reduce: an error, with the packages and components to install', () => {
+  const s = run([{ status: 'starting' }, { error: 'Codex Live needs packages that aren\'t installed.', packages: ['gst-plugins-bad'], components: ['codex-live-audio'] }, { status: 'closed' }]);
   assert.equal(Live.statusText(s), 'Stopped');
-  assert.match(Live.errorText(s), /Install gst-plugins-bad \(make live-deps\)\.$/);
+  assert.deepEqual(plain(s.components), ['codex-live-audio']);
+  assert.match(Live.errorText(s, 'Install WebRTC and audio in Settings \u203a Components.'), /Install WebRTC and audio in Settings \u203a Components\.$/);
+  assert.deepEqual(plain(Live.starting(s).components), []);
   assert.equal(Live.errorText(run([{ error: 'No login.' }])), 'No login.');
 });
 

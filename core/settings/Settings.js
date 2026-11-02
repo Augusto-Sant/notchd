@@ -67,6 +67,27 @@ function cyclePage(pages, current, delta) {
   return nav[((at + delta) % n + n) % n].id
 }
 
+// A field's value as the settings show it: the config's, else the default of
+// the field with that key (`valueOf(key)` is the config's, undefined unset).
+function effectiveValue(schema, key, valueOf) {
+  var v = valueOf(key)
+  if (v !== undefined) return v
+  for (var i = 0; i < schema.length; i++) if (schema[i].key === key) return schema[i]["default"]
+  return undefined
+}
+
+// A field with `when: { key, is }` shows only while the field `key` has the
+// value `is` (or one of them, when it is a list): the voices of the chosen
+// language, a setting that only means something with another on. The schema
+// without the fields that don't show.
+function shownFields(schema, valueOf) {
+  return schema.filter(function(f) {
+    if (!f.when) return true
+    var v = effectiveValue(schema, f.when.key, valueOf)
+    return Array.isArray(f.when.is) ? f.when.is.indexOf(v) !== -1 : v === f.when.is
+  })
+}
+
 // A page's fields grouped by section, sections in first-seen order.
 function sections(schema, page) {
   var out = []
@@ -179,32 +200,67 @@ function liveSettings(live, title) {
       help: "The voice it speaks in. " + next },
     { key: "access", type: "choice", label: "May", "default": "read-only",
       options: [{ value: "read-only", label: "Only read" }, { value: "workspace-write", label: "Change files in its folder" }],
-      help: "What " + name + " may do in its folder when you ask it to. It never asks for approval (no one would answer): what it may not do, it doesn't. " + next }
+      help: "What " + name + " may do in its folder when you ask it to. It never asks for approval (no one would answer): what it may not do, it doesn't. " + next },
+    { type: "component", component: "codex-live-audio", section: "Needs" }
   ]
 }
 
+// The languages of the speech models, by the code Voxtype (speech
+// recognition) and the registry's voices (core/components/components.json:
+// `language`) share, named in their own language.
+var SPEECH_LANGUAGES = [
+  { value: "pt", label: "Português" }, { value: "en", label: "English" }, { value: "es", label: "Español" },
+  { value: "fr", label: "Français" }, { value: "de", label: "Deutsch" }, { value: "it", label: "Italiano" },
+  { value: "nl", label: "Nederlands" }
+]
+
 // The fields of a local spoken conversation (modules/local-live.json): which
-// agent's session it joins, speech recognition and the voice on this machine.
+// agent's session it joins, speech to text (Voxtype) and text to speech (a
+// LocalAI voice), both on this machine.
 function localLiveSettings(name, next) {
+  function part(id, section) { return { type: "component", component: id, section: section } }
+  var STT = "Speech to text (STT)"
+  var TTS = "Text to speech (TTS)"
   return [
-    { key: "agent", type: "choice", label: "Agent", "default": "codex",
+    { key: "agent", type: "choice", section: "Agent", label: "Agent", "default": "codex",
       options: [{ value: "codex", label: "Codex" }, { value: "claude", label: "Claude Code" }],
       help: "Whose text session your words go into, the one you also type in. " + next },
-    { key: "command", type: "string", label: "Command", "default": "",
+    { key: "command", type: "string", section: "Agent", label: "Command", "default": "",
       help: "The command line that runs the agent; empty is codex or claude. " + next },
-    { key: "session", type: "string", label: "Session", "default": "last",
+    { key: "session", type: "string", section: "Agent", label: "Session", "default": "last",
       help: "last: the agent's most recent session in the folder. new: one of its own. Or a session id. " + next },
-    { key: "directory", type: "string", label: "Folder", "default": "",
+    { key: "directory", type: "string", section: "Agent", label: "Folder", "default": "",
       help: "Where the agent works, and whose sessions \"last\" looks in; ~ is your home. Empty is notchd's own folder, notchd in your Documents folder. " + next },
-    { key: "access", type: "choice", label: "May", "default": "read-only",
+    { key: "access", type: "choice", section: "Agent", label: "May", "default": "read-only",
       options: [{ value: "read-only", label: "Only read" }, { value: "workspace-write", label: "Change files in its folder" }],
       help: "What the agent may do in its folder when you ask it to (Claude: plan mode, or accept edits). It never asks for approval (no one would answer). " + next },
-    { key: "language", type: "string", label: "Language", "default": "pt",
-      help: "The language you speak, for speech recognition: a whisper code such as pt, en or es. " + next },
-    { key: "whisperModel", type: "string", label: "Speech model", "default": "",
-      help: "A whisper.cpp model file (ggml-*.bin); empty is ggml-small.bin in ~/.local/share/notchd/models (make live-models). " + next },
-    { key: "voice", type: "string", label: "Voice", "default": "",
-      help: "A Piper voice file (*.onnx, with its .onnx.json next to it); empty is pt_BR-faber-medium.onnx in ~/.local/share/notchd/models (make live-models). " + next }
+    part("libpulse", "Audio"),
+    { type: "note", section: STT, label: "Listening",
+      help: "Speech to text turns what you say into the words the agent receives. It is Voxtype, on this machine, with the speech model you set up for dictation." },
+    part("voxtype", STT),
+    { key: "language", type: "choice", section: STT, label: "Language you speak", "default": "", display: "chips",
+      options: [{ value: "", label: "Voxtype's own" }, { value: "auto", label: "Auto-detect" }].concat(SPEECH_LANGUAGES),
+      help: "Empty is Voxtype's own setting. Any other code Voxtype knows can be written in the config file as language. " + next },
+    { key: "speechModel", type: "string", section: STT, label: "Speech model", "default": "",
+      help: "A Voxtype model, such as small or large-v3-turbo (voxtype info models lists them); empty is the one Voxtype is set up with. " + next },
+    { type: "note", section: TTS, label: "Speaking",
+      help: "Text to speech is the voice that answers you: the agent's words, read aloud by a LocalAI voice on this machine. Piper is light and quick; Pocket TTS is more natural and heavier." },
+    part("localai", TTS),
+    { key: "voiceLanguage", type: "choice", section: TTS, label: "Language it speaks", "default": "pt", display: "chips",
+      options: SPEECH_LANGUAGES,
+      help: "The language of the voice: the voices below are the ones of this language. " + next },
+    { type: "components", section: TTS, match: { engine: ["piper", "pocket"] }, by: { key: "voiceLanguage", field: "language" } },
+    { key: "voiceModel", type: "choice", section: TTS, label: "Speaks with", "default": "",
+      options: [{ value: "", label: "First installed" },
+                { value: "piper", label: "Piper", needs: [{ engine: "piper", language: "@voiceLanguage" }] },
+                { value: "pocket", label: "Pocket TTS", needs: [{ engine: "pocket", language: "@voiceLanguage" }] }],
+      help: "Which voice engine speaks, in the language above: the first installed is Piper, else Pocket TTS. " + next },
+    { key: "otherVoiceModel", type: "string", section: TTS, label: "Another voice model", "default": "",
+      help: "Any text-to-speech model of the LocalAI you use, by its name; it takes the place of the choice above. " + next },
+    { key: "voice", type: "string", section: TTS, label: "Voice", "default": "",
+      help: "A voice of that model, for those that have several: Pocket TTS has alba, azelma, rafael and more. Empty is the model's own. " + next },
+    { key: "localaiUrl", type: "string", section: TTS, label: "LocalAI address", "default": "",
+      help: "Where LocalAI answers. Empty is notchd's own, http://127.0.0.1:18080, which it starts when a conversation needs it and stops after; an address where one is already running is used as it is. " + next }
   ]
 }
 
@@ -294,6 +350,27 @@ function standaloneFields(id, edgePreview) {
   ]
 }
 
+// A field's references to other fields of its module (`when.key`, `by.key`,
+// an option's `needs` value "@key") put under the module's id, as its own key is.
+function moduleRefs(field, moduleId) {
+  var out = Object.assign({}, field)
+  ;["when", "by"].forEach(function(name) {
+    if (field[name] && field[name].key) out[name] = Object.assign({}, field[name], { key: moduleId + "." + field[name].key })
+  })
+  if (Array.isArray(field.options)) out.options = field.options.map(function(o) {
+    if (!Array.isArray(o.needs)) return o
+    return Object.assign({}, o, { needs: o.needs.map(function(n) {
+      if (typeof n === "string") return n
+      var m = {}
+      Object.keys(n).forEach(function(k) {
+        m[k] = typeof n[k] === "string" && n[k].charAt(0) === "@" ? "@" + moduleId + "." + n[k].slice(1) : n[k]
+      })
+      return m
+    }) })
+  })
+  return out
+}
+
 // The settings fields of every module (`modules`: [{ moduleId, title,
 // settings, standalone }], from their JSON files), with their keys under
 // the module's id (but an `absolute` one's, a config key as given), on the module's own page unless they name another (then
@@ -306,6 +383,7 @@ function moduleFields(modules, edgePreview) {
     Array.prototype.forEach.call(m.settings || [], function(f) {
       var field = Object.assign({}, f)
       if (f.key && !f.absolute) field.key = m.moduleId + "." + f.key
+      if (!f.absolute) field = moduleRefs(field, m.moduleId)
       if (!field.page) field.page = modulePageId(m.moduleId)
       else if (!field.section) field.section = m.title || m.moduleId
       out.push(field)

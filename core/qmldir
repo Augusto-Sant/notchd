@@ -13,3 +13,4 @@ TerminalModule 1.0 TerminalModule.qml
 AgentUsage 1.0 AgentUsage.qml
 KeepShown 1.0 KeepShown.qml
 LiveModule 1.0 LiveModule.qml
+ComponentStore 1.0 ComponentStore.qml

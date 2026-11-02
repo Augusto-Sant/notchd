@@ -9,7 +9,7 @@ The window is generated from `NotchService.settingsSchema`: the core's fields, t
 | Key | |
 |---|---|
 | `key` | config key; dotted for nested objects (`theme.accent`) |
-| `type` | `choice`, `integer`, `number`, `boolean`, `string`, `color`, `modules`, `workspaces`, `notches`, `moduleCatalog` or `note` (text only, no key) |
+| `type` | `choice`, `integer`, `number`, `boolean`, `string`, `color`, `modules`, `workspaces`, `notches`, `moduleCatalog`, `component`, `components` (a row per registry component that matches) or `note` (text only, no key) |
 | `label`, `help` | title and description |
 | `page` | sidebar page id; `general` when absent |
 | `section` | heading the field sits under, within its page; sections keep the order their first field appears in |
@@ -18,6 +18,10 @@ The window is generated from `NotchService.settingsSchema`: the core's fields, t
 | `display` | `"cards"` shows a `choice` as picture cards instead of segments, `"chips"` as chips that wrap under the label (a long list of short options); `"percent"` shows a 0..1 `number` as 0 to 100 % |
 | `min`, `max`, `step`, `unit` | for `integer` and `number` (a slider; a `number`'s step may be a fraction) |
 | `absolute` | in a module's fields: `key` is a config key as given, not under the module's id (a terminal's `terminals.<id>.command`) |
+| `component` | for `component`: the component's id in `core/components/components.json`; title and help come from the registry unless the field has its own |
+| `needs` | on an option of a `choice`: what it waits on; the option shows `disabled` (not pickable) while one isn't installed, and the field's help says which. An entry is a component id, or a registry match (`{ engine: "piper", language: "@voiceLanguage" }`: the component whose `engine` and `language` are those, `@key` being the value of that field of the module: the voice of the chosen language) |
+| `when` | `{ key, is }`: the field shows only while the field `key` of the same page has the value `is` (or one of them, when it is a list); the default counts. `Settings.shownFields` filters, `SettingsWindow` applies it. Voice's text-to-speech section uses it to show the voices of the chosen language only. A module's JSON may use it: `key` (and an option's `@key`) is the module's own, as its fields' keys are |
+| `match`, `by` | for `components`: `match` ({ field: value or [values] }) picks the registry components, one `component` row each (in `Components.decorate`); `by: { key, field }` gives each row `when: { key, is: <its component's field> }` |
 | `required` | for `string`: emptying it is refused (marked, as a bad color is) instead of removing the key |
 
 | Type | Control |
@@ -30,6 +34,7 @@ The window is generated from `NotchService.settingsSchema`: the core's fields, t
 | `workspaces` | `WorkspaceChips`: 1 to 10, the compositor's workspaces and the picked ones; none picked removes the key |
 | `notches` | `NotchCatalog`: a row per notch, where it is and what it shows (`Settings.notchSummary`), with a gear to its page, a trash can (with more than one) and Add, which opens the new notch's page; it edits the list through the service (`addNotch`, `removeNotch`) |
 | `moduleCatalog` | `ModuleCatalog`: one list of the modules the host can load, by `part` (`Settings.moduleKind`): `"notch"` the ones notches show, `"agent"` the agents, `"terminal"` the config's terminals, `"standalone"` the standalone ones (`Settings.catalogPart`); where each shows (`Settings.moduleStatus`) and a gear to its page; no key. The terminals' list adds Add terminal and a trash can per row, through the service (`addTerminal`, `removeTerminal`) |
+| `component` | `ComponentRow`: one optional component (see [Components](#components)), by the field's `component` id; no config key |
 | `note` | none; just the title and help |
 
 ## Several notches
@@ -42,11 +47,23 @@ The Modules page lists every module the host can load (`availableModuleIds`) in 
 
 ## Pages
 
-`NotchService.settingsPages`: the core's (General, Notches, Modules, Appearance), then the host's `hostSettingsPages`, each `{ id, label, icon }` with `icon` a Nerd Font code point, then a page per notch and per module. A host page with a core page's id replaces its label or icon. A page with no fields is hidden. A page whose id has a `/` is a sub-page of the part before it (`notch/1` of `notch`, `modules/media` of `modules`): it has no sidebar entry, the sidebar marks its parent while it shows, a link above its fields leads back, and so does Escape. A sub-page that goes away (its notch removed) falls back to its parent. The page shown is kept on the service, so it survives closing the window; it starts on General.
+`NotchService.settingsPages`: the core's (General, Notches, Modules, Components, Appearance), then the host's `hostSettingsPages`, each `{ id, label, icon }` with `icon` a Nerd Font code point, then a page per notch and per module. A host page with a core page's id replaces its label or icon. A page with no fields is hidden. A page whose id has a `/` is a sub-page of the part before it (`notch/1` of `notch`, `modules/media` of `modules`): it has no sidebar entry, the sidebar marks its parent while it shows, a link above its fields leads back, and so does Escape. A sub-page that goes away (its notch removed) falls back to its parent. The page shown is kept on the service, so it survives closing the window; it starts on General.
 
 ## Card pictures
 
 An option's `preview` is the url of a QML file whose root is a `CardPreview` (`core/settings/CardPreview.qml`). Draw it with theme colors; its `selected` property follows the card and `value` is its option's value, so one file can draw every option. The pictures in `core/settings/previews/` are examples; `Edge.qml` draws all four edges.
+
+## Components
+
+Nothing heavy ships with notchd: what a module needs beyond the app is an optional component, installed from the settings. The Components page (`components`) lists all of them under their group (Voice, a group of voices per language, Codex Live) with a `component` row each, and a module's page repeats the rows it needs (`{ type: "component", component: "localai", section: "Text to speech (TTS)" }` in its fields: `Settings.localLiveSettings`; Voice's voices are one `components` field, matching every Piper and Pocket TTS voice, each shown with its language). The registry is `core/components/components.json`: `id`, `title`, `description`, `group`, `size` (about, in bytes), `needed_by` (module ids) and a `kind`. A voice also has an `engine` (`piper` or `pocket`) and a `language` (`pt`, `en`, `es`, `fr`, `de`, `it`, `nl`: one voice of each engine per language), `shared_size` (the part of its `size` that another installed voice of its backend already holds: the backend, so a second language shows its own size) and, for Pocket TTS, `hf_language` (its folder in the Hugging Face weights cache):
+
+| Kind | Installs | Where | Removal |
+|---|---|---|---|
+| `files` | downloads (`files`: name, url, `exec` to make it runnable), each into `<name>.part`, renamed when its size is the server's; a failed one is resumed by the next try, a cancelled one deleted | `$XDG_DATA_HOME/notchd/<dir>` | its files only; with `remove_dir`, the whole folder (LocalAI's, so its voices go too) |
+| `localai` | a model of LocalAI, through its HTTP API (`localai.py` starts it for the time it takes, on `$NOTCHD_LOCALAI_URL`, by default `http://127.0.0.1:18080`): `requires` the engine, installs `backend` (a gallery id, `backend_dir` the folder it makes), then `model` (`gallery` id, `name`, `overrides` written into its configuration: the CPU backend by its own name, the options), polling each job for its bytes, then `warmup` (a first sentence, which makes the backend fetch its weights); the marker `markers/<id>.json` last | `$XDG_DATA_HOME/notchd/localai` (`models/`, `backends/`, `hf/`) | what `paths` lists, and the model's configuration; but a path another installed (or installing) component of the registry lists too (the engine's backend, the weights cache `hf/`) stays: the last one out takes it. Of `hf/` a Pocket TTS voice takes only its `hf_language` (its revisions' folders, then the blobs nothing reaches) while others are installed. A size counts a shared path once, for the first of the installed voices that hold it |
+| `system` | Arch `packages`, with `pkexec pacman` when a polkit agent runs, else in a terminal that runs `sudo pacman`; an `aur` one (Voxtype) is built by `yay` or `paru` in a terminal, or the error says how | the system | never offered |
+
+A row shows the state (Components.view: not installed, `Downloading 42 % (83 MB of 197 MB)`, `Installing: …`, `Installed (197 MB)`, `Installed by the system`, `Failed: why`) and the buttons that fit (Install, Try again, Cancel, Remove, which asks twice). `ComponentStore` (the service's `components`) reads the state from `core/components/install.py status`, every second while the window is open and something installs, and runs `install`, `cancel` and `remove`. The installer runs the work detached (`install` returns at once), so closing the window or the shell does not stop it: the state is in `$XDG_STATE_HOME/notchd/components/<id>.json`, written atomically, and a LocalAI voice is installed only once its marker exists, written last. The rules are in `core/Components.js`; a `choice` option with `needs` is locked until its component is installed (Voice's `voiceModel` choices: the service decorates the ones that name an id, `Components.gate` in the window the ones that match by a field's value, since they follow the language chosen). A bridge that lacks a component says so in its error line (`components`), and the module shows "Install X in Settings › Components."
 
 ## Adding a control
 
@@ -60,4 +77,5 @@ Every control takes `field` (the schema entry) and `value` (the config value, or
 | `Settings.js` | pages and sub-pages, sections, module files and pages, notch summaries, list edits and slider steps; pure, tested in `tests/settings.test.mjs` |
 | `SettingRow.qml` | one field: text and the control for its type |
 | `Label.qml`, `Icon.qml`, `Button.qml`, `IconButton.qml`, `NavItem.qml`, `ListRow.qml` | building blocks; `ListRow` is a row of the Notches and Modules lists |
+| `ComponentRow.qml` | the `component` control: state, bar, buttons |
 | `*Control.qml`, `CardChoice.qml`, `Toggle.qml`, `ModuleList.qml`, `ModuleCatalog.qml`, `NotchCatalog.qml`, `WorkspaceChips.qml` | the controls |

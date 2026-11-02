@@ -5,16 +5,31 @@ with speech-to-text and text-to-speech that run on this machine.
     local-live.py [--agent codex|claude] [--command <command>]
                   [--session last|new|<id>] [--cwd <folder>]
                   [--access read-only|workspace-write]
-                  [--whisper-model <ggml file>] [--voice <piper .onnx>]
-                  [--lang pt] [--mic default|<file.wav>] [--log <file>]
+                  [--lang <code>] [--speech-model <name>]
+                  [--voice-model <LocalAI model>] [--voice-engine piper|pocket]
+                  [--voice-lang <code>] [--voice <name>]
+                  [--localai-url <address>]
+                  [--mic default|<file.wav>] [--log <file>]
 
 The cascade, as opposed to codex-live.py's Codex realtime voice: the
 microphone (parec) goes through a voice activity detector; each utterance
-is written to a WAV and transcribed by whisper.cpp (whisper-cli); the words
-go into a NORMAL text session of the agent (`codex exec resume`, `claude -p
---resume`), the same conversation you type in; its answer, as it streams,
-is cut into sentences, each spoken by Piper and played with pacat, the next
-one synthesized while the last plays.
+is written to a WAV and transcribed by Voxtype (`voxtype transcribe`, with
+the model and language it is set up with, or --speech-model and --lang); the
+words go into a NORMAL text session of the agent (`codex exec resume`,
+`claude -p --resume`), the same conversation you type in; its answer, as it
+streams, is cut into sentences, each spoken by a LocalAI voice model
+(POST /v1/audio/speech) and played with pacat at the rate of the WAV it
+returns, the next one synthesized while the last plays.
+
+LocalAI (core/components/localai.py) is notchd's own copy, started here while
+the conversation lasts and stopped with it, unless something already answers
+at --localai-url (then it is used as it is). The voice model is --voice-model
+(by name), or else the first installed of core/components/components.json's
+voices of --voice-lang (pt, en, es, fr, de, it, nl), of --voice-engine when
+given, Piper before Pocket TTS; --voice
+picks one of its voices (what the request's `voice` says), empty is the
+model's own. The conversation is "live" once the microphone has calibrated and
+LocalAI has loaded the voice.
 
 --session says which: "last" (the default) the most recent session in --cwd,
 "new" one of its own (its id kept for the turns after), or an id.
@@ -29,25 +44,28 @@ stdout, the protocol codex-live.py documents, one JSON object a line:
   {"working": true|false}  a turn is in flight (the agent, then its voice)
   {"muted": true|false}
   {"warning": "..."}
-  {"error": "...", "packages": [...]?}   then it ends, exit code 2 when
-                                         something is missing, else 1
+  {"error": "...", "packages": [...]?, "components": [...]?}
+                           then it ends, exit code 2 when something is
+                           missing, else 1. `components` are ids of
+                           core/components/components.json: what the settings
+                           can install to fix it (Settings > Components).
 
 stdin: {"mute": true|false}, {"stop": true}; end of stdin or SIGTERM stops it.
 
 Half duplex, for now: while a turn is in flight (the agent works, the voice
 plays) the microphone is ignored, there being no echo cancellation. Barge-in
-(speaking over it stops it) is a follow-up. Every child (parec, whisper-cli,
-the agent, piper, pacat) is killed when it ends.
+(speaking over it stops it) is a follow-up. Every child (parec, voxtype, the
+agent, pacat, LocalAI when started here) is killed when it ends.
 
 --mic takes a 16 kHz mono 16-bit WAV in the microphone's place, for trying it
 without speaking; NOTCHD_LIVE_MIC_SPEED=<n> plays it n times faster (tests).
-Binaries are looked up on PATH; NOTCHD_WHISPER_CLI and NOTCHD_PIPER name
-others. Models default to $XDG_DATA_HOME/notchd/models/ (`make live-models`).
-The log is by default $XDG_STATE_HOME/notchd/local-live.log.
+NOTCHD_VOXTYPE names another voxtype. All of the rest is installed from the
+settings (Components), never by this script. The log is by default
+$XDG_STATE_HOME/notchd/local-live.log (LocalAI's, localai.log next to it).
 
 The rules that read these lines are core/Live.js's. Needs libpulse (parec,
-pacat), whisper-cpp, Piper (PyPI's piper-tts, `piper` on PATH or in
-~/.local/bin) and the agent logged in (`make local-live-deps`).
+pacat), Voxtype, LocalAI with a voice, and the agent logged in: the settings'
+Components page installs all but the login.
 """
 
 import argparse
@@ -68,6 +86,35 @@ import time
 import wave
 
 MIC_RATE = 16000
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "components"))
+import localai  # noqa: E402  (core/components/localai.py)
+
+# The voices the settings install are the registry's LocalAI components
+# (core/components/components.json), each with an engine and a language; the
+# first installed, Piper before Pocket TTS, is taken when none is chosen.
+DEFAULT_LANGUAGE = "pt"
+ENGINES = ("piper", "pocket")
+ENGINE_NAMES = {"piper": "Piper", "pocket": "Pocket TTS"}
+
+
+def known_voices():
+    """[{model, component, engine, language, warmup}] of the registry, in its
+    order ([] when the file can't be read)."""
+    path = os.environ.get("NOTCHD_COMPONENTS_FILE") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "components", "components.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            items = json.load(f).get("components", [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    out = []
+    for c in items:
+        if isinstance(c, dict) and c.get("kind") == "localai" and c.get("engine") in ENGINES and c.get("language"):
+            out.append({"model": c["model"]["name"], "component": c["id"], "engine": c["engine"],
+                        "language": c["language"], "warmup": c.get("warmup") or ""})
+    return out
+SPEECH_TIMEOUT = 300
+WARMUP_TEXT = "Olá."
 FRAME_S = 0.05
 FRAME_BYTES = int(MIC_RATE * FRAME_S) * 2
 # Said with every spoken turn, so the answer comes out speakable. Change here.
@@ -274,7 +321,7 @@ def strip_markdown(text):
 def normalize(pcm, peak=0.7, max_gain=30.0):
     """16-bit PCM scaled so its loudest sample is `peak` of full scale, at
     most `max_gain` times: a quiet microphone (its volume low in the
-    mixer) still gives whisper words it can hear."""
+    mixer) still gives Voxtype words it can hear."""
     samples = array.array("h")
     samples.frombytes(pcm[:len(pcm) // 2 * 2])
     if sys.byteorder == "big":
@@ -291,12 +338,96 @@ def normalize(pcm, peak=0.7, max_gain=30.0):
     return out.tobytes()
 
 
+_LOG_LINE = re.compile(r"^\s*(?:Loading audio file|Audio format:|Processing \d+ samples|whisper_\w*|ggml_\w*|\[?\d{4}-\d\d-\d\d|(?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE)\b)")
+
+
 def clean_transcript(text):
-    """whisper-cli's stdout (no timestamps) -> the words: annotations such as
-    [BLANK_AUDIO] or (music) dropped, lines joined."""
-    t = re.sub(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*", " ", text)
-    t = " ".join(t.split())
-    return t.strip()
+    """`voxtype transcribe`'s stdout -> the words: log lines (whisper.cpp's,
+    a logger's) dropped, annotations such as [BLANK_AUDIO] or (music) too,
+    lines joined."""
+    lines = [l for l in text.splitlines() if not _LOG_LINE.match(l)]
+    t = re.sub(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*", " ", " ".join(lines))
+    return " ".join(t.split()).strip()
+
+
+def wav_to_pcm16(data):
+    """A WAV file's bytes -> (mono 16-bit little-endian PCM, rate), or None
+    when it is no WAV this can read. LocalAI's backends differ: Piper writes
+    16-bit, Pocket TTS 32-bit float. Several channels are averaged; a data
+    chunk that claims more than the file has is read to its end."""
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return None
+    pos = 12
+    fmt = None
+    pcm = None
+    while pos + 8 <= len(data):
+        cid = data[pos:pos + 4]
+        size = int.from_bytes(data[pos + 4:pos + 8], "little")
+        body = data[pos + 8:pos + 8 + size]
+        if cid == b"fmt " and len(body) >= 16:
+            tag, channels, rate = (int.from_bytes(body[0:2], "little"), int.from_bytes(body[2:4], "little"),
+                                   int.from_bytes(body[4:8], "little"))
+            bits = int.from_bytes(body[14:16], "little")
+            if tag == 0xFFFE and len(body) >= 26:  # extensible: the real tag is in the sub-format
+                tag = int.from_bytes(body[24:26], "little")
+            fmt = (tag, channels, rate, bits)
+        elif cid == b"data":
+            pcm = body
+            break
+        pos += 8 + size + (size & 1)
+    if not fmt or pcm is None or fmt[1] < 1 or fmt[2] <= 0:
+        return None
+    tag, channels, rate, bits = fmt
+    if tag == 1 and bits == 16:
+        samples = array.array("h")
+        samples.frombytes(pcm[:len(pcm) // 2 * 2])
+        if sys.byteorder == "big":
+            samples.byteswap()
+    elif tag == 3 and bits == 32:
+        floats = array.array("f")
+        floats.frombytes(pcm[:len(pcm) // 4 * 4])
+        if sys.byteorder == "big":
+            floats.byteswap()
+        samples = array.array("h", (max(-32767, min(32767, int(round(x * 32767)))) if x == x else 0 for x in floats))
+    else:
+        return None
+    if channels > 1:
+        n = len(samples) // channels
+        samples = array.array("h", (sum(samples[i * channels:(i + 1) * channels]) // channels for i in range(n)))
+    if sys.byteorder == "big":
+        samples.byteswap()
+    return samples.tobytes(), rate
+
+
+def pick_voice_model(available, wanted="", engine="", language=DEFAULT_LANGUAGE, voices=None):
+    """(model, component) to speak with, out of the names LocalAI lists:
+    `wanted` (a model by name) when it is there; else the first installed
+    voice of `language` (the default's for one no voice has), of `engine`
+    ("piper", "pocket", or any), Piper before Pocket TTS.
+    (None, component to install) when there is none: `wanted`'s own when it is
+    a known one, else the language's first (of the engine's)."""
+    names = list(available)
+    voices = known_voices() if voices is None else voices
+    if wanted:
+        if wanted in names:
+            return wanted, None
+        return None, next((v["component"] for v in voices if v["model"] == wanted), None)
+    if not any(v["language"] == language for v in voices):
+        language = DEFAULT_LANGUAGE
+    kinds = (engine,) if engine in ENGINES else ENGINES
+    candidates = [v for k in kinds for v in voices if v["language"] == language and v["engine"] == k]
+    for v in candidates:
+        if v["model"] in names:
+            return v["model"], None
+    return None, candidates[0]["component"] if candidates else None
+
+
+def speech_request(model, text, voice=""):
+    """The JSON body of one POST /v1/audio/speech."""
+    body = {"model": model, "input": text}
+    if voice:
+        body["voice"] = voice
+    return body
 
 
 def sandbox_for(access):
@@ -379,28 +510,6 @@ def parse_command(line):
     if isinstance(c.get("mute"), bool):
         return ("mute", c["mute"])
     return None
-
-
-def default_models(data_home, home):
-    base = data_home or os.path.join(home, ".local", "share")
-    return os.path.join(base, "notchd", "models")
-
-
-def first_existing(folder, names):
-    for n in names:
-        p = os.path.join(folder, n)
-        if os.path.isfile(p):
-            return p
-    return ""
-
-
-def voice_rate(onnx_path):
-    """The voice's sample rate, from the .onnx.json next to it."""
-    try:
-        with open(onnx_path + ".json", encoding="utf-8") as f:
-            return int(json.load(f)["audio"]["sample_rate"])
-    except (OSError, ValueError, KeyError, TypeError):
-        return 22050
 
 
 def work_dir(cwd, home):
@@ -492,46 +601,43 @@ def find_binary(env_name, names):
     return ""
 
 
-def missing_requirements(args, models):
-    """(message, packages) of what the conversation can't run without, or
-    None."""
+def missing_requirements(args):
+    """(message, packages, components) of what the conversation can't run
+    without, or None. `components` are the settings' ids that install it."""
     packages = []
+    components = []
     notes = []
+
+    def need(package, component):
+        if package and package not in packages:
+            packages.append(package)
+        if component not in components:
+            components.append(component)
+
     if not shutil.which("parec") and args.mic == "default":
-        packages.append("libpulse")
+        need("libpulse", "libpulse")
     if not shutil.which("pacat"):
-        packages.append("libpulse")
-    if not find_binary("NOTCHD_WHISPER_CLI", ["whisper-cli", "whisper-cpp"]):
-        packages.append("whisper-cpp")
-    if not find_binary("NOTCHD_PIPER", ["piper", "piper-tts"]):
-        packages.append("piper-tts")
-    packages = [p for i, p in enumerate(packages) if p not in packages[:i]]
+        need("libpulse", "libpulse")
+    if not find_binary("NOTCHD_VOXTYPE", ["voxtype"]):
+        need("voxtype-bin", "voxtype")
     agent_cmd = (shlex.split(args.command)[0] if args.command.strip() else args.agent)
     if not shutil.which(agent_cmd):
         notes.append("%s isn't installed." % agent_cmd)
-    if not models["whisper"] or not os.path.isfile(models["whisper"]):
-        notes.append("Speech model not found (%s)." % (models["whisper"] or "none in " + models["dir"]))
-    if not models["voice"] or not os.path.isfile(models["voice"]):
-        notes.append("Voice not found (%s)." % (models["voice"] or "none in " + models["dir"]))
     if not packages and not notes:
         return None
     msg = "Voice needs " + ("packages that aren't installed. " if packages else "") + " ".join(notes)
-    if packages:
-        msg += " Install " + ", ".join(packages) + " (make local-live-deps)."
-    if any("model" in n or "Voice not" in n for n in notes):
-        msg += " (make live-models)"
-    return msg.strip(), packages
+    return msg.strip(), packages, components
 
 
 # ----------------------------------------------------------------- speech
 
 class Speaker:
-    """One turn's voice: sentences in, synthesized by Piper one after the
+    """One turn's voice: sentences in, synthesized by LocalAI one after the
     other while the last plays through pacat; the level of what is played."""
 
     def __init__(self, bridge):
         self.b = bridge
-        self.rate = voice_rate(bridge.voice)
+        self.rate = 0
         self.buffer = ""
         self.texts = queue.Queue()
         self.audio = queue.Queue(maxsize=3)
@@ -566,26 +672,16 @@ class Speaker:
 
     def synth(self):
         b = self.b
-        piper = find_binary("NOTCHD_PIPER", ["piper", "piper-tts"])
         while True:
             text = self.texts.get()
             if text is None or b.stop.is_set():
                 break
             log("tts: %s" % text)
-            try:
-                p = b.children.spawn([piper, "--model", b.voice, "--output-raw"], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=b.log_fd)
-                try:
-                    out, _ = p.communicate((text + "\n").encode("utf-8"), timeout=120)
-                except subprocess.TimeoutExpired:
-                    b.children.kill(p)
-                    out = b""
-                b.children.done(p)
-            except (OSError, RuntimeError) as e:
-                log("piper failed: %s" % e)
-                break
-            if out:
-                self.audio.put(out)
+            out, why = b.synthesize(text)
+            if out is None:
+                emit({"warning": "A sentence couldn't be spoken: " + why})
+                continue
+            self.audio.put(out)
         self.audio.put(None)
 
     def play(self):
@@ -593,12 +689,16 @@ class Speaker:
         pacat = None
         sent = 0.0
         t0 = 0.0
-        chunk = max(2, int(self.rate * LEVEL_S) * 2)
+        chunk = 0
         try:
             while True:
-                data = self.audio.get()
-                if data is None or b.stop.is_set():
+                item = self.audio.get()
+                if item is None or b.stop.is_set():
                     break
+                data, rate = item
+                if not self.rate:
+                    self.rate = rate
+                chunk = max(2, int(self.rate * LEVEL_S) * 2)
                 if pacat is None:
                     pacat = b.children.spawn(["pacat", "--raw", "--format", "s16le", "--rate", str(self.rate),
                                               "--channels", "1", "--latency-msec", "100"],
@@ -636,10 +736,12 @@ class Speaker:
 # ----------------------------------------------------------------- bridge
 
 class Bridge:
-    def __init__(self, args, models, log_fd):
+    def __init__(self, args, log_fd):
         self.args = args
-        self.voice = models["voice"]
-        self.whisper = models["whisper"]
+        self.url = localai.base_url(args.localai_url)
+        self.server = localai.Server(self.url)
+        self.voice_model = ""
+        self.voice_ready = threading.Event()
         self.stop = threading.Event()
         self.children = Children()
         self.muted = False
@@ -656,13 +758,62 @@ class Bridge:
         self.cwd = work_dir(args.cwd, self.home)
 
     # ------------------------------------------------------------ control
-    def fail(self, message, packages=None, code=None):
+    def fail(self, message, packages=None, components=None, code=None):
         ev = {"error": message}
         if packages:
             ev["packages"] = packages
+        if components:
+            ev["components"] = components
         emit(ev)
-        self.exit_code = code if code is not None else (2 if packages else 1)
+        self.exit_code = code if code is not None else (2 if packages or components else 1)
         self.stop.set()
+
+    # ------------------------------------------------------------- LocalAI
+    def start_voice(self):
+        """Starts LocalAI when nothing answers, finds the voice model and
+        loads it with a first sentence; then `voice_ready`."""
+        why = self.server.ensure(should_stop=self.stop.is_set)
+        if self.stop.is_set():
+            return
+        if why:
+            missing = why == "LocalAI is not installed."
+            self.fail(why, components=["localai"] if missing else None)
+            return
+        status, body = localai.request("GET", self.url + "/v1/models")
+        names = []
+        try:
+            names = [m["id"] for m in json.loads(body.decode("utf-8")).get("data", []) if isinstance(m, dict) and "id" in m]
+        except (ValueError, AttributeError, KeyError):
+            if status != 200:
+                self.fail("LocalAI did not list its models: %s" % localai.error_message(status, body))
+                return
+        model, component = pick_voice_model(names, self.args.voice_model, self.args.voice_engine, self.args.voice_lang)
+        if model is None:
+            wanted = self.args.voice_model
+            engine = ENGINE_NAMES.get(self.args.voice_engine)
+            self.fail("The voice model %s isn't installed in LocalAI." % wanted if wanted
+                      else "No %svoice for %s is installed." % (engine + " " if engine else "", self.args.voice_lang or DEFAULT_LANGUAGE),
+                      components=[component] if component else None)
+            return
+        self.voice_model = model
+        log("voice model: %s" % model)
+        warmup = next((v["warmup"] for v in known_voices() if v["model"] == model and v["warmup"]), WARMUP_TEXT)
+        out, why = self.synthesize(warmup, timeout=SPEECH_TIMEOUT)
+        if out is None and not self.stop.is_set():
+            self.fail("The voice %s did not load: %s" % (model, why))
+            return
+        self.voice_ready.set()
+
+    def synthesize(self, text, timeout=SPEECH_TIMEOUT):
+        """One sentence -> ((PCM, rate), ""), or (None, why)."""
+        status, body = localai.request("POST", self.url + "/v1/audio/speech",
+                                       speech_request(self.voice_model, text, self.args.voice), timeout=timeout)
+        if status != 200:
+            return None, localai.error_message(status, body)
+        audio = wav_to_pcm16(body)
+        if audio is None or not audio[0]:
+            return None, "the voice returned no sound."
+        return audio, ""
 
     def read_commands(self):
         for line in sys.stdin:
@@ -732,7 +883,7 @@ class Bridge:
                     "speaking" if vad.speaking else "quiet"))
             if ev:
                 log("vad %s (floor %.1f, threshold %.1f)" % (ev, vad.floor, vad.threshold))
-            if vad.ready and not live:
+            if vad.ready and not live and self.voice_ready.is_set():
                 live = True
                 emit({"status": "live"})
             if ev == "start":
@@ -757,9 +908,14 @@ class Bridge:
             w.setsampwidth(2)
             w.setframerate(MIC_RATE)
             w.writeframes(normalize(pcm))
-        exe = find_binary("NOTCHD_WHISPER_CLI", ["whisper-cli", "whisper-cpp"])
-        p = self.children.spawn([exe, "-m", self.whisper, "-f", path, "-l", self.args.lang, "-nt", "-np"],
-                                stdout=subprocess.PIPE, stderr=self.log_fd, stdin=subprocess.DEVNULL)
+        exe = find_binary("NOTCHD_VOXTYPE", ["voxtype"])
+        cmd = [exe, "-q"]
+        if self.args.speech_model:
+            cmd += ["--model", self.args.speech_model]
+        if self.args.lang:
+            cmd += ["--language", self.args.lang]
+        p = self.children.spawn(cmd + ["transcribe", path], stdout=subprocess.PIPE, stderr=self.log_fd,
+                                stdin=subprocess.DEVNULL)
         try:
             out, _ = p.communicate(timeout=120)
         except subprocess.TimeoutExpired:
@@ -855,6 +1011,7 @@ class Bridge:
     def run(self):
         threading.Thread(target=self.read_commands, daemon=True).start()
         emit({"status": "connecting"})
+        threading.Thread(target=self.start_voice, daemon=True).start()
         threading.Thread(target=self.worker, daemon=True).start()
         threading.Thread(target=self.mic_loop, daemon=True).start()
         self.stop.wait()
@@ -863,6 +1020,7 @@ class Bridge:
 
     def shutdown(self):
         self.children.kill_all()
+        self.server.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
         emit({"status": "closed", "reason": "requested" if not self.exit_code else "error"})
 
@@ -876,9 +1034,13 @@ def main(argv=None):
     parser.add_argument("--session", default="last")
     parser.add_argument("--cwd", default="")
     parser.add_argument("--access", default="read-only")
-    parser.add_argument("--whisper-model", default="")
+    parser.add_argument("--lang", default="")
+    parser.add_argument("--speech-model", default="")
+    parser.add_argument("--voice-model", default="")
+    parser.add_argument("--voice-engine", default="", choices=["", "piper", "pocket"])
+    parser.add_argument("--voice-lang", default=DEFAULT_LANGUAGE)
     parser.add_argument("--voice", default="")
-    parser.add_argument("--lang", default="pt")
+    parser.add_argument("--localai-url", default="")
     parser.add_argument("--mic", default="default")
     parser.add_argument("--log", default=os.path.join(
         os.environ.get("XDG_STATE_HOME") or os.path.join(home, ".local", "state"), "notchd", "local-live.log"))
@@ -894,21 +1056,14 @@ def main(argv=None):
         pass
     log("local-live starting: %s" % " ".join(sys.argv[1:]))
 
-    folder = default_models(os.environ.get("XDG_DATA_HOME", ""), home)
-    models = {
-        "dir": folder,
-        "whisper": os.path.expanduser(args.whisper_model) if args.whisper_model else first_existing(
-            folder, ["ggml-small.bin", "ggml-medium.bin", "ggml-base.bin", "ggml-small.en.bin"]),
-        "voice": os.path.expanduser(args.voice) if args.voice else first_existing(
-            folder, ["pt_BR-faber-medium.onnx", "pt_BR-cadu-medium.onnx", "pt_BR-edresson-low.onnx"]),
-    }
     emit({"status": "starting"})
-    problem = missing_requirements(args, models)
+    problem = missing_requirements(args)
     if problem:
-        emit({"error": problem[0], **({"packages": problem[1]} if problem[1] else {})})
+        emit({"error": problem[0], **({"packages": problem[1]} if problem[1] else {}),
+              **({"components": problem[2]} if problem[2] else {})})
         return 2 if problem[1] else 1
 
-    bridge = Bridge(args, models, log_fd)
+    bridge = Bridge(args, log_fd)
 
     def on_signal(signum, frame):
         bridge.stop.set()
@@ -919,6 +1074,7 @@ def main(argv=None):
         return bridge.run()
     finally:
         bridge.children.kill_all()
+        bridge.server.stop()
 
 
 if __name__ == "__main__":

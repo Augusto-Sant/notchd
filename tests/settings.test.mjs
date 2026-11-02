@@ -219,7 +219,7 @@ test('a live module\'s file brings the conversation\'s fields', () => {
   const info = plain(Settings.parseModuleInfo(JSON.stringify({ title: 'Codex Live', live: { command: ' codex ' } })));
   assert.equal(info.live, true);
   assert.equal(info.agent, undefined);
-  assert.deepEqual(info.settings.map((f) => f.key), ['command', 'directory', 'voice', 'access']);
+  assert.deepEqual(info.settings.filter((f) => f.key).map((f) => f.key), ['command', 'directory', 'voice', 'access']);
   assert.equal(Settings.settingDefault(info.settings, 'command'), 'codex');
   assert.equal(Settings.settingDefault(info.settings, 'access'), 'read-only');
   // Codex's own voice by default, the others as chips.
@@ -237,11 +237,14 @@ test('a local live module needs no command: its fields are the agent\'s, the mod
   const info = plain(Settings.parseModuleInfo(JSON.stringify({ title: 'Voice', live: { local: true } })));
   assert.equal(info.live, true);
   assert.equal(info.error, undefined);
-  assert.deepEqual(info.settings.map((f) => f.key), ['agent', 'command', 'session', 'directory', 'access', 'language', 'whisperModel', 'voice']);
+  assert.deepEqual(info.settings.filter((f) => f.key).map((f) => f.key), ['agent', 'command', 'session', 'directory', 'access', 'language', 'speechModel', 'voiceLanguage', 'voiceModel', 'otherVoiceModel', 'voice', 'localaiUrl']);
   assert.equal(Settings.settingDefault(info.settings, 'agent'), 'codex');
   assert.equal(Settings.settingDefault(info.settings, 'session'), 'last');
-  assert.equal(Settings.settingDefault(info.settings, 'language'), 'pt');
+  assert.equal(Settings.settingDefault(info.settings, 'language'), '');  // Voxtype's own
   assert.equal(Settings.settingDefault(info.settings, 'command'), '');
+  assert.equal(Settings.settingDefault(info.settings, 'voiceModel'), '');
+  assert.equal(Settings.settingDefault(info.settings, 'voiceLanguage'), 'pt');
+  assert.equal(Settings.settingDefault(info.settings, 'localaiUrl'), '');
 });
 
 test('a live module without a command is an error', () => {
@@ -309,6 +312,8 @@ test('every module JSON file is well-formed', () => {
     assert.ok(info.settings.length >= Math.max(inherited, JSON.parse(text).settings?.length ?? 0), `${file}: a field was dropped`);
     for (const f of info.settings) {
       if (f.type === 'note') continue;
+      if (f.type === 'component') { assert.ok(f.component, `${file}: a component row without a component`); continue; }
+      if (f.type === 'components') { assert.ok(f.match, `${file}: components without a match`); continue; }
       assert.ok(f.key && f.default !== undefined, `${file}: ${JSON.stringify(f)}`);
       if (f.min !== undefined) assert.ok(f.default >= f.min && f.default <= f.max, `${file}: ${f.key} out of range`);
       if (f.options) assert.ok(f.options.some((o) => o.value === f.default), `${file}: ${f.key} default not an option`);
@@ -363,4 +368,105 @@ test('a terminal of your own: its entry\'s title and command, then the fields of
   const fields = plain(Settings.moduleFields([{ moduleId: 'btop', title: 'System', terminal: true, settings: info.settings }]));
   assert.deepEqual(fields.map((f) => f.key).slice(0, 3), ['terminals.btop.title', 'terminals.btop.command', 'btop.directory']);
   assert.ok(fields.every((f) => f.page === 'modules/btop'));
+});
+
+const C = load('core/Components.js');
+const registry = JSON.parse(fs.readFileSync(new URL('../core/components/components.json', import.meta.url), 'utf8')).components;
+const voiceInfo = () => plain(Settings.parseModuleInfo(JSON.stringify({ title: 'Voice', live: { local: true } })));
+const voiceKey = 'local-live.voiceLanguage';
+
+test('the voice modules\' pages have a row for every component they need, and each exists', () => {
+  const ids = (info) => info.settings.filter((f) => f.type === 'component').map((f) => f.component);
+  const local = voiceInfo();
+  const codex = plain(Settings.parseModuleInfo(JSON.stringify({ title: 'Codex Live', live: { command: 'codex' } })));
+  assert.deepEqual(ids(local), ['libpulse', 'voxtype', 'localai']);
+  assert.deepEqual(ids(codex), ['codex-live-audio']);
+  for (const id of [...ids(local), ...ids(codex)]) assert.ok(registry.some((c) => c.id === id), id);
+  // a component row keeps its module's page and sections, and takes no config key
+  const fields = plain(Settings.moduleFields([{ moduleId: 'local-live', title: 'Voice', settings: local.settings }], ''));
+  const row = fields.find((f) => f.component === 'voxtype');
+  assert.equal(row.page, 'modules/local-live');
+  assert.equal(row.section, 'Speech to text (STT)');
+  assert.equal(row.key, undefined);
+});
+
+test('the Voice page keeps speech to text and text to speech apart, each with a note', () => {
+  const sections = plain(Settings.sections(plain(Settings.moduleFields([{ moduleId: 'local-live', title: 'Voice', settings: voiceInfo().settings }], '')), 'modules/local-live'));
+  assert.deepEqual(sections.map((s) => s.name), ['Agent', 'Audio', 'Speech to text (STT)', 'Text to speech (TTS)']);
+  const named = (name) => sections.find((s) => s.name === name).fields;
+  for (const name of ['Speech to text (STT)', 'Text to speech (TTS)']) assert.equal(named(name)[0].type, 'note', name);
+  const keys = (name) => named(name).filter((f) => f.key).map((f) => f.key.replace('local-live.', ''));
+  assert.deepEqual(keys('Speech to text (STT)'), ['language', 'speechModel']);
+  assert.deepEqual(keys('Text to speech (TTS)'), ['voiceLanguage', 'voiceModel', 'otherVoiceModel', 'voice', 'localaiUrl']);
+  assert.ok(named('Speech to text (STT)').some((f) => f.component === 'voxtype'));
+  assert.ok(named('Text to speech (TTS)').some((f) => f.component === 'localai'));
+});
+
+test('the languages: one list for what you speak and what speaks, each a choice that keeps its default', () => {
+  const local = voiceInfo();
+  const stt = local.settings.find((f) => f.key === 'language');
+  const tts = local.settings.find((f) => f.key === 'voiceLanguage');
+  const codes = (f) => f.options.map((o) => o.value).filter((v) => v !== '' && v !== 'auto');
+  assert.deepEqual(codes(stt), codes(tts));
+  assert.deepEqual(stt.options.slice(0, 2).map((o) => o.value), ['', 'auto']);
+  // every language of the speech models has both engines in the registry, and only those do
+  const voices = registry.filter((c) => c.engine);
+  assert.deepEqual([...new Set(voices.map((c) => c.language))].sort(), codes(tts).slice().sort());
+  for (const code of codes(tts)) assert.deepEqual(voices.filter((c) => c.language === code).map((c) => c.engine).sort(), ['piper', 'pocket'], code);
+  // the label is in its own language, and a key the config file already has keeps meaning
+  assert.equal(stt.options.find((o) => o.value === 'pt').label, 'Português');
+  assert.equal(stt.key, 'language');
+});
+
+test('a field with `when` shows only while another field has that value; the default counts', () => {
+  const schema = [
+    { key: 'lang', type: 'choice', default: 'pt' },
+    { key: 'a', when: { key: 'lang', is: 'pt' } },
+    { key: 'b', when: { key: 'lang', is: ['en', 'es'] } },
+    { key: 'c' }
+  ];
+  const shown = (stored) => plain(Settings.shownFields(schema, (k) => stored[k])).map((f) => f.key);
+  assert.deepEqual(shown({}), ['lang', 'a', 'c']);
+  assert.deepEqual(shown({ lang: 'es' }), ['lang', 'b', 'c']);
+  assert.deepEqual(shown({ lang: 'xx' }), ['lang', 'c']);
+  assert.equal(Settings.effectiveValue(schema, 'lang', () => undefined), 'pt');
+  assert.equal(Settings.effectiveValue(schema, 'nope', () => undefined), undefined);
+});
+
+test('moduleFields puts the references to a module\'s own fields under its id, as it does their keys', () => {
+  const fields = plain(Settings.moduleFields([{ moduleId: 'm', title: 'M', settings: [
+    { key: 'lang', type: 'choice', default: 'pt' },
+    { key: 'a', type: 'string', default: '', when: { key: 'lang', is: 'pt' } },
+    { type: 'components', by: { key: 'lang', field: 'language' }, match: { engine: 'piper' } },
+    { key: 'v', type: 'choice', default: '', options: [{ value: 'x', needs: ['id', { engine: 'piper', language: '@lang', plain: 'text' }] }] }
+  ] }], ''));
+  assert.deepEqual(fields[1].when, { key: 'm.lang', is: 'pt' });
+  assert.deepEqual(fields[2].by, { key: 'm.lang', field: 'language' });
+  assert.deepEqual(fields[3].options[0].needs, ['id', { engine: 'piper', language: '@m.lang', plain: 'text' }]);
+  // the same through the whole chain: the voice page's own references resolve to keys it has
+  const voice = plain(Settings.moduleFields([{ moduleId: 'local-live', title: 'Voice', settings: voiceInfo().settings }], ''));
+  const keys = voice.map((f) => f.key).filter(Boolean);
+  for (const f of voice) {
+    if (f.when) assert.ok(keys.includes(f.when.key), 'when ' + f.when.key);
+    if (f.by) assert.ok(keys.includes(f.by.key), 'by ' + f.by.key);
+    for (const o of f.options || []) for (const n of o.needs || []) for (const v of typeof n === 'string' ? [] : Object.values(n))
+      if (String(v).startsWith('@')) assert.ok(keys.includes(v.slice(1)), 'needs ' + v);
+  }
+});
+
+test('the Voice page shows the voices of the chosen language only, and every language\'s on the components page', () => {
+  const base = plain(C.decorate(plain(Settings.moduleFields([{ moduleId: 'local-live', title: 'Voice', settings: voiceInfo().settings }], '')), registry, [], {}));
+  const voiceRows = (lang) => plain(Settings.shownFields(base, (k) => (k === voiceKey ? lang : undefined)))
+    .filter((f) => f.type === 'component' && registry.find((c) => c.id === f.component).engine).map((f) => f.component);
+  for (const code of [...new Set(registry.filter((c) => c.engine).map((c) => c.language))]) {
+    const want = registry.filter((c) => c.engine && c.language === code).map((c) => c.id);
+    assert.deepEqual(voiceRows(code), want, code);
+    assert.equal(want.length, 2);
+  }
+  assert.deepEqual(voiceRows(undefined), voiceRows('pt'));  // the default language
+  assert.deepEqual(voiceRows('xx'), []);
+  // the overview lists all of them, a section per language
+  const overview = plain(C.overviewFields(registry, {}));
+  assert.equal(overview.filter((f) => f.component && registry.find((c) => c.id === f.component).engine).length, registry.filter((c) => c.engine).length);
+  assert.ok(new Set(overview.map((f) => f.section)).size > 7);
 });

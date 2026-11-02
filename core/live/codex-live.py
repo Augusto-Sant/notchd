@@ -22,8 +22,10 @@ stdout, one JSON object a line:
   {"working": true|false}  Codex works on a task it was given
   {"muted": true|false}
   {"warning": "..."}
-  {"error": "...", "packages": [...]?}   then it ends, exit code 2 when
-                                         packages are missing, else 1
+  {"error": "...", "packages": [...]?, "components": [...]?}
+                           then it ends, exit code 2 when packages are
+                           missing, else 1; `components`: ids of
+                           core/components/components.json that install them
 
 stdin, one JSON object a line: {"mute": true|false}, {"stop": true}. End
 of stdin or SIGTERM stops it too.
@@ -37,7 +39,7 @@ stderr.
 
 The rules that read these lines are core/Live.js's. Needs python-gobject,
 gst-plugins-base, gst-plugins-good, gst-plugins-bad, libnice and libpulse
-(pacat plays the voice), a PulseAudio server (PipeWire's pipewire-pulse) (`make live-deps`), and Codex logged in.
+(pacat plays the voice), a PulseAudio server (PipeWire's pipewire-pulse) (the settings' Components page, "WebRTC and audio", installs them), and Codex logged in.
 """
 
 import argparse
@@ -857,7 +859,8 @@ def main(argv=None):
     log("codex-live: %s" % " ".join(sys.argv[1:]))
     modules, packages = load_gstreamer()
     if not modules:
-        emit({"error": "Codex Live needs packages that aren't installed.", "packages": packages})
+        emit({"error": "Codex Live needs packages that aren't installed.", "packages": packages,
+              "components": ["codex-live-audio"]})
         return 2
     args.cwd = resolve_cwd(args.cwd)
     if not os.path.isdir(args.cwd):

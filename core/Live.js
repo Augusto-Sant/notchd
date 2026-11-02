@@ -26,30 +26,51 @@ function bridgeArgs(bridge, opts, home) {
   return run
 }
 
-// The same for the local bridge (core/live/local-live.py: whisper.cpp, an
-// agent's text session, Piper). `opts`: { agent, command, session, cwd,
-// access, whisperModel, voice, lang }; what is empty is the bridge's own
-// default (the models in notchd's data folder, the language pt, the
-// agent's most recent session in its folder); "~" is your `home`.
+// The engine a `voiceModel` setting means: "piper" and "pocket" are the
+// choices; the model names an older version stored (the one voice each
+// engine had) mean their engine, now in the language chosen; "" for any
+// other (a model by its name).
+var LEGACY_VOICE_MODELS = { "voice-pt_BR-faber-medium": "piper", "pocket-pt": "pocket" }
+function voiceEngine(value) {
+  var v = String(value || "").trim()
+  if (v === "piper" || v === "pocket") return v
+  return Object.prototype.hasOwnProperty.call(LEGACY_VOICE_MODELS, v) ? LEGACY_VOICE_MODELS[v] : ""
+}
+
+// The same for the local bridge (core/live/local-live.py: Voxtype, an agent's
+// text session, a LocalAI voice). `opts`: { agent, command, session, cwd,
+// access, lang, speechModel, voiceModel, voiceLanguage, otherVoiceModel,
+// voice, url }; `otherVoiceModel` (a model of your own, by name) wins over
+// `voiceModel` (an engine, "piper" or "pocket", which speaks `voiceLanguage`);
+// what is empty is the
+// bridge's own default (Voxtype's model and language, the first installed
+// voice, notchd's own LocalAI, the agent's most recent session in its
+// folder); "~" is your `home`.
 function localBridgeArgs(bridge, opts, home) {
   var b = String(bridge || "")
   var run = /\.py$/.test(b) ? ["python3", b] : [b]
   opts = opts || {}
+  function text(v) { return String(v || "").trim() }
   function path(v) {
-    var p = String(v || "").trim()
+    var p = text(v)
     if (p === "~" || p.indexOf("~/") === 0) p = String(home || "") + p.slice(1)
     return p
   }
   run = run.concat(["--agent", opts.agent === "claude" ? "claude" : "codex"])
-  var command = String(opts.command || "").trim()
-  if (command !== "") run = run.concat(["--command", command])
-  run = run.concat(["--session", String(opts.session || "").trim() || "last"])
+  if (text(opts.command) !== "") run = run.concat(["--command", text(opts.command)])
+  run = run.concat(["--session", text(opts.session) || "last"])
   if (path(opts.cwd) !== "") run = run.concat(["--cwd", path(opts.cwd)])
   run = run.concat(["--access", opts.access === "workspace-write" ? "workspace-write" : "read-only"])
-  if (path(opts.whisperModel) !== "") run = run.concat(["--whisper-model", path(opts.whisperModel)])
-  if (path(opts.voice) !== "") run = run.concat(["--voice", path(opts.voice)])
-  var lang = String(opts.lang || "").trim()
-  if (lang !== "") run = run.concat(["--lang", lang])
+  if (text(opts.lang) !== "") run = run.concat(["--lang", text(opts.lang)])
+  if (text(opts.speechModel) !== "") run = run.concat(["--speech-model", text(opts.speechModel)])
+  var model = text(opts.otherVoiceModel)
+  var engine = voiceEngine(opts.voiceModel)
+  if (model !== "") run = run.concat(["--voice-model", model])
+  else if (engine !== "") run = run.concat(["--voice-engine", engine])
+  else if (text(opts.voiceModel) !== "") run = run.concat(["--voice-model", text(opts.voiceModel)])
+  if (text(opts.voiceLanguage) !== "") run = run.concat(["--voice-lang", text(opts.voiceLanguage)])
+  if (text(opts.voice) !== "") run = run.concat(["--voice", text(opts.voice)])
+  if (text(opts.url) !== "") run = run.concat(["--localai-url", text(opts.url)])
   return run
 }
 
@@ -64,7 +85,7 @@ function parseLine(line) {
 // "live" or "closed"; `transcript` [{ role, text, done }]; `level` Codex's
 // voice in dB as it plays, `mic` what the microphone sends.
 function initialState() {
-  return { status: "off", error: "", packages: [], warning: "", transcript: [],
+  return { status: "off", error: "", packages: [], components: [], warning: "", transcript: [],
            working: false, muted: false, level: -100, mic: -100 }
 }
 
@@ -74,7 +95,7 @@ function starting(state) {
   var s = state || initialState()
   return Object.assign({}, s, {
     transcript: (s.transcript || []).map(function(l) { return l.done ? l : { role: l.role, text: l.text, done: true } }),
-    status: "starting", error: "", packages: [], warning: "", working: false, muted: false, level: -100, mic: -100
+    status: "starting", error: "", packages: [], components: [], warning: "", working: false, muted: false, level: -100, mic: -100
   })
 }
 
@@ -89,6 +110,7 @@ function reduce(state, e) {
   if (typeof e.error === "string") {
     s.error = e.error
     s.packages = Array.isArray(e.packages) ? e.packages.map(String) : []
+    s.components = Array.isArray(e.components) ? e.components.map(String) : []
   }
   if (typeof e.warning === "string") s.warning = e.warning
   if (typeof e.working === "boolean") s.working = e.working
@@ -148,12 +170,18 @@ function statusText(state) {
   }
 }
 
-// What went wrong, with what to install when that's why.
-function errorText(state) {
+// What went wrong, with what to install when that's why. A bridge names the
+// components that would fix it (`components`, ids of core/components/
+// components.json); `hint` is what to do about them
+// (Components.missingHint: "Install X in Settings > Components."), which only
+// the QML side can build, with the catalog. Packages without components (an
+// older bridge) are named as they are.
+function errorText(state, hint) {
   if (!state || !state.error) return ""
-  // The local bridge's says what to install and how, itself.
-  if (state.packages && state.packages.length > 0 && state.error.indexOf("(make ") === -1)
-    return state.error + " Install " + state.packages.join(", ") + " (make live-deps)."
+  if (state.components && state.components.length > 0)
+    return state.error + " " + (hint || "Install " + state.components.join(", ") + " in the settings.")
+  if (state.packages && state.packages.length > 0)
+    return state.error + " Install " + state.packages.join(", ") + "."
   return state.error
 }
 

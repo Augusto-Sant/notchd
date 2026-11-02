@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import "Live.js" as Live
+import "Components.js" as Components
 
 // Base type for a spoken conversation with an agent (modules/codex-live.qml):
 // you talk, it answers aloud, and what it is asked to do it does in its
@@ -43,6 +44,8 @@ NotchModule {
   readonly property bool speaking: Live.speaking(m.conv)
   readonly property bool working: m.running && m.conv.working
   readonly property string statusText: Live.statusText(m.conv)
+  // What went wrong, and which component to install in the settings.
+  readonly property string errorText: Live.errorText(m.conv, Components.missingHint(m.conv.components, m.notch ? m.notch.components.catalog : []))
 
   // A notch is open on it by a click or a shortcut (NotchService.liveOpen).
   readonly property bool open: !!m.notch && m.notch.liveOpen(m)
@@ -72,7 +75,8 @@ NotchModule {
         ? Live.localBridgeArgs(m.notch.localLiveBridge, {
             agent: m.setting("agent"), command: m.setting("command"), session: m.setting("session"),
             cwd: m.setting("directory"), access: m.setting("access"), lang: m.setting("language"),
-            whisperModel: m.setting("whisperModel"), voice: m.setting("voice")
+            speechModel: m.setting("speechModel"), voiceModel: m.setting("voiceModel"), voiceLanguage: m.setting("voiceLanguage"), otherVoiceModel: m.setting("otherVoiceModel"),
+            voice: m.setting("voice"), url: m.setting("localaiUrl")
           }, Quickshell.env("HOME"))
         : Live.bridgeArgs(m.notch.liveBridge, {
             codex: m.setting("command"), cwd: m.setting("directory"),
@@ -114,7 +118,7 @@ NotchModule {
     if (m.conv.status !== "closed") m.conv = Live.reduce(m.conv, { status: "closed" })
     // Not a fault of notchd's (no packages, no login): the view says it; the
     // log keeps it for an IPC caller.
-    if (m.conv.error) console.info((m.notch ? m.notch.logName : "notchd") + ": " + m.moduleId + ": " + Live.errorText(m.conv))
+    if (m.conv.error) console.info((m.notch ? m.notch.logName : "notchd") + ": " + m.moduleId + ": " + m.errorText)
     if (m.bridge === proc) m.bridge = null
     proc.destroy()
     if (m.renewing) {
@@ -264,7 +268,7 @@ NotchModule {
           Layout.fillWidth: true
           visible: m.conv.error !== ""
           textFormat: Text.PlainText
-          text: Live.errorText(m.conv)
+          text: m.errorText
           wrapMode: Text.Wrap
           color: Theme.danger
           font.family: Theme.font.family

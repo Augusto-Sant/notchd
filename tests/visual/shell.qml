@@ -35,7 +35,7 @@ ShellRoot {
 
   // Each scenario: the page, the theme, `bar` for the Omarchy host's look
   // (workspaces 1 to 3 picked), its extra fields, config keys to set, the notch the window edits and whether
-  // to scroll the page to its end. Or, with `edge`, the notch on
+  // to scroll the page to its end (`scrollTo`: "end", or a number of pixels). Or, with `edge`, the notch on
   // that edge instead of the settings window.
   readonly property var scenarios: [
     { name: "notches-list-dark", page: "notch", theme: root.dark, bar: true, fields: root.omarchyFields,
@@ -75,6 +75,10 @@ ShellRoot {
     { name: "live-dark", live: true, theme: root.dark },
     { name: "live-light", live: true, theme: root.light },
     { name: "module-live-dark", page: "modules/codex-live", theme: root.dark, bar: true, fields: root.omarchyFields },
+    { name: "module-voice-speech-dark", page: "modules/local-live", theme: root.dark, bar: true, fields: root.omarchyFields, scrollTo: 1020 },
+    { name: "module-voice-dark", page: "modules/local-live", theme: root.dark, bar: true, fields: root.omarchyFields, scrollTo: "end" },
+    { name: "components-working-dark", page: "components", theme: root.dark, bar: true, fields: root.omarchyFields, scrollTo: 700 },
+    { name: "components-light", page: "components", theme: root.light, bar: true, fields: root.omarchyFields },
     { name: "agents-dark", agents: true, theme: root.dark }
   ]
   property int index: -1
@@ -516,6 +520,7 @@ ShellRoot {
   function next() {
     root.index++
     if (!root.scenario) { quitTimer.start(); return }
+    svc.components.refresh()  // the fake installer's canned state
     Theme.provider = root.scenario.theme
     svc.setConfigValue("workspaces", root.scenario.bar ? [1, 2, 3] : undefined)
     svc.setConfigValue("osd.enabled", false)
@@ -557,7 +562,8 @@ ShellRoot {
     id: scrollTimer
     interval: 200
     onTriggered: if (root.scenario) win.pageView.contentY = root.scenario.scrollTo === "end"
-      ? Math.max(0, win.pageView.contentHeight - win.pageView.height) : 0
+      ? Math.max(0, win.pageView.contentHeight - win.pageView.height)
+      : (typeof root.scenario.scrollTo === "number" ? root.scenario.scrollTo : 0)
   }
   Timer { id: quitTimer; interval: 100; onTriggered: Qt.quit() }
 }

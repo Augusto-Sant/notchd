@@ -1,0 +1,530 @@
+{
+  "components": [
+    {
+      "id": "libpulse",
+      "title": "Audio tools",
+      "group": "Voice",
+      "kind": "system",
+      "size": 2000000,
+      "description": "pacat and parec, which record the microphone and play the voice through PipeWire or PulseAudio. The libpulse package.",
+      "needed_by": [
+        "local-live",
+        "codex-live"
+      ],
+      "packages": [
+        "libpulse"
+      ],
+      "bins": [
+        "pacat",
+        "parec"
+      ]
+    },
+    {
+      "id": "voxtype",
+      "title": "Voxtype",
+      "group": "Voice",
+      "kind": "system",
+      "aur": true,
+      "size": 663000000,
+      "description": "Turns what you say into text, with the speech model you already set up for dictation (Omarchy's). From the AUR: voxtype-bin.",
+      "needed_by": [
+        "local-live"
+      ],
+      "packages": [
+        "voxtype-bin"
+      ],
+      "bins": [
+        "voxtype"
+      ]
+    },
+    {
+      "id": "localai",
+      "title": "LocalAI",
+      "group": "Voice",
+      "kind": "files",
+      "size": 196718754,
+      "description": "The engine the voices run on (localai.io): its official program, started only while a conversation or an installation needs it, and bound to this machine. Removing it removes the voices below too.",
+      "needed_by": [
+        "local-live"
+      ],
+      "dir": "localai",
+      "remove_dir": true,
+      "files": [
+        {
+          "name": "bin/local-ai",
+          "exec": true,
+          "url": "https://github.com/mudler/LocalAI/releases/download/v4.12.1/local-ai-v4.12.1-linux-amd64"
+        }
+      ]
+    },
+    {
+      "id": "voice-piper-pt-br",
+      "title": "Voice: Piper, Portuguese (Brazil)",
+      "group": "Voices: Portuguese (Brazil)",
+      "kind": "localai",
+      "language": "pt",
+      "engine": "piper",
+      "size": 141000000,
+      "shared_size": 78000000,
+      "description": "The lightest voice: Piper, on the CPU, a fraction of a second per sentence. One voice per language, and its program is shared with the other Piper languages.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-piper",
+      "backend_dir": "cpu-piper",
+      "model": {
+        "gallery": "localai@voice-pt_BR-faber-medium",
+        "name": "voice-pt_BR-faber-medium",
+        "overrides": {
+          "backend": "cpu-piper"
+        }
+      },
+      "paths": [
+        "backends/cpu-piper",
+        "models/pt_BR-faber-medium.onnx",
+        "models/pt_BR-faber-medium.onnx.json"
+      ],
+      "warmup": "Olá."
+    },
+    {
+      "id": "voice-pocket-pt",
+      "title": "Voice: Pocket TTS, Portuguese (Brazil)",
+      "group": "Voices: Portuguese (Brazil)",
+      "kind": "localai",
+      "language": "pt",
+      "engine": "pocket",
+      "hf_language": "portuguese_24l",
+      "size": 1930000000,
+      "shared_size": 1180000000,
+      "description": "Kyutai's Pocket TTS with its 24-layer Portuguese (Brazil) model, on the CPU: a more natural voice, about two seconds a sentence and 2 GB of memory while it runs. Its program is shared with the other Pocket TTS languages; its other voices (alba, rafael...) are fetched the first time you pick one.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-pocket-tts",
+      "backend_dir": "cpu-pocket-tts",
+      "model": {
+        "gallery": "localai@pocket-tts",
+        "name": "pocket-pt",
+        "overrides": {
+          "backend": "cpu-pocket-tts",
+          "options": [
+            "default_voice:alba",
+            "language:portuguese_24l"
+          ]
+        }
+      },
+      "paths": [
+        "backends/cpu-pocket-tts",
+        "hf"
+      ],
+      "warmup": "Olá."
+    },
+    {
+      "id": "voice-piper-en",
+      "title": "Voice: Piper, English",
+      "group": "Voices: English",
+      "kind": "localai",
+      "language": "en",
+      "engine": "piper",
+      "size": 141000000,
+      "shared_size": 78000000,
+      "description": "The lightest voice: Piper, on the CPU, a fraction of a second per sentence. One voice per language, and its program is shared with the other Piper languages.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-piper",
+      "backend_dir": "cpu-piper",
+      "model": {
+        "gallery": "localai@voice-en_US-amy-medium",
+        "name": "voice-en_US-amy-medium",
+        "overrides": {
+          "backend": "cpu-piper"
+        }
+      },
+      "paths": [
+        "backends/cpu-piper",
+        "models/en_US-amy-medium.onnx",
+        "models/en_US-amy-medium.onnx.json"
+      ],
+      "warmup": "Hello."
+    },
+    {
+      "id": "voice-pocket-en",
+      "title": "Voice: Pocket TTS, English",
+      "group": "Voices: English",
+      "kind": "localai",
+      "language": "en",
+      "engine": "pocket",
+      "hf_language": "english_2026-09_24l",
+      "size": 2510000000,
+      "shared_size": 1180000000,
+      "description": "Kyutai's Pocket TTS with its 24-layer English model, on the CPU: a more natural voice, about two seconds a sentence and 2 GB of memory while it runs. Its program is shared with the other Pocket TTS languages; its other voices (alba, rafael...) are fetched the first time you pick one.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-pocket-tts",
+      "backend_dir": "cpu-pocket-tts",
+      "model": {
+        "gallery": "localai@pocket-tts",
+        "name": "pocket-en",
+        "overrides": {
+          "backend": "cpu-pocket-tts",
+          "options": [
+            "default_voice:alba",
+            "language:english_2026-09_24l"
+          ]
+        }
+      },
+      "paths": [
+        "backends/cpu-pocket-tts",
+        "hf"
+      ],
+      "warmup": "Hello."
+    },
+    {
+      "id": "voice-piper-es",
+      "title": "Voice: Piper, Spanish",
+      "group": "Voices: Spanish",
+      "kind": "localai",
+      "language": "es",
+      "engine": "piper",
+      "size": 141000000,
+      "shared_size": 78000000,
+      "description": "The lightest voice: Piper, on the CPU, a fraction of a second per sentence. One voice per language, and its program is shared with the other Piper languages.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-piper",
+      "backend_dir": "cpu-piper",
+      "model": {
+        "gallery": "localai@voice-es_ES-davefx-medium",
+        "name": "voice-es_ES-davefx-medium",
+        "overrides": {
+          "backend": "cpu-piper"
+        }
+      },
+      "paths": [
+        "backends/cpu-piper",
+        "models/es_ES-davefx-medium.onnx",
+        "models/es_ES-davefx-medium.onnx.json"
+      ],
+      "warmup": "Hola."
+    },
+    {
+      "id": "voice-pocket-es",
+      "title": "Voice: Pocket TTS, Spanish",
+      "group": "Voices: Spanish",
+      "kind": "localai",
+      "language": "es",
+      "engine": "pocket",
+      "hf_language": "spanish_24l",
+      "size": 1930000000,
+      "shared_size": 1180000000,
+      "description": "Kyutai's Pocket TTS with its 24-layer Spanish model, on the CPU: a more natural voice, about two seconds a sentence and 2 GB of memory while it runs. Its program is shared with the other Pocket TTS languages; its other voices (alba, rafael...) are fetched the first time you pick one.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-pocket-tts",
+      "backend_dir": "cpu-pocket-tts",
+      "model": {
+        "gallery": "localai@pocket-tts",
+        "name": "pocket-es",
+        "overrides": {
+          "backend": "cpu-pocket-tts",
+          "options": [
+            "default_voice:alba",
+            "language:spanish_24l"
+          ]
+        }
+      },
+      "paths": [
+        "backends/cpu-pocket-tts",
+        "hf"
+      ],
+      "warmup": "Hola."
+    },
+    {
+      "id": "voice-piper-fr",
+      "title": "Voice: Piper, French",
+      "group": "Voices: French",
+      "kind": "localai",
+      "language": "fr",
+      "engine": "piper",
+      "size": 154000000,
+      "shared_size": 78000000,
+      "description": "The lightest voice: Piper, on the CPU, a fraction of a second per sentence. One voice per language, and its program is shared with the other Piper languages.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-piper",
+      "backend_dir": "cpu-piper",
+      "model": {
+        "gallery": "localai@voice-fr_FR-upmc-medium",
+        "name": "voice-fr_FR-upmc-medium",
+        "overrides": {
+          "backend": "cpu-piper"
+        }
+      },
+      "paths": [
+        "backends/cpu-piper",
+        "models/fr_FR-upmc-medium.onnx",
+        "models/fr_FR-upmc-medium.onnx.json"
+      ],
+      "warmup": "Bonjour."
+    },
+    {
+      "id": "voice-pocket-fr",
+      "title": "Voice: Pocket TTS, French",
+      "group": "Voices: French",
+      "kind": "localai",
+      "language": "fr",
+      "engine": "pocket",
+      "hf_language": "french_24l",
+      "size": 1930000000,
+      "shared_size": 1180000000,
+      "description": "Kyutai's Pocket TTS with its 24-layer French model, on the CPU: a more natural voice, about two seconds a sentence and 2 GB of memory while it runs. Its program is shared with the other Pocket TTS languages; its other voices (alba, rafael...) are fetched the first time you pick one.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-pocket-tts",
+      "backend_dir": "cpu-pocket-tts",
+      "model": {
+        "gallery": "localai@pocket-tts",
+        "name": "pocket-fr",
+        "overrides": {
+          "backend": "cpu-pocket-tts",
+          "options": [
+            "default_voice:alba",
+            "language:french_24l"
+          ]
+        }
+      },
+      "paths": [
+        "backends/cpu-pocket-tts",
+        "hf"
+      ],
+      "warmup": "Bonjour."
+    },
+    {
+      "id": "voice-piper-de",
+      "title": "Voice: Piper, German",
+      "group": "Voices: German",
+      "kind": "localai",
+      "language": "de",
+      "engine": "piper",
+      "size": 141000000,
+      "shared_size": 78000000,
+      "description": "The lightest voice: Piper, on the CPU, a fraction of a second per sentence. One voice per language, and its program is shared with the other Piper languages.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-piper",
+      "backend_dir": "cpu-piper",
+      "model": {
+        "gallery": "localai@voice-de_DE-thorsten-medium",
+        "name": "voice-de_DE-thorsten-medium",
+        "overrides": {
+          "backend": "cpu-piper"
+        }
+      },
+      "paths": [
+        "backends/cpu-piper",
+        "models/de_DE-thorsten-medium.onnx",
+        "models/de_DE-thorsten-medium.onnx.json"
+      ],
+      "warmup": "Hallo."
+    },
+    {
+      "id": "voice-pocket-de",
+      "title": "Voice: Pocket TTS, German",
+      "group": "Voices: German",
+      "kind": "localai",
+      "language": "de",
+      "engine": "pocket",
+      "hf_language": "german_24l",
+      "size": 1930000000,
+      "shared_size": 1180000000,
+      "description": "Kyutai's Pocket TTS with its 24-layer German model, on the CPU: a more natural voice, about two seconds a sentence and 2 GB of memory while it runs. Its program is shared with the other Pocket TTS languages; its other voices (alba, rafael...) are fetched the first time you pick one.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-pocket-tts",
+      "backend_dir": "cpu-pocket-tts",
+      "model": {
+        "gallery": "localai@pocket-tts",
+        "name": "pocket-de",
+        "overrides": {
+          "backend": "cpu-pocket-tts",
+          "options": [
+            "default_voice:alba",
+            "language:german_24l"
+          ]
+        }
+      },
+      "paths": [
+        "backends/cpu-pocket-tts",
+        "hf"
+      ],
+      "warmup": "Hallo."
+    },
+    {
+      "id": "voice-piper-it",
+      "title": "Voice: Piper, Italian",
+      "group": "Voices: Italian",
+      "kind": "localai",
+      "language": "it",
+      "engine": "piper",
+      "size": 199000000,
+      "shared_size": 78000000,
+      "description": "The lightest voice: Piper, on the CPU, a fraction of a second per sentence. One voice per language, and its program is shared with the other Piper languages.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-piper",
+      "backend_dir": "cpu-piper",
+      "model": {
+        "gallery": "localai@voice-it-paola-medium",
+        "name": "voice-it-paola-medium",
+        "overrides": {
+          "backend": "cpu-piper"
+        }
+      },
+      "paths": [
+        "backends/cpu-piper",
+        "models/it-paola-medium.onnx",
+        "models/it-paola-medium.onnx.json",
+        "models/voice-it-paola-medium.tar.gz",
+        "models/MODEL_CARD"
+      ],
+      "warmup": "Ciao."
+    },
+    {
+      "id": "voice-pocket-it",
+      "title": "Voice: Pocket TTS, Italian",
+      "group": "Voices: Italian",
+      "kind": "localai",
+      "language": "it",
+      "engine": "pocket",
+      "hf_language": "italian_24l",
+      "size": 1930000000,
+      "shared_size": 1180000000,
+      "description": "Kyutai's Pocket TTS with its 24-layer Italian model, on the CPU: a more natural voice, about two seconds a sentence and 2 GB of memory while it runs. Its program is shared with the other Pocket TTS languages; its other voices (alba, rafael...) are fetched the first time you pick one.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-pocket-tts",
+      "backend_dir": "cpu-pocket-tts",
+      "model": {
+        "gallery": "localai@pocket-tts",
+        "name": "pocket-it",
+        "overrides": {
+          "backend": "cpu-pocket-tts",
+          "options": [
+            "default_voice:alba",
+            "language:italian_24l"
+          ]
+        }
+      },
+      "paths": [
+        "backends/cpu-pocket-tts",
+        "hf"
+      ],
+      "warmup": "Ciao."
+    },
+    {
+      "id": "voice-piper-nl",
+      "title": "Voice: Piper, Dutch",
+      "group": "Voices: Dutch",
+      "kind": "localai",
+      "language": "nl",
+      "engine": "piper",
+      "size": 141000000,
+      "shared_size": 78000000,
+      "description": "The lightest voice: Piper, on the CPU, a fraction of a second per sentence. One voice per language, and its program is shared with the other Piper languages.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-piper",
+      "backend_dir": "cpu-piper",
+      "model": {
+        "gallery": "localai@voice-nl_NL-pim-medium",
+        "name": "voice-nl_NL-pim-medium",
+        "overrides": {
+          "backend": "cpu-piper"
+        }
+      },
+      "paths": [
+        "backends/cpu-piper",
+        "models/nl_NL-pim-medium.onnx",
+        "models/nl_NL-pim-medium.onnx.json"
+      ],
+      "warmup": "Hallo."
+    },
+    {
+      "id": "voice-pocket-nl",
+      "title": "Voice: Pocket TTS, Dutch",
+      "group": "Voices: Dutch",
+      "kind": "localai",
+      "language": "nl",
+      "engine": "pocket",
+      "hf_language": "dutch_24l",
+      "size": 1930000000,
+      "shared_size": 1180000000,
+      "description": "Kyutai's Pocket TTS with its 24-layer Dutch model, on the CPU: a more natural voice, about two seconds a sentence and 2 GB of memory while it runs. Its program is shared with the other Pocket TTS languages; its other voices (alba, rafael...) are fetched the first time you pick one.",
+      "needed_by": [
+        "local-live"
+      ],
+      "requires": "localai",
+      "backend": "localai@cpu-pocket-tts",
+      "backend_dir": "cpu-pocket-tts",
+      "model": {
+        "gallery": "localai@pocket-tts",
+        "name": "pocket-nl",
+        "overrides": {
+          "backend": "cpu-pocket-tts",
+          "options": [
+            "default_voice:alba",
+            "language:dutch_24l"
+          ]
+        }
+      },
+      "paths": [
+        "backends/cpu-pocket-tts",
+        "hf"
+      ],
+      "warmup": "Hallo."
+    },
+    {
+      "id": "codex-live-audio",
+      "title": "WebRTC and audio",
+      "group": "Codex Live",
+      "kind": "system",
+      "size": 8000000,
+      "description": "What Codex Live talks through: GStreamer's WebRTC and Opus plugins, libnice, Python's GObject and libpulse.",
+      "needed_by": [
+        "codex-live"
+      ],
+      "packages": [
+        "python-gobject",
+        "gst-plugins-base",
+        "gst-plugins-good",
+        "gst-plugins-bad",
+        "libnice",
+        "libpulse"
+      ]
+    }
+  ]
+}
