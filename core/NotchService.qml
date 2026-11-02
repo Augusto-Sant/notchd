@@ -4,8 +4,6 @@ import Quickshell.Io
 import "settings"
 import "client"
 import "Config.js" as Config
-import "Live.js" as Live
-import "Components.js" as Components
 import "Terminal.js" as Terminal
 import "settings/Settings.js" as Settings
 
@@ -69,18 +67,17 @@ Item {
   property var hostSettingsPages: []
 
   // -------------------------------------------------------------- built-ins
-  readonly property var builtinModules: ({
-    "codex-live": Qt.resolvedUrl("modules/codex-live.qml"),
-    "local-live": Qt.resolvedUrl("modules/local-live.qml")
-  })
+  readonly property var builtinModules: ({})
   // The built-ins that live in the daemon (native/notchd-modules): no QML
   // file, only the JSON next to where it would be, which gives the settings
   // page its title and fields. The daemon announces each (`module`) and
   // the service makes a CoreModule for it.
   readonly property var coreModules: ({
     activities: Qt.resolvedUrl("modules/activities.qml"),
-    claude: Qt.resolvedUrl("modules/claude.qml"),
-    codex: Qt.resolvedUrl("modules/codex.qml"),
+    "claude": Qt.resolvedUrl("modules/claude.qml"),
+    "codex": Qt.resolvedUrl("modules/codex.qml"),
+    "codex-live": Qt.resolvedUrl("modules/codex-live.qml"),
+    "local-live": Qt.resolvedUrl("modules/local-live.qml"),
     media: Qt.resolvedUrl("modules/media.qml"),
     resources: Qt.resolvedUrl("modules/resources.qml"),
     timer: Qt.resolvedUrl("modules/timer.qml")
@@ -218,42 +215,21 @@ Item {
   }
 
   // ---------------------------------------------------------------- live
-  // Spoken conversations (`"live"` in their file, LiveModule): the bridge
-  // that carries the voice (core/live/codex-live.py; the QML tests put a
-  // fake in its place) and the `live` IPC.
-  readonly property string liveBridge: Quickshell.env("NOTCHD_LIVE_BRIDGE")
-    || Live.localPath(Qt.resolvedUrl("live/codex-live.py"), Quickshell.shellDir)
-  // The local one (core/live/local-live.py: Voxtype and LocalAI).
-  readonly property string localLiveBridge: Quickshell.env("NOTCHD_LOCAL_LIVE_BRIDGE")
-    || Live.localPath(Qt.resolvedUrl("live/local-live.py"), Quickshell.shellDir)
-  // The optional components the voice modules need (Components.js): the
-  // installer (core/components/install.py; the QML tests put a fake in its
-  // place), their registry, and their state while the settings are open.
-  readonly property string componentsInstaller: Quickshell.env("NOTCHD_COMPONENTS_INSTALLER")
-    || Live.localPath(Qt.resolvedUrl("components/install.py"), Quickshell.shellDir)
-  readonly property ComponentStore components: ComponentStore {
-    installer: svc.componentsInstaller
-    catalogPath: Live.localPath(Qt.resolvedUrl("components/components.json"), Quickshell.shellDir)
-    watching: svc.settingsOpen
-  }
+  // Spoken conversations (`"live"` in their file) are modules of the daemon
+  // (native/notchd-modules/src/voice.rs), which runs their bridges
+  // (core/live/*.py) and the optional components' installer; `live` and
+  // `component` are its IPC.
   function isLive(id) { return !!svc.moduleInfo[id] && !!svc.moduleInfo[id].live }
-  // A live module's IPC command (LiveModule.command): "ok", or what was
-  // wrong.
+  // A live module's IPC command: the daemon's module answers it.
   function liveCommand(id, command) {
     if (!svc.isLive(id)) {
       var ids = svc.availableModuleIds.filter(function(a) { return svc.isLive(a) })
       return "no live module " + id + (ids.length > 0 ? "; live modules: " + ids.join(", ") : "")
     }
-    var m = svc.moduleById(id)
-    return m ? m.command(command) : id + " module not loaded"
+    return svc.moduleById(id) ? svc.daemonIpc("live", [id, command], "ok") : id + " module not loaded"
   }
-  // A notch is open on `module` by a click or a shortcut (pinned, showing
-  // it): a live module talks only then.
-  function liveOpen(module) {
-    return svc.copies.some(function(c) {
-      return c.pinned && c.mode === "expanded" && c.shownModules.indexOf(module) !== -1
-    })
-  }
+  // The folder of this core (its sidecars are run by the daemon from it).
+  readonly property string coreDir: Settings.moduleInfoPath(Qt.resolvedUrl("NotchService.qml"), Quickshell.shellDir).replace(/\/[^\/]*$/, "")
 
   // Standalone modules (`"standalone": true` in their file) have a place of
   // their own, a notch that shows only them, and no notch of the config
@@ -519,7 +495,7 @@ Item {
   onCatalogReportChanged: Qt.callLater(svc.reportCatalog)
   onDefaultModulesChanged: Qt.callLater(svc.reportCatalog)
   function reportCatalog() {
-    if (svc.client.ready) svc.client.send({ t: "catalog", modules: JSON.parse(svc.catalogReport), defaultModules: svc.defaultModules })
+    if (svc.client.ready) svc.client.send({ t: "catalog", modules: JSON.parse(svc.catalogReport), defaultModules: svc.defaultModules, coreDir: svc.coreDir })
   }
   readonly property string screensReport: {
     var c = svc.compositor
@@ -682,16 +658,10 @@ Item {
   // the top-level key it inherits.
   // "general" has what applies to every notch, "modules" every module the
   // host can load, each module's own fields on its page under it.
-  // Component rows filled in from the registry, and the choices that wait on
-  // a component locked until it is installed (Components.decorate). It
-  // follows the set of installed components, never an installation's
-  // progress.
-  readonly property var settingsSchema: Components.decorate(
-    Settings.windowFields(svc.daemonSchema ? svc.daemonSchema.fields : [], svc.moduleCatalog, Qt.resolvedUrl("settings/previews/Edge.qml"))
-    .concat(Components.overviewFields(svc.components.catalog, svc.components.settled),
-            Settings.moduleFields(svc.moduleCatalog, Qt.resolvedUrl("settings/previews/Edge.qml")),
-            svc.hostSettingsSchema || []),
-    svc.components.catalog, svc.components.loaded ? svc.components.installed : null, svc.moduleTitles)
+  // The daemon's schema has every page, the Components page and the
+  // components' rows included (with their state); the host adds its own fields.
+  readonly property var settingsSchema: Settings.windowFields(svc.daemonSchema ? svc.daemonSchema.fields : [], svc.moduleCatalog, Qt.resolvedUrl("settings/previews/Edge.qml"))
+    .concat(svc.hostSettingsSchema || [])
   // id -> title of every module, for the texts that name them.
   readonly property var moduleTitles: {
     var out = {}
@@ -1038,7 +1008,7 @@ Item {
     function claude(command: string): string { return svc.agentCommand("claude", command) }
     function codex(command: string): string { return svc.agentCommand("codex", command) }
     // A spoken conversation, by its module's id: "start" opens its notch and
-    // starts talking, "stop", "toggle", "mute", "unmute"; see LiveModule.qml.
+    // starts talking, "stop", "toggle", "mute", "unmute"; see native/notchd-modules/src/voice.rs.
     function live(id: string, command: string): string { return svc.liveCommand(id, command) }
     function state(): string {
       return JSON.stringify({

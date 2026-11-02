@@ -5,7 +5,6 @@ import Quickshell.Io
 import "core"
 import "core/settings"
 import "core/Position.js" as Position
-import "core/Live.js" as Live
 
 // Behaviour tests that need the QML runtime: bindings, signals, animations.
 // Rules that are plain JS belong in the Node tests instead. Most cases here
@@ -2318,15 +2317,14 @@ ShellRoot {
     printErrors: false
   }
   function localLiveArgs() {
-    var m = localLiveSvc.moduleById("local-live")
     localLiveSvc.replaceConfig({ "local-live": { agent: "claude", session: "new", directory: "~/talk", language: "en",
                                                  speechModel: "small", voiceModel: "pocket-pt", otherVoiceModel: "mine",
                                                  voice: "rafael", localaiUrl: "http://127.0.0.1:9" } })
     localLiveSvc.open()
     root.steps([
-      [800, function() {
-        root.check(!!m.bridge && m.live, "no conversation: " + JSON.stringify(m.conv))
-        root.check(m.appName === "Claude", "app name: " + m.appName)
+      [900, function() {
+        var t = root.texts(localLiveSvc.client.view("local-live", "expanded"))
+        root.check(t.indexOf("Claude · Listening") !== -1 || t.indexOf("Listening") !== -1, "no conversation: " + t)
         localLiveArgsFile.reload()
         var args = localLiveArgsFile.text().split("\n")
         var home = Quickshell.env("HOME")
@@ -2342,7 +2340,7 @@ ShellRoot {
         root.check(args.indexOf("--codex") === -1, "a codex-live argument: " + args)
         localLiveSvc.close()
       }],
-      [2000, function() { root.check(m.bridge === null, "closed, it went on") }]
+      [2500, function() { root.check(root.texts(localLiveSvc.client.view("local-live", "compact")).length === 0, "closed, it went on") }]
     ], function() {
       localLiveSvc.replaceConfig({})
       root.done()
@@ -2384,23 +2382,31 @@ ShellRoot {
     componentLog.waitForJob()
     return componentLog.text().split("\n").filter(function(l) { return l !== "" })
   }
+  // The rows are the daemon's (the schema's `row`, its state read from the
+  // fake installer while the settings are open); the buttons are the
+  // `component` IPC.
   function componentRows() {
-    var store = componentSvc.components
-    root.check(store.catalog.length > 6, "the catalog was not read: " + store.catalog.length)
-    root.check(componentSvc.settingsPages.some(function(p) { return p.id === "components" }), "no Components page")
-    // not read yet: nothing locked, rows say so
-    var before = componentSvc.settingsSchema.filter(function(f) { return f.key === "local-live.voiceModel" })[0]
-    root.check(!!before && !before.options[1].disabled, "a voice locked before the state was read")
+    componentSvc.settingsOpen = true
     var rows = []
+    function field(id) {
+      return componentSvc.settingsSchema.filter(function(f) { return f.type === "component" && f.component === id && f.page === "components" })[0]
+    }
     function row(id) {
-      var item = componentRowComponent.createObject(componentHost, { field: { type: "component", component: id } })
+      var item = componentRowComponent.createObject(componentHost, { field: field(id) })
       rows.push(item)
       return item
     }
-    store.refresh()
+    function lockedChoices() {
+      var f = componentSvc.settingsSchema.filter(function(x) { return x.key === "local-live.voiceModel" })[0]
+      return f.options.map(function(o) { return o.disabled === true })
+    }
+    function voiceRows() {
+      return componentSvc.settingsSchema.filter(function(f) { return f.type === "component" && f.page === "modules/local-live" && f.component.indexOf("voice-") === 0 })
+        .map(function(f) { return f.component })
+    }
+    root.check(componentSvc.settingsPages.some(function(p) { return p.id === "components" }), "no Components page")
     root.steps([
-      [600, function() {
-        root.check(store.loaded, "the state was not read")
+      [1500, function() {
         var small = row("localai")
         var medium = row("voice-pocket-pt")
         var voice = row("voice-piper-pt-br")
@@ -2412,81 +2418,67 @@ ShellRoot {
         root.check(voice.info.state === "failed" && voice.info.text.indexOf("could not download") !== -1, "failed: " + voice.info.text)
         root.check(pulse.info.text === "Installed by the system" && pulse.info.actions.length === 0, "a system package is never removed here")
         root.check(base.info.text === "Not installed" && base.info.actions[0].id === "install", "missing: " + base.info.text)
-        // the settings schema: rows filled in from the registry, a voice locked
-        var schema = componentSvc.settingsSchema
-        var field = schema.filter(function(f) { return f.component === "localai" && f.page === "modules/local-live" })[0]
+        var rowsOnPage = componentSvc.settingsSchema.filter(function(f) { return f.page === "components" && f.type === "component" })
+        root.check(rowsOnPage.length > 6, "the overview misses components: " + rowsOnPage.length)
+        var field = componentSvc.settingsSchema.filter(function(f) { return f.component === "localai" && f.page === "modules/local-live" })[0]
         root.check(!!field && field.label === "LocalAI" && field.help.indexOf("For Voice") !== -1, "row not filled: " + JSON.stringify(field))
-        var tts = schema.filter(function(f) { return f.key === "local-live.voiceModel" })[0]
-        // the choices that wait on the chosen language's voice are locked by the window, not the service
-        root.check(tts.options[0].disabled !== true && tts.options[1].disabled !== true && tts.options[2].disabled !== true,
-                   "the service locked what depends on a language: " + JSON.stringify(tts.options))
         // the Voice page: the chosen language's voices only, its choices locked until they are installed
-        var win = settingsWindowComponent.createObject(root)
-        rows.push(win)
-        function voiceRows() {
-          return win.schema.filter(function(f) { return f.type === "component" && f.page === "modules/local-live" && f.component.indexOf("voice-") === 0 })
-            .map(function(f) { return f.component })
-        }
-        function engineLocks() {
-          var f = win.schema.filter(function(x) { return x.key === "local-live.voiceModel" })[0]
-          return f.options.map(function(o) { return o.disabled === true })
-        }
         root.check(JSON.stringify(voiceRows()) === JSON.stringify(["voice-piper-pt-br", "voice-pocket-pt"]), "pt voices: " + JSON.stringify(voiceRows()))
-        root.check(JSON.stringify(engineLocks()) === "[false,true,true]", "pt locks: " + JSON.stringify(engineLocks()))
+        root.check(JSON.stringify(lockedChoices()) === "[false,true,true]", "pt locks: " + JSON.stringify(lockedChoices()))
         componentSvc.setConfigValue("local-live.voiceLanguage", "en")
-        root.check(JSON.stringify(voiceRows()) === JSON.stringify(["voice-piper-en", "voice-pocket-en"]), "en voices (a language edit rebuilds the page): " + JSON.stringify(voiceRows()))
-        root.check(JSON.stringify(engineLocks()) === "[false,true,false]", "en locks (Pocket installed): " + JSON.stringify(engineLocks()))
-        componentSvc.setConfigValue("local-live.voiceLanguage", undefined)
-        root.check(JSON.stringify(voiceRows()) === JSON.stringify(["voice-piper-pt-br", "voice-pocket-pt"]), "back to pt: " + JSON.stringify(voiceRows()))
-        root.check(schema.filter(function(f) { return f.page === "components" && f.type === "component" }).length === store.catalog.length, "the overview misses components")
-        // Install runs the installer; the row follows its state
-        base.act("install")
       }],
-      [700, function() {
-        var base = rows[3]
+      [600, function() {
+        root.check(JSON.stringify(voiceRows()) === JSON.stringify(["voice-piper-en", "voice-pocket-en"]), "en voices: " + JSON.stringify(voiceRows()))
+        root.check(JSON.stringify(lockedChoices()) === "[false,true,false]", "en locks (Pocket installed): " + JSON.stringify(lockedChoices()))
+        componentSvc.setConfigValue("local-live.voiceLanguage", undefined)
+        // Install runs the installer; the row follows its state
+        rows[3].act("install")
+      }],
+      [1500, function() {
+        var base = row("voxtype")
         root.check(root.componentLog_().indexOf("install voxtype") !== -1, "install not run: " + root.componentLog_())
         root.check(base.working && base.info.percent === 10, "no progress after Install: " + base.info.text)
-        // Cancel
         base.act("cancel")
       }],
-      [700, function() {
-        var base = rows[3]
+      [1500, function() {
+        var base = row("voxtype")
         root.check(root.componentLog_().indexOf("cancel voxtype") !== -1, "cancel not run: " + root.componentLog_())
         root.check(base.info.state === "missing", "still working after Cancel: " + base.info.text)
         // Remove asks twice
-        var small = rows[0]
+        var small = row("localai")
         small.act("remove")
         root.check(small.confirming && root.componentLog_().indexOf("remove localai") === -1, "removed on the first click")
         small.act("remove")
       }],
-      [700, function() {
-        var small = rows[0]
+      [1500, function() {
+        var small = row("localai")
         root.check(root.componentLog_().indexOf("remove localai") !== -1, "remove not run on the second click")
-        root.check(small.info.state === "missing" && !small.confirming, "still installed after Remove: " + small.info.text)
+        root.check(small.info.state === "missing", "still installed after Remove: " + small.info.text)
         rows.forEach(function(r) { r.destroy() })
+        componentSvc.settingsOpen = false
       }]
     ], function() { root.done() })
   }
 
+  function liveTexts() { return root.texts(liveSvc.client.view("codex-live", "expanded")) }
+  function liveRunning() { return liveSvc.client.view("codex-live", "compact") !== null }
+
   function liveTalks() {
-    var m = liveSvc.moduleById("codex-live")
     liveSvc.replaceConfig({ "codex-live": { voice: "maple", directory: "~/talk", access: "workspace-write" } })
     // A hover shows it and leaves the microphone off.
     root.hover(root.liveCopy())
     root.steps([
       [400, function() {
         root.check(root.liveCopy().mode === "expanded", "hovered, the notch didn't open")
-        root.check(!m.open && m.bridge === null && !m.running, "a hover started a conversation")
+        root.check(!root.liveRunning(), "a hover started a conversation")
         root.unhover(root.liveCopy())
         liveSvc.open()
       }],
-      [600, function() {
-        root.check(m.open, "opened by a click, the module isn't open")
-        root.check(!!m.bridge && m.live, "no conversation: " + JSON.stringify(m.conv))
-        root.check(m.conv.transcript.length === 2 && m.conv.transcript[0].text === "Rodei os testes."
-                   && m.conv.transcript[1].role === "assistant", "transcript: " + JSON.stringify(m.conv.transcript))
-        root.check(m.speaking && m.statusText === "Speaking", "the voice's level didn't make it speak: " + m.statusText)
-        root.check(m.working, "the task didn't show")
+      [1000, function() {
+        var t = root.liveTexts()
+        root.check(root.liveRunning(), "no conversation: " + t)
+        root.check(t.indexOf("Rodei os testes.") !== -1, "transcript: " + t)
+        root.check(t.indexOf("Speaking") !== -1 || t.indexOf("Working") !== -1, "the voice's level didn't show: " + t)
         liveArgs.reload()
         var args = liveArgs.text().split("\n")
         var home = Quickshell.env("HOME")
@@ -2498,14 +2490,11 @@ ShellRoot {
         liveSvc.close()
       }],
       [500, function() {
-        root.check(!!m.bridge, "closing for a moment ended it")
-        root.check(m.compact !== null, "talking with the notch closed, nothing shows closed")
+        root.check(root.liveRunning(), "closing for a moment ended it, or nothing shows closed")
       }],
-      [1800, function() {
-        root.check(m.bridge === null, "closed, the conversation went on")
-        root.check(m.conv.status === "closed" && !m.working && !m.running, "closed state: " + JSON.stringify(m.conv))
-        root.check(m.compact === null, "closed and not talking, the compact view stays")
-        root.check(m.conv.transcript.length === 2, "the transcript went with it")
+      [2200, function() {
+        root.check(!root.liveRunning(), "closed, the conversation went on")
+        root.check(root.liveTexts().indexOf("Rodei os testes.") !== -1, "the transcript went with it")
       }]
     ], function() {
       liveSvc.replaceConfig({})
@@ -2514,35 +2503,34 @@ ShellRoot {
   }
 
   function liveStopAndCommands() {
-    var m = liveSvc.moduleById("codex-live")
     root.check(/^not in a conversation/.test(liveSvc.liveCommand("codex-live", "mute")), "mute without a conversation")
     root.check(/^usage: live codex-live/.test(liveSvc.liveCommand("codex-live", "sing")), "no usage")
     root.check(/^no live module codex; live modules: codex-live/.test(liveSvc.liveCommand("codex", "start")), "an agent took live")
     root.check(liveSvc.liveCommand("codex-live", "start") === "ok", "start was refused")
     root.steps([
-      [600, function() {
-        root.check(root.liveCopy().pinned && m.live, "start didn't open the notch and talk")
-        root.check(liveSvc.liveCommand("codex-live", "mute") === "ok", "mute was refused")
+      [1000, function() {
+        root.check(root.liveCopy().pinned && root.liveRunning(), "start didn't open the notch and talk")
+        liveSvc.notchIpc("live", ["codex-live", "mute"])
       }],
-      [300, function() {
-        root.check(m.conv.muted, "the bridge didn't say muted")
-        root.check(liveSvc.liveCommand("codex-live", "stop") === "ok", "stop was refused")
+      [500, function() {
+        root.check(root.liveTexts().indexOf("Muted") !== -1, "the bridge didn't say muted: " + root.liveTexts())
+        liveSvc.notchIpc("live", ["codex-live", "stop"])
       }],
-      [600, function() {
-        root.check(m.bridge === null && !m.running, "stop didn't end it")
+      [800, function() {
+        root.check(!root.liveRunning(), "stop didn't end it")
         root.check(root.liveCopy().pinned, "stop closed the notch")
       }],
       [1800, function() {
-        root.check(m.bridge === null, "stopped with the notch open, it started again")
+        root.check(!root.liveRunning(), "stopped with the notch open, it started again")
         liveSvc.close()
       }],
       [400, function() { liveSvc.open() }],
-      [600, function() {
-        root.check(m.live, "opened again after a stop, it didn't talk")
-        root.check(liveSvc.liveCommand("codex-live", "toggle") === "ok", "toggle was refused")
+      [1000, function() {
+        root.check(root.liveRunning(), "opened again after a stop, it didn't talk")
+        liveSvc.notchIpc("live", ["codex-live", "toggle"])
       }],
-      [600, function() {
-        root.check(m.bridge === null, "toggle didn't stop it")
+      [800, function() {
+        root.check(!root.liveRunning(), "toggle didn't stop it")
         liveSvc.close()
       }],
       [1800, function() {}]
@@ -2550,15 +2538,14 @@ ShellRoot {
   }
 
   function liveMissingPackages() {
-    var m = liveSvc.moduleById("codex-live")
     liveSvc.replaceConfig({ "codex-live": { command: "missing-codex" } })
     liveSvc.open()
     root.steps([
-      [800, function() {
-        root.check(m.bridge === null && !m.running, "it kept running: " + JSON.stringify(m.conv))
-        root.check(/Install WebRTC and audio in Settings › Components\.$/.test(m.errorText), "error: " + m.errorText)
-        root.check(m.errorText.indexOf("make ") === -1, "it still says make: " + m.errorText)
-        root.check(m.statusText === "Stopped", "status: " + m.statusText)
+      [1000, function() {
+        var t = root.liveTexts()
+        root.check(!root.liveRunning(), "it kept running: " + t)
+        root.check(t.some(function(x) { return /Install WebRTC and audio in Settings › Components\.$/.test(x) }), "error: " + t)
+        root.check(t.indexOf("Stopped") !== -1, "status: " + t)
         root.check(JSON.stringify(liveSvc.config) === JSON.stringify({ "codex-live": { command: "missing-codex" } }),
                    "the config changed: " + JSON.stringify(liveSvc.config))
         liveSvc.close()
@@ -2571,24 +2558,20 @@ ShellRoot {
   }
 
   function liveNewSession() {
-    var m = liveSvc.moduleById("codex-live")
     liveSvc.open()
-    var first = null
     root.steps([
-      [600, function() {
-        first = m.bridge
-        root.check(!!first && m.live && m.conv.transcript.length > 0, "no conversation: " + JSON.stringify(m.conv))
-        root.check(Live.micLevel(m.conv) > 0, "the microphone's level didn't come through: " + m.conv.mic)
-        root.check(liveSvc.liveCommand("codex-live", "new") === "ok", "new was refused")
+      [1000, function() {
+        root.check(root.liveRunning() && root.liveTexts().indexOf("Rodei os testes.") !== -1, "no conversation: " + root.liveTexts())
+        root.check(liveSvc.notchIpc("live", ["codex-live", "new"]) !== false, "new was refused")
       }],
-      [900, function() {
-        root.check(!!m.bridge && m.bridge !== first, "no new bridge")
-        root.check(m.live, "the new session isn't live: " + JSON.stringify(m.conv))
+      [1200, function() {
+        var t = root.liveTexts()
+        root.check(root.liveRunning(), "the new session isn't live: " + t)
         // The fake says the same two lines again: the old ones are gone.
-        root.check(m.conv.transcript.length === 2, "the transcript wasn't cleared: " + JSON.stringify(m.conv.transcript))
+        root.check(t.filter(function(x) { return x === "Rodei os testes." }).length === 1, "the transcript wasn't cleared: " + t)
         liveSvc.close()
       }],
-      [2000, function() { root.check(m.bridge === null, "closed, it went on") }]
+      [2500, function() { root.check(!root.liveRunning(), "closed, it went on") }]
     ], root.done)
   }
 

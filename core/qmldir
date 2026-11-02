@@ -11,7 +11,5 @@ NotchCopy 1.0 NotchCopy.qml
 DepthReport 1.0 DepthReport.qml
 NotchWindow 1.0 NotchWindow.qml
 KeepShown 1.0 KeepShown.qml
-LiveModule 1.0 LiveModule.qml
-ComponentStore 1.0 ComponentStore.qml
 DaemonDown 1.0 DaemonDown.qml
 DaemonDownRow 1.0 DaemonDownRow.qml

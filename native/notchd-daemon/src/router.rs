@@ -37,7 +37,10 @@ pub fn route(store: &mut Store, msg: &ToDaemon, now: u64) -> Vec<ToUi> {
         ToDaemon::Key(k) => store.key(&k.key, &k.mods, now),
         ToDaemon::Tab(t) => store.tab(&t.notch, &t.screen, &t.module, now),
         ToDaemon::Settings(s) => store.settings(s.open, s.page.clone()),
-        ToDaemon::Catalog(c) => store.set_ui_catalog(c.modules.clone(), c.default_modules.clone()),
+        ToDaemon::Catalog(c) => {
+            store.set_ui_catalog(c.modules.clone(), c.default_modules.clone());
+            store.set_core_dir(c.core_dir.clone());
+        }
         ToDaemon::Measure(m) => {
             store.measure(&m.notch, &m.screen, m.rest.0, m.compact.0, m.baseline.0)
         }

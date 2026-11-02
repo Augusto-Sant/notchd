@@ -488,6 +488,10 @@ pub struct Catalog {
     /// when absent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_modules: Option<Vec<String>>,
+    /// The folder of the UI's `core/` (its sidecars, `live/` and
+    /// `components/`, which the daemon runs): a path on the daemon's machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_dir: Option<String>,
 }
 
 /// The reserve target the UI now has mapped.

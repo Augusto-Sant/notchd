@@ -67,6 +67,10 @@ fn default_true() -> bool {
 
 // ---- the registry ---------------------------------------------------------
 
+/// The registry as the repo has it (`core/components/components.json`): the
+/// daemon is built from the same tree, so it needs no path to read it.
+pub const REGISTRY: &str = include_str!("../../../core/components/components.json");
+
 /// How a component is installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

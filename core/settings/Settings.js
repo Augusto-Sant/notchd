@@ -581,12 +581,11 @@ function catalogIds(catalog) {
 // (the daemon's), the built-in modules' (from the catalog) and the daemon's
 // pages of a user module. `daemonPages` is the schema's `pages`.
 function windowPages(core, host, daemonPages, catalog) {
-  var own = catalogIds(catalog)
   var subs = Array.prototype.filter.call(daemonPages || [], function(p) { return !!p && !!p.sub })
   function page(p) { return { id: p.id, label: p.label, icon: p.icon } }
   var notches = subs.filter(function(p) { return notchIndexOfPage(p.id) !== -1 })
-  var users = subs.filter(function(p) { return pageModule(p.id) !== "" && own.indexOf(pageModule(p.id)) === -1 })
-  return mergePages(core, host).concat(notches.map(page), modulePages(catalog), users.map(page))
+  var modules = subs.filter(function(p) { return pageModule(p.id) !== "" })
+  return mergePages(core, host).concat(notches.map(page), modules.map(page))
 }
 
 // The fields of the window the daemon's schema gives: all but the built-in
@@ -595,11 +594,8 @@ function windowPages(core, host, daemonPages, catalog) {
 // config for them). The edge cards get `preview`, a QML file the daemon
 // cannot name.
 function windowFields(daemonFields, catalog, edgePreview) {
-  var own = catalogIds(catalog)
   var out = []
   Array.prototype.forEach.call(daemonFields || [], function(f) {
-    var module = pageModule(pageOf(f))
-    if (module !== "" && own.indexOf(module) !== -1) return
     var field = Object.assign({}, f)
     delete field.value
     delete field.visible

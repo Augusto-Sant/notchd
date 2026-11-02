@@ -2,7 +2,7 @@ import QtQuick
 import "../.."
 import ".."
 
-// The Voice disc (core/LiveModule.qml): a 96 px accent disc with a line
+// The Voice disc (native/notchd-modules/src/voice.rs): a 96 px accent disc with a line
 // border that swells with the level, `1 + value * .35` over 90 ms, and its
 // `child` (the microphone glyph) centered inside. Plain rectangles, so it
 // needs no shader. It reserves the room of the fully swollen disc, so the

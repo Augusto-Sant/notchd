@@ -12,6 +12,7 @@
 //! `Notch.qml` and `NotchCopy.qml` are the model; each section names its
 //! source.
 
+use crate::components;
 use crate::config::{self, NotchSpec};
 use crate::navigate::{self, Action, KeyName, NavMode, SHIFT, StepState};
 use crate::peek::{self, CopyPeek, Missed};
@@ -233,6 +234,12 @@ pub struct Store {
     /// What a notch lists when the config lists none: the host's
     /// `defaultModules` (`catalog`), else [`DEFAULT_MODULES`].
     default_modules: Option<Vec<String>>,
+    /// The UI's `core/` folder (`catalog`).
+    core_dir: Option<String>,
+    /// The optional components (docs/settings.md, "Components"): the registry,
+    /// and what the installer last said of each; `None` until it has.
+    components: Vec<components::Component>,
+    component_states: Option<BTreeMap<String, components::ComponentState>>,
     schema_rev: u64,
     last_schema: Option<Schema>,
 
@@ -322,6 +329,7 @@ impl Store {
             config: json!({}),
             settings_page: "general".into(),
             window_linger: WINDOW_LINGER_MS,
+            components: components::parse_catalog(components::REGISTRY),
             ..Store::default()
         }
     }
@@ -1966,6 +1974,34 @@ impl Store {
         self.default_modules = defaults;
     }
 
+    /// Where the UI's `core/` is (`catalog`'s `coreDir`): the sidecars the
+    /// daemon runs are in it.
+    pub fn set_core_dir(&mut self, dir: Option<String>) {
+        if dir.is_some() {
+            self.core_dir = dir;
+        }
+    }
+
+    pub fn core_dir(&self) -> Option<&str> {
+        self.core_dir.as_deref()
+    }
+
+    /// The registry of optional components (`components.json`).
+    pub fn component_catalog(&self) -> &[components::Component] {
+        &self.components
+    }
+
+    /// What the installer said of every component (`status`): the settings'
+    /// rows and the choices that wait on a component follow it.
+    pub fn set_component_states(&mut self, states: BTreeMap<String, components::ComponentState>) {
+        self.component_states = Some(states);
+    }
+
+    /// The last state read, `None` before the first.
+    pub fn component_states(&self) -> Option<&BTreeMap<String, components::ComponentState>> {
+        self.component_states.as_ref()
+    }
+
     /// Whether the UI's catalog lists a module: a host declares the modules
     /// it owns (the Omarchy `osd`, which the daemon runs only for a host that
     /// forwards its target).
@@ -2016,6 +2052,10 @@ impl Store {
             supports_workspaces: self.screens.as_ref().is_some_and(|s| s.supports_workspaces),
             catalog: &catalog,
             default_modules: &self.default_refs(),
+            components: Some(schema::Components {
+                catalog: &self.components,
+                states: self.component_states.as_ref(),
+            }),
         })
     }
 

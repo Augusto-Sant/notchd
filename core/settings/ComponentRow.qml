@@ -1,13 +1,13 @@
 import QtQuick
 import QtQuick.Layouts
 import ".."
-import "../Components.js" as Components
 
 // `component` field: one optional component (core/components/components.json)
 // as a row: what state it is in, a bar while it installs, and the buttons that
-// make sense (Install, Cancel, Remove). It has no config value: the state
-// comes from the service's ComponentStore, so `value` is unused and `edited`
-// never fires; it takes the contract's `field`, `value` and `edited` anyway.
+// make sense (Install, Cancel, Remove). It has no config value: the state is
+// the daemon's, in the field's `row` (the schema), and a button is the `component`
+// IPC, so `value` is unused and `edited` never fires; it takes the contract's
+// `field`, `value` and `edited` anyway.
 // Removing asks twice (a click, then Sure? within three seconds): a 6 GB
 // environment is a long download to get back.
 ColumnLayout {
@@ -18,19 +18,16 @@ ColumnLayout {
   property var svc: null
   signal edited(var value)
 
-  readonly property var store: control.svc ? control.svc.components : null
-  readonly property var component: control.store ? Components.byId(control.store.catalog, control.field.component) : null
-  readonly property var info: control.component ? Components.view(control.component, control.store.states[control.component.id], Components.sharesBackend(control.component, control.store.catalog, control.store.installed)) : null
+  readonly property string componentId: control.field.component ? String(control.field.component) : ""
+  readonly property var info: control.field.row ? control.field.row : null
   readonly property bool working: !!control.info && control.info.state === "working"
   property bool confirming: false
 
   function act(id) {
-    if (!control.store || !control.component) return
+    if (!control.svc || control.componentId === "") return
     if (id === "remove" && !control.confirming) { control.confirming = true; confirmTimer.restart(); return }
     control.confirming = false
-    if (id === "remove") control.store.remove(control.component.id)
-    else if (id === "cancel") control.store.cancel(control.component.id)
-    else control.store.install(control.component.id)
+    control.svc.notchIpc("component", [id === "remove" || id === "cancel" ? id : "install", control.componentId])
   }
 
   spacing: Theme.space(8)
