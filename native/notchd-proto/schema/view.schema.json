@@ -33,6 +33,32 @@
         "surface"
       ]
     },
+    "IconName": {
+      "type": "string",
+      "description": "A named icon. `examples` is every name the official modules send (notchd-proto's icons::NAMES); an unknown name is not an error, the UI draws `glyph` instead.",
+      "examples": [
+        "media-playback-start",
+        "media-playback-pause",
+        "media-playback-stop",
+        "media-skip-forward",
+        "media-skip-backward",
+        "audio-x-generic",
+        "audio-input-microphone",
+        "microphone-disabled",
+        "list-add",
+        "view-refresh",
+        "window-close",
+        "alarm",
+        "notification",
+        "dialog-warning",
+        "utilities-terminal",
+        "drive-harddisk",
+        "cpu",
+        "memory",
+        "focus",
+        "coffee"
+      ]
+    },
     "TextSize": {
       "type": "string",
       "enum": [
@@ -433,18 +459,41 @@
           "description": "At least this wide, in design pixels."
         },
         "glyph": {
-          "type": "string"
+          "type": "string",
+          "description": "A Nerd Font codepoint: the fallback for a `name` the UI does not know. An icon needs a `glyph` or a `name` (the core enforces it)."
+        },
+        "name": {
+          "$ref": "#/$defs/IconName"
         },
         "tone": {
           "$ref": "#/$defs/Tone"
         },
         "size": {
-          "type": "number"
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "$ref": "#/$defs/TextSize"
+            }
+          ],
+          "description": "Design pixels, or a text size (the icon beside a text of that size)."
         }
       },
       "required": [
-        "t",
-        "glyph"
+        "t"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "glyph"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "Image": {
@@ -796,6 +845,9 @@
         },
         "glyph": {
           "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/IconName"
         },
         "label": {
           "type": "string"

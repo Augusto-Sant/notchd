@@ -18,7 +18,7 @@
 //! messages a second while you look at it and none while you don't.
 
 use crate::module::{Bridge, CoreModule, Ctx, Effect, Facts, Shown, SidecarCmd, SidecarStart};
-use crate::tree::{column, glyph, node, row, text, with};
+use crate::tree::{Ic, column, glyph, icon, icon_button, node, row, text, with};
 use notchd_core::js;
 use notchd_core::live::{self, Action, Event, Line, Role, State};
 use notchd_core::settings::{parse_module_info, setting_default};
@@ -38,11 +38,11 @@ const LEVEL_STEPS: f64 = 20.0;
 /// The transcript shows this many lines.
 const SHOWN_LINES: usize = 8;
 
-const MIC: u32 = 0xF036C;
-const MIC_OFF: u32 = 0xF036D;
-const STOP: u32 = 0xF04DB;
-const RESTART: u32 = 0xF0709;
-const CLOSE: u32 = 0xF0156;
+const MIC: Ic = ("audio-input-microphone", 0xF036C);
+const MIC_OFF: Ic = ("microphone-disabled", 0xF036D);
+const STOP: Ic = ("media-playback-stop", 0xF04DB);
+const RESTART: Ic = ("view-refresh", 0xF0709);
+const CLOSE: Ic = ("window-close", 0xF0156);
 
 /// What distinguishes the two voice modules.
 #[derive(Clone, Copy)]
@@ -367,11 +367,11 @@ impl Voice {
             {"c": "rect", "x": 0, "y": 0, "w": size, "h": size, "r": (size / 4.0).round(),
              "fill": "foreground"},
             {"c": "text", "x": (size * 0.2).round(), "y": (size * 0.16).round(),
-             "text": glyph(MIC), "tone": "background", "size": "caption"}]})
+             "text": glyph(MIC.1), "tone": "background", "size": "caption"}]})
     }
 
-    fn button(code: u32, action: &str, tooltip: &str) -> Value {
-        json!({"t": "button", "glyph": glyph(code), "action": action, "tooltip": tooltip})
+    fn button(ic: Ic, action: &str, tooltip: &str) -> Value {
+        with(icon_button(ic, action), "tooltip", json!(tooltip))
     }
 
     fn line_node(l: &Line) -> Value {
@@ -444,8 +444,7 @@ impl Voice {
                 with(
                     json!({"t": "stack", "children": [
                         {"t": "meter", "value": self.voice, "style": "disc", "size": 96,
-                         "child": {"t": "icon", "glyph": glyph(if self.conv.muted { MIC_OFF } else { MIC }),
-                                   "size": 28}}]}),
+                         "child": icon(if self.conv.muted { MIC_OFF } else { MIC }, "", json!(28))}]}),
                     "height",
                     json!(220),
                 ),
@@ -515,7 +514,7 @@ impl CoreModule for Voice {
         Facts {
             priority: 45,
             active: true,
-            icon: glyph(MIC),
+            icon: glyph(MIC.1),
             expanded_width: 460,
             ..Facts::default()
         }

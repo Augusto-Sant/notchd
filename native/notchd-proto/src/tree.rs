@@ -129,12 +129,25 @@ pub struct Text {
 pub struct Icon {
     #[serde(flatten)]
     pub common: Common,
-    /// A codepoint string (Nerd Font in v1).
-    pub glyph: String,
+    /// A codepoint string (Nerd Font): the fallback for a `name` the UI does
+    /// not know. An icon needs a `glyph` or a `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glyph: Option<String>,
+    /// A named icon (`icons::NAMES`); an unknown one is not an error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tone: Option<Tone>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size: Option<Num>,
+    pub size: Option<IconSize>,
+}
+
+/// Design pixels, or a text size (the icon beside a text of that size).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum IconSize {
+    Px(Num),
+    Text(TextSize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,6 +300,9 @@ pub struct Button {
     pub common: Common,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub glyph: Option<String>,
+    /// A named icon, as an `icon`'s; `glyph` is the fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -398,6 +414,9 @@ impl Node {
                     other.kind()
                 )),
             },
+            Node::Icon(i) if i.glyph.is_none() && i.name.is_none() => {
+                Err("icon needs a glyph or a name".into())
+            }
             Node::Text(t) if t.lines == Some(0) => Err("text.lines must be at least 1".into()),
             Node::Equalizer(e) if e.bars == Some(0) => {
                 Err("equalizer.bars must be at least 1".into())

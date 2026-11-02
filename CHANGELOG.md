@@ -4,6 +4,10 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+
+- Icons in a module's view can have a `name` (`media-playback-start`, `window-close`...) next to the Nerd Font `glyph`, so a UI without Nerd Fonts can draw its own symbol; `glyph` stays as the fallback, and an `icon`'s `size` can be a text size. The built-in modules send both; nothing changes on screen. See "Named icons" in `docs/architecture.md`.
+
 ## [0.4.0] — 2026-11-02
 
 ### Added

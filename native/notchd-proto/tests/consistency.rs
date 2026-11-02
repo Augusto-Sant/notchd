@@ -53,6 +53,15 @@ fn the_schema_enums_match_the_types() {
 }
 
 #[test]
+fn the_schema_lists_the_icon_names() {
+    let schema = schema::load();
+    assert_eq!(
+        schema["$defs"]["IconName"]["examples"],
+        json!(notchd_proto::icons::NAMES)
+    );
+}
+
+#[test]
 fn slots_are_the_five_of_notch_module() {
     assert_eq!(
         names(&Slot::ALL),
