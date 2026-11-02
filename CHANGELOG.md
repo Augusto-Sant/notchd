@@ -76,6 +76,7 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 
+- A user module in `~/.config/notchd/modules/` now shows in the settings like a built-in: in the Modules page, in each notch's list of modules (to turn on), with its own page for the `settings` of its manifest and, if it says `standalone`, its place. The daemon had it all, but the settings window listed only the modules it read from its own files.
 - After the daemon is killed, the shell always reconnects to the one it brings back: a race could leave it with no attempt pending, and "notchd not running" stayed until a settings edit.
 - An open notch that follows the focus stays on the screen the pointer opened it on, instead of jumping to another screen when the focus moves while it is open.
 - `claude` and `codex` down a side edge: the working dot sits on the mark's corner, instead of keeping an empty place under every mark while it is off.

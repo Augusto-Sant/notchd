@@ -104,8 +104,15 @@ Item {
       if (out.indexOf(host[i]) === -1) out.push(host[i])
     return out
   }
-  // Every module this host can load: those, then the config's terminals.
-  readonly property var availableModuleIds: svc.fileModuleIds.concat(svc.terminalSpecs.map(function(t) { return t.id }))
+  // The modules this host knows of itself: those, then the config's terminals.
+  readonly property var ownModuleIds: svc.fileModuleIds.concat(svc.terminalSpecs.map(function(t) { return t.id }))
+  // The user modules (folders of `modules/` in the config dir): the daemon
+  // announces them (`module`) and has their settings page in its schema, so
+  // that is all the host has of them. Not the host's to report in `catalog`.
+  readonly property var userModuleIds: svc.daemonModuleIds
+    .filter(function(id) { return svc.ownModuleIds.indexOf(id) === -1 }).sort()
+  // Every module this host can load.
+  readonly property var availableModuleIds: svc.ownModuleIds.concat(svc.userModuleIds)
 
   // Terminals of your own, from the config's `terminals` (Config.terminals):
   // [{ id, title, command }]. Each is a module of the daemon (a terminal), its
@@ -142,6 +149,11 @@ Item {
   readonly property var moduleInfo: {
     var out = Object.assign({}, svc.fileModuleInfo)
     svc.terminalSpecs.forEach(function(t) { out[t.id] = Settings.terminalInfo(t) })
+    var fields = svc.daemonSchema ? svc.daemonSchema.fields : []
+    svc.userModuleIds.forEach(function(id) {
+      var m = svc.client.modules[id]
+      out[id] = Settings.userModuleInfo(id, m ? m.title : "", fields)
+    })
     return out
   }
   // Every module has its file read (or found missing): modules load only
@@ -156,11 +168,15 @@ Item {
   onConfigResolvedChanged: svc.refreshModuleIds()
   // Every module with its title and fields: [{ moduleId, title, settings,
   // standalone, agent, live, terminal }].
-  readonly property var moduleCatalog: svc.availableModuleIds.map(function(id) {
+  function catalogEntry(id) {
     var info = svc.moduleInfo[id] || {}
     return { moduleId: id, title: Settings.moduleTitle(id, info), settings: info.settings || [],
              standalone: !!info.standalone, agent: !!info.agent, live: !!info.live, terminal: !!info.terminal }
-  })
+  }
+  readonly property var moduleCatalog: svc.availableModuleIds.map(svc.catalogEntry)
+  // What the daemon is told (`catalog`): without the user modules, which it
+  // knows better, its own defs winning in its schema.
+  readonly property var reportedCatalog: svc.ownModuleIds.map(svc.catalogEntry)
   // Agents (`"agent"` in their file): coding agents in a terminal, modules
   // of the daemon (native/notchd-modules/src/{claude,codex}.rs), with the
   // fields every agent has and the `agent` IPC. They ask their plan usage
@@ -489,7 +505,7 @@ Item {
   // it loads itself (`catalog`), the screens and the compositor's workspaces
   // (`screens`), the settings window's page (`settings`). Sent when they
   // change and again whenever the daemon (re)connects.
-  readonly property string catalogReport: JSON.stringify(svc.moduleCatalog)
+  readonly property string catalogReport: JSON.stringify(svc.reportedCatalog)
   onCatalogReportChanged: Qt.callLater(svc.reportCatalog)
   onDefaultModulesChanged: Qt.callLater(svc.reportCatalog)
   function reportCatalog() {

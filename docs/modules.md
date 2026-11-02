@@ -61,7 +61,7 @@ A module of your own, in any language: a folder in the config dir whose program 
 ```
 
 1. `cp -r docs/examples/modules/counter ~/.config/notchd/modules/`
-2. Turn it on: Settings, Modules, Counter, or put its id in a notch's `modules` list in the config. A module no notch lists is not started.
+2. Turn it on: Settings, Notches, your notch, Loaded modules, Counter (a module that says `standalone` is switched on from its own page under Modules instead), or put its id in a notch's `modules` list in the config. The daemon finds a new folder by itself; Modules lists it, with a gear to its page when its manifest has `settings`. A module no notch lists is not started.
 3. Edit `run.sh` and save: the module restarts by itself (reload on save). Any file in its folder counts; hidden files, `__pycache__`, `node_modules` and `target` do not.
 
 The folder name is the id: letters, digits, `-` and `_`, and not a config key or built-in id (`modules`, `position`, `theme`, `media`, `timer`...); such a folder is reported in the log and ignored.

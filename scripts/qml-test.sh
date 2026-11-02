@@ -58,6 +58,7 @@ run_shard() {
   # A user module for the daemons (their config dir is data/): tests/modules/hello.
   mkdir -- "$dir/data/modules"
   cp -r -- "$root/tests/modules/hello" "$dir/data/modules/hello"
+  cp -r -- "$root/tests/modules/gauge" "$dir/data/modules/gauge"
   # Fake `claude` and `codex` terminal UIs (tests/qml/fixtures/bin), state,
   # data, cache and Claude Code's dir in the scratch dir; a fake live bridge
   # and a fake components installer.

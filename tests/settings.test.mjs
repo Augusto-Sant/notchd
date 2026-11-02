@@ -411,3 +411,25 @@ test('windowFields: an array that is a sequence (not Array.isArray) still gets i
   const out = plain(Settings.windowFields([{ page: 'notch/0', key: 'position.edge', type: 'choice', display: 'cards', options }], [], 'E.qml'));
   assert.equal(out[0].options[0].preview, 'E.qml');
 });
+
+test('userModuleInfo reads a user module back from the daemon\'s schema fields', () => {
+  const fields = [
+    { page: 'modules/weather', key: 'weather.city', type: 'string', default: 'Berlin', value: 'Paris', visible: true },
+    { page: 'modules/weather', key: 'weather.enabled', type: 'boolean', default: false },
+    { page: 'modules/other', key: 'other.x', type: 'string' },
+    { page: 'general', key: 'hoverOpenDelay', type: 'integer' },
+  ];
+  const info = plain(Settings.userModuleInfo('weather', 'Weather', fields));
+  assert.equal(info.title, 'Weather');
+  assert.equal(info.standalone, false);
+  assert.deepEqual(info.settings.map((f) => [f.key, f.default, f.value]), [['city', 'Berlin', undefined], ['enabled', false, undefined]],
+    'its own fields, keys without the id, a setting named enabled kept');
+  const standalone = fields.concat([
+    { page: 'modules/weather', key: 'weather.position.edge', type: 'choice' },
+    { page: 'modules/weather', key: 'weather.position.offset', type: 'number' },
+  ]);
+  const s = plain(Settings.userModuleInfo('weather', 'Weather', standalone));
+  assert.equal(s.standalone, true);
+  assert.deepEqual(s.settings.map((f) => f.key), ['city'], 'the standalone place is not a setting of its own');
+  assert.deepEqual(plain(Settings.userModuleInfo('x', '', undefined)), { title: '', settings: [], standalone: false });
+});

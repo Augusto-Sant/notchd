@@ -229,6 +229,7 @@ ShellRoot {
       { name: "with tabs the closed notch shows every module side by side", run: root.tabsCompactAll },
       { name: "news missed while the notch was open peeks once as it closes", run: root.missedPeekOnClose },
       { name: "a user module of the daemon shows in the notch through a CoreModule, its button reaches the module", run: root.userModuleShows },
+      { name: "a user module no notch lists is in the settings: catalog, page, defaults, and adding it loads it", run: root.userModuleInSettings },
       { name: "a timer that isn't running shows its icon in the closed notch, unless idleIcons is off", run: root.idleTimerIcon },
       { name: "navigation numbers every notch, previews the selected one and Escape leaves it as it was", run: root.navigationPreview },
       { name: "navigation: Enter pins the selected notch and closes the others; a click ends it too", run: root.navigationOpen },
@@ -2976,6 +2977,47 @@ ShellRoot {
       yield root.waitFor(function() { return root.texts(m.tree("compact")).indexOf("poked") !== -1 }, 4000)
       root.check(root.texts(m.tree("compact")).indexOf("poked") !== -1, "the button did not reach the module: ")
       view.destroy()
+    })
+  }
+
+  // A user module in the config's modules/ that no notch lists (tests/modules/
+  // gauge, with a setting): the daemon says it and its page, and the settings
+  // offer it like a built-in: the Modules page, a notch's list, its page and
+  // default. Switching it on in the list loads it through a CoreModule.
+  TestService {
+    id: shelfSvc
+    ipcTarget: "notchd-qmltest-shelf"
+    configPath: root.dir + "/shelf.json"
+    compositor: twoScreens
+    defaultModules: ["activities"]
+  }
+  ModuleList {
+    id: shelfList
+    svc: shelfSvc
+    visible: false
+    value: shelfSvc.configValue("modules")
+    onEdited: function(v) { shelfSvc.setConfigValue("modules", v) }
+  }
+  function userModuleInSettings() {
+    root.go(function*() {
+      var s = shelfSvc
+      yield root.waitFor(function() {
+        return s.settingsPages.some(function(p) { return p.id === "modules/gauge" })
+      }, 6000)
+      root.check(s.settingsPages.some(function(p) { return p.id === "modules/gauge" && p.label === "Gauge" }), "no page for gauge")
+      var entry = s.moduleCatalog.filter(function(m) { return m.moduleId === "gauge" })[0]
+      if (!root.check(!!entry, "gauge is not in the Modules page's catalog")) return
+      root.check(entry.title === "Gauge" && !entry.standalone && entry.settings.length === 1, "catalog entry: " + JSON.stringify(entry))
+      root.check(s.moduleSettingDefault("gauge", "unit") === "kg" && s.moduleSetting("gauge", "unit") === "kg", "its default setting is " + s.moduleSettingDefault("gauge", "unit"))
+      root.check(s.isStandalone("gauge") === false && s.isAgent("gauge") === false && s.isLive("gauge") === false, "kind of gauge")
+      root.check(s.reportedCatalog.every(function(m) { return m.moduleId !== "gauge" }), "the daemon was told of its own module")
+      root.check(shelfList.all.indexOf("gauge") !== -1 && shelfList.available.indexOf("gauge") !== -1, "a notch's list does not offer gauge")
+      shelfList.toggle("gauge")
+      yield root.waitFor(function() { var m = s.moduleById("gauge"); return !!m && !!m.compact }, 6000)
+      var m = s.moduleById("gauge")
+      if (!root.check(!!m, "adding gauge to the notch did not load it")) return
+      root.check(m.title === "Gauge" && m.icon === "G", "facts: " + m.title + " " + m.icon)
+      root.check(root.texts(m.tree("compact")).join("|") === "gauge on", "compact: " + JSON.stringify(m.tree("compact")))
     })
   }
 

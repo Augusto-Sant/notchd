@@ -337,6 +337,55 @@ fn a_user_modules_settings_page_is_in_the_schema() {
 }
 
 #[test]
+fn a_user_module_no_notch_lists_is_in_the_schema_to_turn_on_and_follows_its_folder() {
+    // Listed by nothing: the schema still has its page and fields, and its
+    // standalone place, so Settings can turn it on; a new folder and a
+    // deleted one rebroadcast the schema.
+    let r = rig("modunlisted", r#"{"modules":["media"]}"#);
+    write(
+        &r.modules_dir(),
+        "weather",
+        r#"{"title":"Weather","command":["./run.sh"],
+            "settings":[{"key":"city","type":"string","label":"City","default":"Berlin"}]}"#,
+        "#!/bin/sh\nread -r init\nwhile read -r l; do :; done\n",
+    );
+    r.start_modules();
+    let mut ui = r.ui();
+    let page_of = |ui: &mut FakeUi, id: &str| {
+        let id = id.to_string();
+        ui.wait_for(START_WAIT, move |m| {
+            matches!(m, ToUi::Schema(s) if s.pages.iter().any(|p| p.id == id)
+                && s.fields.iter().any(|f| f.key.as_deref() == Some("weather.city")
+                    && f.page == "modules/weather" && f.value == "Berlin"))
+        })
+        .is_some()
+    };
+    assert!(page_of(&mut ui, "modules/weather"), "its page, unlisted");
+    write(
+        &r.modules_dir(),
+        "clock",
+        r#"{"title":"Clock","command":["./run.sh"],"standalone":true}"#,
+        "#!/bin/sh\nread -r init\nwhile read -r l; do :; done\n",
+    );
+    let got = ui
+        .wait_for(START_WAIT, |m| {
+            matches!(m, ToUi::Schema(s) if s.fields.iter().any(|f| f.key.as_deref()
+                == Some("clock.position.edge") && f.page == "modules/clock")
+                && s.fields.iter().any(|f| f.part.as_deref() == Some("standalone")))
+        })
+        .is_some();
+    assert!(got, "a folder added later brings its standalone place");
+    std::fs::remove_dir_all(r.modules_dir().join("weather")).unwrap();
+    let gone = ui
+        .wait_for(
+            START_WAIT,
+            |m| matches!(m, ToUi::Schema(s) if !s.pages.iter().any(|p| p.id == "modules/weather")),
+        )
+        .is_some();
+    assert!(gone, "a deleted folder takes its page");
+}
+
+#[test]
 fn a_module_that_peeks_peeks_the_notch() {
     let r = rig("modpeek", r#"{"modules":["pk"]}"#);
     write(

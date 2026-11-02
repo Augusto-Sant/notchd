@@ -330,6 +330,30 @@ function settingDefault(fields, key) {
   return undefined
 }
 
+// What the host knows of a user module, which has no JSON file of its own:
+// the title the daemon announced, and its manifest's `settings` and whether
+// it is `standalone`, read back from the daemon's schema (the fields of its
+// page, "modules/<id>": their keys without the id; the three a standalone
+// module always has are recognised and left out).
+function userModuleInfo(id, title, schemaFields) {
+  var page = modulePageId(id), prefix = id + "."
+  var own = Array.prototype.filter.call(schemaFields || [], function(f) {
+    return !!f && pageOf(f) === page && String(f.key || "").indexOf(prefix) === 0
+  })
+  var standalone = own.some(function(f) { return f.key === prefix + "position.edge" })
+  var settings = []
+  own.forEach(function(f) {
+    var key = String(f.key).slice(prefix.length)
+    if (standalone && (key === "enabled" || key === "position.edge" || key === "position.offset")) return
+    var field = Object.assign({}, f, { key: key })
+    delete field.value
+    delete field.visible
+    delete field.locked
+    settings.push(field)
+  })
+  return { title: title, settings: settings, standalone: standalone }
+}
+
 // A module's title: its own (the loaded module's, or its JSON file's),
 // else its id capitalized.
 function moduleTitle(id, module) {
