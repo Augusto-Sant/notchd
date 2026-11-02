@@ -2596,14 +2596,21 @@ ShellRoot {
       var pid = ""
       // The last case's view is still closing.
       yield root.wait(600)
+      // The args file is the last case's until this case's program writes it
+      // (and the view still closing can show a title): wait for its own pid.
+      yield root.runAndWait(["rm", "-f", argsFile])
       codexSvc.open()
       yield root.waitFor(function() { return !!root.terminalIn(codexCard) && root.terminalIn(codexCard).title !== "" }, 5000)
-      yield root.runAndWait(["cat", argsFile])
-      pid = shellCmd.out.split("\n")[2]
+      for (var written = 0; written < 50 && pid === ""; written++) {
+        yield root.runAndWait(["cat", argsFile])
+        pid = shellCmd.out.split("\n")[2] || ""
+        if (pid === "") yield root.wait(100)
+      }
+      var closedAt = Date.now()
       codexSvc.close()
       yield root.wait(700)
       yield root.runAndWait(["kill", "-0", pid])
-      root.check(shellCmd.code === 0, "it stopped before idleMinutes")
+      root.check(shellCmd.code === 0, "it stopped before idleMinutes (pid '" + pid + "', after " + (Date.now() - closedAt) + " ms)")
       // It stops once the idle time is up: polled, not a fixed wait.
       for (var tries = 0; tries < 40 && shellCmd.code === 0; tries++) {
         yield root.wait(200)
