@@ -28,7 +28,19 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Server {
     listener: UnixListener,
     path: PathBuf,
+    /// The socket file as it was bound: inode and change time. Taken here,
+    /// not in `serve`, so a socket removed before `serve` runs is still seen
+    /// as gone (it was: a test removed it in that window under load).
+    ident: Option<(u64, i64, i64)>,
     hub: Arc<Hub>,
+}
+
+/// A file's identity: inode and change time. A file made at once in the old
+/// one's place may get its inode number back (it does on CI's filesystem).
+fn socket_ident(p: &Path) -> Option<(u64, i64, i64)> {
+    fs::metadata(p)
+        .map(|m| (m.ino(), m.ctime(), m.ctime_nsec()))
+        .ok()
 }
 
 impl Server {
@@ -59,7 +71,9 @@ impl Server {
         let listener = UnixListener::bind(path).map_err(|e| format!("{}: {e}", path.display()))?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("{}: {e}", path.display()))?;
+        let ident = socket_ident(path);
         Ok(Server {
+            ident,
             listener,
             path: path.clone(),
             hub: Hub::with_core(&instance.name, &instance.config, core),
@@ -91,14 +105,7 @@ impl Server {
         // another daemon's. Without this, detached daemons outlive whatever
         // started them, forever.
         let watched = self.path.clone();
-        // Inode and change time: a file made at once in the old one's place
-        // may get its inode number back (it does on CI's filesystem).
-        let ident = |p: &Path| {
-            fs::metadata(p)
-                .map(|m| (m.ino(), m.ctime(), m.ctime_nsec()))
-                .ok()
-        };
-        let inode = ident(&watched);
+        let inode = self.ident;
         let hub_w = Arc::clone(&self.hub);
         thread::spawn(move || {
             loop {
@@ -108,10 +115,8 @@ impl Server {
                 if hub_w.stopped() {
                     return;
                 }
-                if ident(&watched) != inode {
-                    hub_w.stop();
-                    hub_w.stop_modules();
-                    std::process::exit(0);
+                if inode.is_none() || socket_ident(&watched) != inode {
+                    exit_within(&hub_w, None, SHUTDOWN_DEADLINE);
                 }
             }
         });
@@ -125,14 +130,34 @@ impl Server {
                     // the user modules (`stop`, then SIGTERM and SIGKILL;
                     // none is left when it returns), free the socket and
                     // exit.
-                    hub.stop();
-                    hub.stop_modules();
-                    let _ = fs::remove_file(&path);
-                    std::process::exit(0);
+                    exit_within(&hub, Some(&path), SHUTDOWN_DEADLINE);
                 }
             });
         }
     }
+}
+
+/// How long a shutdown may take before the process exits regardless.
+const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(3);
+
+/// Stops the hub and its modules, frees `socket` (when it is still ours) and
+/// exits: within `deadline` whatever happens. Stopping runs on its own thread,
+/// so a lock or a provider that hangs on the way out (seen: a test daemon
+/// whose socket was removed stayed up, its watcher waiting on a lock) cannot
+/// keep a daemon nobody can reach alive.
+fn exit_within(hub: &Arc<Hub>, socket: Option<&Path>, deadline: Duration) -> ! {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let stopping = Arc::clone(hub);
+    thread::spawn(move || {
+        stopping.stop();
+        stopping.stop_modules();
+        let _ = done_tx.send(());
+    });
+    let _ = done_rx.recv_timeout(deadline);
+    if let Some(path) = socket {
+        let _ = fs::remove_file(path);
+    }
+    std::process::exit(0);
 }
 
 /// One line, at most [`MAX_LINE_BYTES`] without the newline. `None` at EOF;
