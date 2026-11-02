@@ -347,14 +347,16 @@ class NotchOnGnome(ShellCase):
         action = sh.snapshot()["navigateAction"]
         self.assertGreater(action, 0)
         self.assertEqual(sh.keybinding_action(*NAVIGATE_KEY), action)
-        self.assertEqual(sh.ipc("navigate"), "ok")
+        # What the key runs starts navigation (an ipc with a string id was
+        # dropped by the daemon), and leaves it again.
+        sh.call("RunAction", ("navigate",), "(s)")
         s = sh.until(lambda s: s["navigating"] and main_copy(s)["navLabel"], 2, "the notch highlighted")
         label = main_copy(s)["navLabel"]
         # Its number and name, and as the selected (only) notch the keys.
         self.assertEqual(label[:2], ["1", "main"])
         self.assertIn("\u21b5 open", label[2])
-        sh.key(KEY_ESCAPE)
-        sh.until(lambda s: not s["navigating"] and main_copy(s)["navLabel"] is None, 2, "the highlight gone")
+        sh.call("RunAction", ("navigate",), "(s)")
+        sh.until(lambda s: not s["navigating"] and main_copy(s)["navLabel"] is None, 2, "the key again to leave")
 
     def test_a_notch_placed_on_the_second_monitor_goes_there_with_no_panel(self):
         sh = self.shell

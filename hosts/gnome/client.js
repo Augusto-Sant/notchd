@@ -43,6 +43,7 @@ export class DaemonClient {
         this._stopped = true;
         this._loggedUnknown = false;
         this._queue = [];
+        this._nextId = 0;
     }
 
     start() {
@@ -69,6 +70,13 @@ export class DaemonClient {
         if (this._queue.length === 1)
             this._flush();
         return true;
+    }
+
+    // An `ipc` request (a method of docs/ipc.md). Its id is a number, as the
+    // protocol has it (`notchd-proto`'s Ipc): a string id makes the daemon
+    // reject the message. The reply is not waited for.
+    ipc(method, args = []) {
+        return this.send(Protocol.ipc(++this._nextId, method, args));
     }
 
     _flush() {

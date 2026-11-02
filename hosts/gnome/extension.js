@@ -71,7 +71,7 @@ export default class NotchdExtension extends Extension {
             import('./testhook.js').then(Test => {
                 if (!this._client)
                     return;
-                this._test = new Test.TestHook(() => ({
+                this._test = new Test.TestHook({navigate: () => this._navigateKey()}, () => ({
                     connected: this._client?.ready ?? false,
                     screens: this._screens?.names ?? [],
                     copies: [...(this._copies?.entries() ?? [])].map(([id, c]) => ({id, ...c.describe()})),
@@ -86,10 +86,11 @@ export default class NotchdExtension extends Extension {
         // navigate`: it starts navigation, and leaves it while its grab
         // holds the keyboard (POPUP, the grab's action mode).
         this._settings = this.getSettings();
-        this._ipcId = 0;
-        this._navigateAction = Main.wm.addKeybinding('navigate', this._settings, Meta.KeyBindingFlags.NONE,
+        // A held key repeats: without IGNORE_AUTOREPEAT each repeat toggled
+        // navigation again.
+        this._navigateAction = Main.wm.addKeybinding('navigate', this._settings, Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW | Shell.ActionMode.POPUP,
-            () => this._client?.send(Protocol.ipc(`gnome-${++this._ipcId}`, 'navigate', [])));
+            () => this._navigateKey());
     }
 
     disable() {
@@ -112,6 +113,10 @@ export default class NotchdExtension extends Extension {
         this._theme?.destroy();
         this._theme = null;
         this._host = null;
+    }
+
+    _navigateKey() {
+        this._client?.ipc('navigate');
     }
 
     _redraw() {

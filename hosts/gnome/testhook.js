@@ -18,14 +18,18 @@ const IFACE = `
     <method name="PointerMove"><arg type="d" direction="in" name="x"/><arg type="d" direction="in" name="y"/></method>
     <method name="PointerClick"/>
     <method name="Key"><arg type="u" direction="in" name="keyval"/></method>
+    <method name="RunAction"><arg type="s" direction="in" name="name"/></method>
     <method name="KeybindingAction"><arg type="u" direction="in" name="keycode"/><arg type="u" direction="in" name="mask"/><arg type="u" direction="out" name="action"/></method>
     <method name="Screenshot"><arg type="s" direction="in" name="path"/><arg type="b" direction="out" name="ok"/></method>
   </interface>
 </node>`;
 
 export class TestHook {
+    // `actions`: what the extension's keybindings run, by name (a headless
+    // shell's virtual chords never reach them, so a test runs them here).
     // `snapshot()`: the extension's own description of what it shows.
-    constructor(snapshot) {
+    constructor(actions, snapshot) {
+        this._actions = actions;
         this._snapshot = snapshot;
         // Clutter.get_default_backend() is gone in GNOME 51; the stage's
         // context has the backend there.
@@ -77,6 +81,10 @@ export class TestHook {
         const t = this._now();
         this._keyboard.notify_keyval(t, keyval, Clutter.KeyState.PRESSED);
         this._keyboard.notify_keyval(t + 1000, keyval, Clutter.KeyState.RELEASED);
+    }
+
+    RunAction(name) {
+        this._actions[name]?.();
     }
 
     // The keybinding action mutter would run for an X key code and a
