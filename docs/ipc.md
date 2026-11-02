@@ -6,6 +6,9 @@ Every host exposes the same methods on its `ipcTarget`. The CLI depends on the h
 |---|---|
 | Omarchy | `omarchy-shell eryk.notchd <method> ...` |
 | standalone | `qs -p <checkout> ipc call notchd <method> ...` |
+| the daemon (any host) | `notchd ipc <method> ...` |
+
+The daemon is what answers: `notchd ipc` talks to it directly and prints the method's own reply. A host's target (Quickshell's `IpcHandler`) cannot wait for a reply, so it sends the command to the daemon and answers what the shell already knows (`ok`, `no notch <id>`, `<id> module not loaded`); where a method's answer depends on a module (`no timer running`, the usage text, an agent's plan `usage` in `state`), only `notchd ipc` has it. The daemon's socket is `$XDG_RUNTIME_DIR/notchd/<instance>.sock`; `NOTCHD_INSTANCE`, `NOTCHD_SOCKET` and `NOTCHD_CONFIG` pick another daemon, as `make dev` does.
 
 | Method | |
 |---|---|

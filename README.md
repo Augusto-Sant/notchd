@@ -2,13 +2,15 @@
 
 ![notchd with Claude Code and Codex: both in the closed notch, a plan-usage warning, a fine-tune pushed by a script, and Claude open in its terminal](docs/images/hero.webp)
 
-A dynamic notch for Wayland desktops, built with Quickshell. It hangs from an edge of the focused screen (the top by default) and shows modules: media, OSD, script activities, system resources, a timer, Claude Code or Codex in a terminal, or anything you write. You can have several notches, each with its own modules and place, and one on every monitor.
+A dynamic notch for your desktop. It hangs from an edge of the focused screen (the top by default) and shows modules: media, OSD, script activities, system resources, a timer, Claude Code or Codex in a terminal, or anything you write. You can have several notches, each with its own modules and place, and one on every monitor.
+
+notchd is a **daemon plus a UI per OS**. The daemon (`notchd`, written in Rust) holds everything that decides anything: the config, the settings, what the notch shows and when, and every module, including the programs your terminals and agents run. The UI draws what the daemon says and sends it the pointer and keys. On Linux the UI is QML on [Quickshell](https://quickshell.org), for Wayland compositors with layer-shell; macOS and Windows UIs are planned and not started. The daemon outlives the UI: reload the shell and your agent's conversation, timers and voice session are still there. The contract between the two is [docs/architecture.md](docs/architecture.md).
 
 It is a **notch framework, not a shell**. Modules show what the system is already doing; they never take over a system service. The notch is not a notification daemon, a launcher or a lock screen, so it sits on top of whatever desktop you already have.
 
 ## Install
 
-notchd runs inside a *host*: the desktop-specific wiring around the generic core.
+notchd runs inside a *host*: the desktop-specific wiring around the generic UI core. The host starts the daemon with the shell (`scripts/ensure-daemon.sh`), which looks for the `notchd` binary in `$NOTCHD_BIN`, on `PATH`, then in `~/.local/share/notchd/bin/`, and failing all three downloads the release the plugin's version pins, checking its SHA-256 against `native/releases.json`. **No release is published yet** (`releases.json` is empty), so for now build the daemon: `make daemon` (needs the Rust toolchain, see [DEVELOPMENT.md](DEVELOPMENT.md#prerequisites)) puts it in `native/target/release/`, and `make restart` (Omarchy) also installs it where the host looks. Without a daemon the notch shows "notchd not running".
 
 - **Omarchy**: the repository is an Omarchy shell plugin (`eryk.notchd`), with volume/brightness OSD and a button in the bar for the notches and the settings. See [hosts/omarchy](hosts/omarchy/README.md).
 - **Any other Wayland compositor with layer-shell**: the repository is also a standalone Quickshell config (`qs -p <checkout>`). See [docs/standalone.md](docs/standalone.md).
@@ -146,7 +148,7 @@ Nothing heavy ships with notchd. What the voice modules need beyond the app (Loc
 
 ## IPC
 
-Scripts drive the notch through Quickshell IPC: push an activity, open the notch, change a config key. See [docs/ipc.md](docs/ipc.md).
+Scripts drive the notch through the host's IPC (Quickshell's) or the daemon's own CLI, `notchd ipc <method>`: push an activity, open the notch, change a config key. See [docs/ipc.md](docs/ipc.md).
 
 ```sh
 omarchy-shell eryk.notchd push '{"id":"deploy","title":"Deploying api","progress":40,"sticky":true}'
@@ -154,6 +156,7 @@ omarchy-shell eryk.notchd push '{"id":"deploy","title":"Deploying api","progress
 
 ## Documentation
 
+- [docs/architecture.md](docs/architecture.md): the daemon, the protocol with the UIs, view primitives, providers
 - [docs/modules.md](docs/modules.md): writing a module, and [user modules](docs/modules.md#user-modules) in any language
 - [docs/standalone.md](docs/standalone.md): the standalone host
 - [docs/hosts.md](docs/hosts.md): what a host provides, for porting notchd to another desktop
