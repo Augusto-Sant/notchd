@@ -145,9 +145,17 @@ dev: daemon
 # copies the build to $XDG_DATA_HOME/notchd/bin/notchd, where the plugin looks
 # when NOTCHD_BIN does not reach the shell. Installs the optional packages
 # first (deps).
+# The daemon is replaced only when the build differs from the installed one:
+# an unchanged daemon keeps running, with its terminal and agent sessions.
 restart: deps daemon
-	@"$(DAEMON_BIN)" ipc shutdown >/dev/null 2>&1 || true
-	install -D -m 755 "$(DAEMON_BIN)" "$${XDG_DATA_HOME:-$$HOME/.local/share}/notchd/bin/notchd"
+	@installed="$${XDG_DATA_HOME:-$$HOME/.local/share}/notchd/bin/notchd"; \
+	if cmp -s "$(DAEMON_BIN)" "$$installed"; then \
+	  echo "notchd unchanged: the daemon and its sessions stay"; \
+	else \
+	  "$(DAEMON_BIN)" ipc shutdown >/dev/null 2>&1 || true; \
+	  install -D -m 755 "$(DAEMON_BIN)" "$$installed"; \
+	  echo "notchd rebuilt: the daemon restarts (its sessions end)"; \
+	fi
 	NOTCHD_BIN="$(DAEMON_BIN)" omarchy restart shell
 
 # Optional packages the modules use: qmltermwidget, the codex module's
