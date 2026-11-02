@@ -2,7 +2,9 @@
 # Renders the scenarios of tests/visual/shell.qml (the settings window, the
 # notch on each edge) with Qt's offscreen backend and copies the PNGs to
 # build/visual/ (or $1). Fails if a scenario is missing or the QML logged a
-# warning, so it doubles as a load check of the core. The media module plays
+# warning, so it doubles as a load check of the core. The view-tree primitives
+# (tests/visual/primitives.qml, from the tests/protocol fixtures) render in a
+# second run. The media module plays
 # tests/visual/demo-player.py's track. Needs quickshell, dbus-run-session,
 # ImageMagick, python-dbus and python-gobject; no display, no running shell.
 set -euo pipefail
@@ -34,9 +36,19 @@ NOTCHD_VISUAL_DIR="$scratch/shots" XDG_STATE_HOME="$scratch/shots/state" XDG_DAT
   "$root/scripts/with-demo-player.sh" "$scratch/demo" "$scratch/log" \
   timeout 40 quickshell -p "$scratch/config" --no-color || true
 
+# The primitives of the view tree (core/client), from the protocol fixtures,
+# as a config of their own: no D-Bus service, no notch, just the renderer.
+mkdir -- "$scratch/prims" "$scratch/prims-shots" "$scratch/prims-runtime"
+ln -s -- "$root/core" "$scratch/prims/core"
+ln -s -- "$root/tests/visual/primitives.qml" "$scratch/prims/shell.qml"
+magick -size 160x160 gradient:'#d08770-#5e81ac' "$scratch/prims-shots/cover.png"
+NOTCHD_VISUAL_DIR="$scratch/prims-shots" NOTCHD_FIXTURES="$root/tests/protocol" NOTCHD_COVER="$scratch/prims-shots/cover.png" \
+  XDG_STATE_HOME="$scratch/prims-shots/state" XDG_DATA_HOME="$scratch/prims-shots/share" XDG_CACHE_HOME="$scratch/prims-shots/cache" \
+  "$root/scripts/isolated.sh" "$scratch/prims-runtime" timeout 40 quickshell -p "$scratch/prims" --no-color >"$scratch/log-prims" 2>&1 || true
+
 # Only Quickshell's own log lines count; the offscreen backend's lack of
 # window masks is expected.
-problems=$(grep -E '^\s*(WARN|ERROR)' "$scratch/log" | grep -vE 'window masks|outside of the config folder' || true)
+problems=$(cat "$scratch/log" "$scratch/log-prims" | grep -E '^\s*(WARN|ERROR)' | grep -vE 'window masks|outside of the config folder' || true)
 if [[ -n $problems ]]; then
   echo "QML warnings while rendering:" >&2
   echo "$problems" >&2
@@ -52,5 +64,13 @@ for name in $scenarios; do
     exit 1
   fi
   install -m 0644 -- "$scratch/shots/$name.png" "$out/$name.png"
+done
+for name in primitives-dark primitives-light; do
+  if [[ ! -s "$scratch/prims-shots/$name.png" ]]; then
+    echo "scenario $name produced no image; log:" >&2
+    cat "$scratch/log-prims" >&2
+    exit 1
+  fi
+  install -m 0644 -- "$scratch/prims-shots/$name.png" "$out/$name.png"
 done
 echo "visual scenarios in $out"
