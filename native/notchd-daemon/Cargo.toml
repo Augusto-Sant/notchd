@@ -20,3 +20,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "notchd"
 path = "src/main.rs"
+
+[dev-dependencies]
+notchd-testkit = { path = "../notchd-testkit" }

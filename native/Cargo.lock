@@ -58,6 +58,7 @@ dependencies = [
  "notchd-modules",
  "notchd-proto",
  "notchd-providers",
+ "notchd-testkit",
  "serde",
  "serde_json",
 ]

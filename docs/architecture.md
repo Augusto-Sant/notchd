@@ -127,6 +127,8 @@ What v1 does not need, and so does not have: text input (no built-in module type
 - `proto` is an integer major. The daemon speaks one major; a different one gets `{"t":"err","code":"proto","want":1}` and a close. Minor additions are new optional fields and new `t`s, never required ones.
 - `caps` lists what the UI can draw. A module whose view needs a primitive or surface the UI lacks gets a visible placeholder (a `text` row naming the missing capability), never a silent blank.
 - After `welcome` the daemon sends `config`, `schema`, `state`, then one `view` per module slot in use, then keeps them current.
+- `hello` is optional for a connection that only sends requests (the `notchd ipc` CLI skips it and gets replies only, no `welcome` or `config`). A refused handshake is the only `err` without an `id` that closes the connection. A line that does not parse, has an unknown `t` or fails validation is answered with `err` code `args` (with the request's `id` when the line has an integer one) and the connection stays open; a line over the 4 MiB limit gets the same `err` and a close.
+- Socket resolution, first hit wins: `--socket`, `NOTCHD_SOCKET`, `$XDG_RUNTIME_DIR/notchd/<instance>.sock` (`$TMPDIR` when there is no runtime dir). The instance is `--instance`, `NOTCHD_INSTANCE`, else `default`. The directory is created `0700`, the socket `0600`; a socket file nobody answers on is replaced, one a daemon answers on makes a second `notchd daemon` fail.
 
 ### State: full updates per entity, not diffs
 
@@ -470,6 +472,7 @@ Done when: `make rust` passes on empty crates, and `make check` includes it.
 Depends on 0.1. Types for every message in this doc, the primitive tree and its JSON Schema, round-trip tests against the fixtures. The fixtures are the contract the QML client and Rust daemon are both tested against. Done when each fixture parses and re-serializes byte-identically (canonical key order).
 **0.3 Daemon skeleton.** Owns: `native/notchd-daemon/`, `native/notchd-testkit/`.
 Depends on 0.2. A listener on the socket, handshake, `config` echo from a file, `ipc` router with an `unknown method` reply, `FakeUi`. Test: `FakeUi` connects to a daemon in a temp dir and sees `welcome` and `config`; a bad `proto` is refused.
+*Done (std threads, one per connection; `--ensure` returns 0 at once when a daemon answers, else runs the daemon in the foreground; `config` is read on each `hello`, not yet watched; the router answers every `ipc` method with `err` code `method`: `unknown method: x`, or `x is not implemented yet` for a documented one, and `set`/`edit` with a not-implemented `err`; input messages are accepted and ignored).*
 
 ### Phase 1: the rules, ported (fully parallel after 0.3; no UI change)
 
