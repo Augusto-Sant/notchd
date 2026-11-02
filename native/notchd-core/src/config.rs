@@ -6,9 +6,8 @@
 //! `Option::None`. A missing key means its default, and defaults are never
 //! written to the user's file ([`DEFAULTS`] holds them, once).
 //!
-//! One known difference: without serde_json's `preserve_order` feature a
-//! JSON object iterates its keys sorted, not in file order, so
-//! [`terminals`] reports entries (and their errors) in key order.
+//! Objects keep their file order (serde_json's `preserve_order`, set in the
+//! workspace), as JS objects do: editing never reorders the user's file.
 
 use std::sync::LazyLock;
 
@@ -1122,14 +1121,8 @@ mod tests {
             ["ok"]
         );
         assert_eq!(r.errors.len(), 8, "{}", r.errors.join("\n"));
-        // Errors come in key order here, not file order (see the module docs).
-        let why = |id: &str| {
-            r.errors
-                .iter()
-                .any(|e| e.starts_with(&format!("{id}: taken")))
-        };
-        assert!(why("theme"));
-        assert!(why("media"));
+        assert!(r.errors[0].starts_with("theme: taken"));
+        assert!(r.errors[2].starts_with("media: taken"));
         assert_eq!(
             terminals(&json!({ "terminals": ["btop"] }), &[])
                 .errors
