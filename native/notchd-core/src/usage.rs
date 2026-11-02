@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn claude_limits_without_the_list_five_hour_and_seven_day() {
         let mut data = fixture("claude");
-        data.as_object_mut().unwrap().remove("limits");
+        data.as_object_mut().unwrap().shift_remove("limits");
         let shown: Vec<(String, String, f64)> = claude_limits(&data)
             .unwrap()
             .into_iter()

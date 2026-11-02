@@ -178,7 +178,7 @@ fn set_path(node: &mut Value, parts: &[&str], value: Option<&Value>) -> bool {
                     }
                 }
                 Value::Object(map) => {
-                    map.remove(*key);
+                    map.shift_remove(*key);
                 }
                 _ => {}
             },
@@ -199,7 +199,7 @@ fn set_path(node: &mut Value, parts: &[&str], value: Option<&Value>) -> bool {
     }
     let emptied = matches!(get(node, key), Some(Value::Object(m)) if m.is_empty());
     if emptied && let Value::Object(map) = node {
-        map.remove(*key);
+        map.shift_remove(*key);
     }
     true
 }
@@ -429,7 +429,7 @@ pub fn without_notch(cfg: &Value, index: i64) -> Value {
         Some(Value::Object(o)) => o.clone(),
         _ => Object::new(),
     };
-    map.remove("notches");
+    map.shift_remove("notches");
     for key in NOTCH_KEYS {
         let Some(v) = last.get(key) else { continue };
         match (key, map.get_mut(key), v) {
@@ -631,13 +631,13 @@ pub fn without_terminal(cfg: &Value, id: &str) -> Value {
     let Some(Value::Object(terms)) = map.get_mut("terminals") else {
         return out;
     };
-    if terms.remove(id).is_none() {
+    if terms.shift_remove(id).is_none() {
         return out;
     }
     if terms.is_empty() {
-        map.remove("terminals");
+        map.shift_remove("terminals");
     }
-    map.remove(id);
+    map.shift_remove(id);
     let drop_from = |entry: &mut Value| {
         if let Some(Value::Array(modules)) = entry.get_mut("modules") {
             modules.retain(|m| m.as_str() != Some(id));

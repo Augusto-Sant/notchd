@@ -42,6 +42,12 @@ where
     Ok(T::deserialize(Value::deserialize(d)?).unwrap_or_default())
 }
 
+/// A size as JS `Number(x)` reads it (a numeric string too); absent when NaN.
+fn de_js_number<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    let n = js::number(&Value::deserialize(d)?);
+    Ok((!n.is_nan()).then_some(n))
+}
+
 fn de_truthy<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     Ok(js::truthy(&Value::deserialize(d)?))
 }
@@ -153,14 +159,14 @@ pub struct Component {
     /// Download size in bytes.
     #[serde(
         default,
-        deserialize_with = "lenient",
+        deserialize_with = "de_js_number",
         skip_serializing_if = "Option::is_none"
     )]
     pub size: Option<f64>,
     /// What of `size` another component of the same backend already holds.
     #[serde(
         default,
-        deserialize_with = "lenient",
+        deserialize_with = "de_js_number",
         skip_serializing_if = "Option::is_none"
     )]
     pub shared_size: Option<f64>,
@@ -291,7 +297,7 @@ pub fn parse_catalog(text: &str) -> Vec<Component> {
     let Ok(Value::Object(mut data)) = serde_json::from_str::<Value>(text) else {
         return Vec::new();
     };
-    let Some(Value::Array(list)) = data.remove("components") else {
+    let Some(Value::Array(list)) = data.shift_remove("components") else {
         return Vec::new();
     };
     list.into_iter()
@@ -692,8 +698,9 @@ fn matches_where(entry: &Value, where_: &Where) -> bool {
     where_.iter().all(|(k, want)| {
         let have = entry.get(k);
         match want {
-            Some(Value::Array(list)) => have.is_some_and(|h| list.contains(h)),
-            _ => have == want.as_ref(),
+            // JS `===` (indexOf too): 2000000 and 2000000.0 are one number.
+            Some(Value::Array(list)) => have.is_some_and(|h| list.iter().any(|v| js::eq(v, h))),
+            _ => js::eq_opt(have, want.as_ref()),
         }
     })
 }
