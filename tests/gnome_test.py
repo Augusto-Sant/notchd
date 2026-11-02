@@ -15,12 +15,16 @@ Not in `make check`: it needs gnome-shell installed. `make gnome-test`.
 
 import json
 import os
+import http.server
 import shutil
 import signal
+import struct
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
+import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEV = os.path.join(ROOT, "scripts", "gnome-dev.sh")
@@ -58,14 +62,16 @@ class Shell:
     # A shell that works has started within 1-2 s.
     STARTED_WITHIN = 10
 
-    def __init__(self, config):
+    def __init__(self, config, env=None, modules=None):
         # Short on purpose: mutter's Wayland socket path must fit 108 bytes.
         self.scratch = tempfile.mkdtemp(prefix="ngt.", dir="/tmp")
         config_path = os.path.join(self.scratch, "start.json")
         with open(config_path, "w") as f:
             json.dump(config, f)
         env = dict(os.environ, NOTCHD_GNOME_SCRATCH=self.scratch, NOTCHD_GNOME_CONFIG=config_path,
-                   NOTCHD_GNOME_TEST="1", NOTCHD_BIN=NOTCHD)
+                   NOTCHD_GNOME_TEST="1", NOTCHD_BIN=NOTCHD, **(env or {}))
+        if modules:
+            env["NOTCHD_GNOME_MODULES"] = modules
         self.log_path = os.path.join(self.scratch, "shell.log")
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen(
@@ -212,13 +218,17 @@ def center(c):
 class ShellCase(unittest.TestCase):
     tier = "gnome"
     config = {"modules": ["timer", "resources"], "reserveSpace": True}
+    # Extra environment for the shell (and the daemon's modules), and a
+    # folder of user modules for the daemon.
+    env = {}
+    modules = None
 
     @classmethod
     def setUpClass(cls):
         why = missing()
         if why:
             raise unittest.SkipTest(why)
-        cls.shell = Shell(cls.config)
+        cls.shell = Shell(cls.config, cls.env, cls.modules)
 
     @classmethod
     def tearDownClass(cls):
@@ -386,6 +396,134 @@ class DaemonGoesAway(ShellCase):
         sh.until(lambda s: grabs(s) > 0, 2)
         sh.ipc("shutdown")
         sh.until(lambda s: not s["connected"] and grabs(s) == 0, 3, "the grab to go with the daemon")
+
+def solid_png(w, h, rgb):
+    """A w x h picture of one color, as PNG bytes."""
+    def chunk(kind, data):
+        c = kind + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c))
+    row = b"\x00" + bytes(rgb) * w
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(row * h)) + chunk(b"IEND", b""))
+
+
+class Pictures(http.server.ThreadingHTTPServer):
+    """A server of test pictures on 127.0.0.1 (the tests never touch the
+    network): /cover.png, and a 404 for anything else. `hits` counts the
+    requests that were answered."""
+
+    daemon_threads = True
+
+    def __init__(self):
+        body = solid_png(64, 64, (255, 0, 0))
+        self.hits = []
+        server = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                server.hits.append(self.path)
+                ok = self.path == "/cover.png"
+                self.send_response(200 if ok else 404)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(body) if ok else 0))
+                self.end_headers()
+                if ok:
+                    self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        super().__init__(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+
+
+class SeekAndPictures(ShellCase):
+    """The media module's progress bar (anchor, seek) and cover (a picture
+    from the network), as tests/gnome/test-modules/seekbars draws them."""
+
+    config = {"modules": ["seekbars"]}
+    modules = os.path.join(ROOT, "tests", "gnome", "test-modules")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.pictures = Pictures()
+        port = cls.pictures.server_address[1]
+        cls.env = {"NOTCHD_TEST_COVER": "http://127.0.0.1:%d/cover.png" % port,
+                   "NOTCHD_TEST_MISSING": "http://127.0.0.1:%d/missing.png" % port}
+        try:
+            super().setUpClass()
+        except BaseException:
+            cls.pictures.shutdown()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            super().tearDownClass()
+        finally:
+            cls.pictures.shutdown()
+
+    def open(self):
+        sh = self.shell
+        x, y = center(main_copy(sh.snapshot()))
+        sh.move(x, y)
+        s = sh.until(lambda s: main_copy(s)["mode"] == "expanded" and len(main_copy(s)["bars"]) == 3
+                     and main_copy(s)["bars"][0]["w"] > 50, 4, "the open notch with the bars")
+        time.sleep(0.5)  # past the card's easing
+        return main_copy(sh.snapshot())
+
+    def press(self, x, y):
+        self.shell.move(x, y)
+        time.sleep(0.3)  # the virtual pointer's motion lands before the press
+        self.shell.click()
+
+    def test_an_anchored_bar_moves_with_no_new_view(self):
+        sh = self.shell
+        bar = self.open()["bars"][0]
+        self.assertTrue(bar["seek"])
+        first = bar["shown"]
+        # 5 % a second: past the card's own animations a new view cannot
+        # explain it, the module sends none.
+        sh.until(lambda s: main_copy(s)["bars"][0]["shown"] > first + 0.04, 4, "the bar to move on by its anchor")
+        # A bar with no anchor stays where it is.
+        self.assertAlmostEqual(main_copy(sh.snapshot())["bars"][1]["shown"], 0.5, delta=0.01)
+
+    def test_a_press_on_a_bar_seeks_and_does_not_pin_the_notch(self):
+        sh = self.shell
+        bar = self.open()["bars"][0]
+        self.press(bar["x"] + bar["w"] * 0.25, bar["y"] + bar["h"] / 2)
+        s = sh.until(lambda s: "seek: 0.25" in main_copy(s)["texts"], 3, "the module to hear the seek at 25 %")
+        # The press was the bar's: it did not reach the card, which would
+        # have pinned the notch and taken a grab that cancels a drag.
+        self.assertEqual(grabs(s), 0)
+        self.assertEqual(main_copy(s)["mode"], "expanded")
+        # The new view updated the bar in place: it still moves.
+        shown = main_copy(s)["bars"][0]["shown"]
+        sh.until(lambda s: main_copy(s)["bars"][0]["shown"] > shown + 0.02, 3, "the bar to keep moving after the update")
+
+    def test_a_vertical_bar_seeks_from_the_bottom(self):
+        sh = self.shell
+        bar = self.open()["bars"][1]
+        self.assertGreater(bar["h"], bar["w"])
+        # 25 % from the top is 75 % from the bottom.
+        self.press(bar["x"] + bar["w"] / 2, bar["y"] + bar["h"] * 0.25)
+        sh.until(lambda s: "vseek: 0.75" in main_copy(s)["texts"], 3, "the module to hear the seek at 75 %")
+
+    def test_a_picture_from_the_network_downloads_once_and_a_failure_keeps_the_fallback(self):
+        sh = self.shell
+        copy = self.open()
+        covers = sh.until(lambda s: [i["state"] for i in main_copy(s)["images"]] == ["ready", "failed"], 6,
+                          "the cover to load and the missing one to fail")
+        sh.screenshot("seekbars")
+        cache = os.path.join(sh.scratch, "cache", "notchd-gnome")
+        self.assertEqual(len(os.listdir(cache)), 1)
+        self.assertEqual(self.pictures.hits.count("/cover.png"), 1)
+        # Closed and opened again: the picture is drawn again from the cache.
+        sh.move(10, 900)
+        sh.until(lambda s: main_copy(s)["mode"] == "compact", 3)
+        self.open()
+        sh.until(lambda s: [i["state"] for i in main_copy(s)["images"]][0] == "ready", 3)
+        self.assertEqual(self.pictures.hits.count("/cover.png"), 1)
 
 
 if __name__ == "__main__":

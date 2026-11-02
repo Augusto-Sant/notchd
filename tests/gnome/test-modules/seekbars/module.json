@@ -1,0 +1,6 @@
+{
+  "title": "Seekbars",
+  "command": ["python3", "run.py"],
+  "priority": 90,
+  "expandedWidth": 380
+}

@@ -13,6 +13,8 @@
 # NOTCHD_BIN picks the daemon (default: native/target/release/notchd).
 # For tests: NOTCHD_GNOME_SCRATCH (an empty, short dir to use and leave in
 # place), NOTCHD_GNOME_CONFIG (the daemon's config file to start from) and
+# NOTCHD_GNOME_MODULES (a folder of user modules for the daemon's modules
+# dir, with a config; the demo ones go there when no config is given) and
 # NOTCHD_GNOME_TEST (the extension exports its test hooks, testhook.js). The
 # private bus's address is written to <scratch>/bus once the shell starts.
 # The scratch dir is short on purpose: a Unix socket path is at most 108
@@ -62,6 +64,7 @@ uuid=$("$root/scripts/gnome-build.sh" "$scratch/data/gnome-shell/extensions" | x
 # A demo config: one notch with modules that need nothing installed.
 if [ -n "${NOTCHD_GNOME_CONFIG:-}" ]; then
   cp -- "$NOTCHD_GNOME_CONFIG" "$scratch/notchd.json"
+  [ -z "${NOTCHD_GNOME_MODULES:-}" ] || cp -r -- "$NOTCHD_GNOME_MODULES" "$scratch/modules"
 else
   cat > "$scratch/notchd.json" <<'EOF'
 {"modules": ["activities", "timer", "resources", "primitives"]}
