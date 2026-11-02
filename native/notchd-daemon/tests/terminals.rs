@@ -653,3 +653,58 @@ fn closed_and_idle_the_program_stops_and_the_next_view_starts_a_new_one() {
         "the next view did not start a new program"
     );
 }
+
+#[test]
+fn notchd_attach_exits_promptly_on_hangup_and_term_and_the_session_stays() {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::{Command, Stdio};
+    let r = rig("hangup", claude_cfg, true);
+    for sig in [libc::SIGHUP, libc::SIGTERM] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_notchd"));
+        cmd.args([
+            "--socket",
+            &r.socket().display().to_string(),
+            "attach",
+            "term:claude",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+        // The worst case: the parent started it with the signals ignored.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                libc::signal(libc::SIGTERM, libc::SIG_IGN);
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn notchd attach");
+        let a = r.wait_args(&r.claude_args, |a| a.len() >= 3);
+        assert!(a.len() >= 3, "the program started: {a:?}");
+        let pid = a[2].parse::<i32>().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        unsafe { libc::kill(child.id() as i32, sig) };
+        let t = Instant::now();
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            assert!(
+                t.elapsed() < Duration::from_secs(1),
+                "still running after signal {sig}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            status.code() == Some(0) || status.signal().is_some(),
+            "{status:?}"
+        );
+        thread::sleep(Duration::from_millis(200));
+        assert!(alive(pid), "the session died with its view (signal {sig})");
+        // A new view reaches the same session.
+        let mut view = Client::connect(&r.socket(), "term:claude", 80, 24).unwrap();
+        let text = read_until(&mut view, String::new(), |t| {
+            t.contains("fake claude ready")
+        });
+        assert!(text.contains("fake claude ready"), "{text:?}");
+    }
+}

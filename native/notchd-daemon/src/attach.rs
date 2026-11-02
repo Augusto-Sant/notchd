@@ -325,9 +325,35 @@ impl Drop for Raw {
     }
 }
 
+extern "C" fn hung_up(_: libc::c_int) {
+    // Async-signal-safe: no cleanup to run. The process going closes the
+    // connection, which the daemon sees as the view leaving; the program
+    // keeps running there.
+    unsafe { libc::_exit(0) };
+}
+
+/// A view closing (the widget's SIGHUP, a SIGTERM) ends this at once. Handled
+/// rather than left to the default so it also holds when the parent started
+/// us with the signal ignored or blocked (a terminal widget's child can).
+fn exit_on_hangup() {
+    unsafe {
+        let mut act: libc::sigaction = std::mem::zeroed();
+        act.sa_sigaction = hung_up as extern "C" fn(libc::c_int) as usize;
+        libc::sigemptyset(&mut act.sa_mask);
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        for sig in [libc::SIGHUP, libc::SIGTERM] {
+            libc::sigaction(sig, &act, std::ptr::null_mut());
+            libc::sigaddset(&mut set, sig);
+        }
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+    }
+}
+
 /// `notchd attach <ref>`: a view of the terminal `ref`, on this terminal.
 /// Ends when the program does, or the daemon goes.
 pub fn run(socket: &Path, rf: &str) -> Result<(), String> {
+    exit_on_hangup();
     let (cols, rows) = tty_size(0).unwrap_or((80, 24));
     let mut client = Client::connect(socket, rf, cols, rows)?;
     let _raw = Raw::enter();
