@@ -61,6 +61,7 @@ geometry half is `geometry/position.json`), `countdown`, `usage`,
   `\s` whitespace, key order).
 - `ordered: true`: the keys of the result must also come out in the same
   order (the config edits: the user's file is never reordered).
+- A case whose `fn` the JS file no longer has (it went to Rust alone: `moduleFields`, `modulePages`) is run by the Rust runner only; the JS runner skips it and counts it.
 - `knownDiff: "<why>"`: JS and Rust disagree on this case and nobody has
   decided which is right. Both runners skip it and print the count; the Rust
   runner fails when a marked case starts to agree, so the mark gets removed.

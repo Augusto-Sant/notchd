@@ -330,78 +330,6 @@ function settingDefault(fields, key) {
   return undefined
 }
 
-// What a standalone module's page has before its own fields: a switch, and
-// where it shows. Keys under its id: "<id>.enabled", "<id>.position".
-// `edgePreview`: the url of the edge cards' picture.
-function standaloneFields(id, edgePreview) {
-  var page = modulePageId(id)
-  return [
-    { page: page, key: id + ".enabled", type: "boolean", label: "Enabled", "default": true,
-      help: "Off, it does not load at all." },
-    { page: page, section: "Position", key: id + ".position.edge", type: "choice", display: "cards",
-      label: "Edge", "default": "top",
-      help: "Where it shows, on the screen you work on. No notch shows it: it has a place of its own, over any notch that hangs there.",
-      options: ["top", "bottom", "left", "right"].map(function(e) {
-        return { value: e, label: e.charAt(0).toUpperCase() + e.slice(1), preview: edgePreview }
-      }) },
-    { page: page, section: "Position", key: id + ".position.offset", type: "number", display: "percent",
-      label: "Along the edge", "default": 0.5, min: 0, max: 1, step: 0.01,
-      help: "0 % is its left (or top) end, 50 % the middle." }
-  ]
-}
-
-// A field's references to other fields of its module (`when.key`, `by.key`,
-// an option's `needs` value "@key") put under the module's id, as its own key is.
-function moduleRefs(field, moduleId) {
-  var out = Object.assign({}, field)
-  ;["when", "by"].forEach(function(name) {
-    if (field[name] && field[name].key) out[name] = Object.assign({}, field[name], { key: moduleId + "." + field[name].key })
-  })
-  if (Array.isArray(field.options)) out.options = field.options.map(function(o) {
-    if (!Array.isArray(o.needs)) return o
-    return Object.assign({}, o, { needs: o.needs.map(function(n) {
-      if (typeof n === "string") return n
-      var m = {}
-      Object.keys(n).forEach(function(k) {
-        m[k] = typeof n[k] === "string" && n[k].charAt(0) === "@" ? "@" + moduleId + "." + n[k].slice(1) : n[k]
-      })
-      return m
-    }) })
-  })
-  return out
-}
-
-// The settings fields of every module (`modules`: [{ moduleId, title,
-// settings, standalone }], from their JSON files), with their keys under
-// the module's id (but an `absolute` one's, a config key as given), on the module's own page unless they name another (then
-// under its title); a standalone module's switch and position first.
-function moduleFields(modules, edgePreview) {
-  var out = []
-  Array.prototype.forEach.call(modules || [], function(m) {
-    if (!m || !m.moduleId) return
-    if (m.standalone) out = out.concat(standaloneFields(m.moduleId, edgePreview))
-    Array.prototype.forEach.call(m.settings || [], function(f) {
-      var field = Object.assign({}, f)
-      if (f.key && !f.absolute) field.key = m.moduleId + "." + f.key
-      if (!f.absolute) field = moduleRefs(field, m.moduleId)
-      if (!field.page) field.page = modulePageId(m.moduleId)
-      else if (!field.section) field.section = m.title || m.moduleId
-      out.push(field)
-    })
-  })
-  return out
-}
-
-// A page per module, titled after it; one without fields stays hidden,
-// like any page.
-function modulePages(modules) {
-  var out = []
-  Array.prototype.forEach.call(modules || [], function(m) {
-    if (m && m.moduleId) out.push({ id: modulePageId(m.moduleId), label: m.title || m.moduleId })
-  })
-  return out
-}
-
 // A module's title: its own (the loaded module's, or its JSON file's),
 // else its id capitalized.
 function moduleTitle(id, module) {
@@ -570,11 +498,6 @@ function storedValue(field, value) {
 function pageModule(id) {
   var m = /^modules\/(.+)$/.exec(String(id || ""))
   return m ? m[1] : ""
-}
-
-// The ids of the modules the QML loads itself (NotchService.moduleCatalog).
-function catalogIds(catalog) {
-  return Array.prototype.map.call(catalog || [], function(m) { return m && m.moduleId })
 }
 
 // The pages of the window: the core's and the host's, then a page per notch

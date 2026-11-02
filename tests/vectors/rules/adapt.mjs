@@ -38,6 +38,12 @@ const after = {
 };
 
 const mods = {};
+// Whether the JS still has the function: the cases of one that went (the Rust
+// port is the only one left) are run by the Rust runner alone.
+export function has(file, fn) {
+  const m = (mods[file] ||= load(SOURCES[file]));
+  return before[file]?.[fn] !== undefined || typeof m[fn] === 'function';
+}
 export function call(file, fn, args) {
   const m = (mods[file] ||= load(SOURCES[file]));
   const wrap = before[file]?.[fn];

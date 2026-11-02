@@ -104,33 +104,6 @@ test('storedValue removes the key when an edit picks the default', () => {
   assert.equal(Settings.storedValue({ default: 'top' }, undefined), undefined);
 });
 
-test('moduleFields puts a module\'s fields under its id, on its own page', () => {
-  const fields = plain(Settings.moduleFields([
-    { moduleId: 'resources', title: 'Resources', settings: [
-      { key: 'compact', type: 'choice', default: 'always' },
-      { key: 'disk', type: 'string', page: 'extra', section: 'Disk' },
-      { key: 'color', type: 'color', page: 'appearance' },
-      { type: 'note', label: 'Linux only' }
-    ] },
-    { moduleId: 'media', title: 'Now playing', settings: [] },
-    { moduleId: 'bare', settings: [{ key: 'x', type: 'boolean' }] }
-  ]));
-  assert.deepEqual(fields.map((f) => [f.key, f.page, f.section]), [
-    ['resources.compact', 'modules/resources', undefined],
-    ['resources.disk', 'extra', 'Disk'],
-    ['resources.color', 'appearance', 'Resources'],
-    [undefined, 'modules/resources', undefined],
-    ['bare.x', 'modules/bare', undefined]
-  ]);
-  assert.equal(fields[0].default, 'always');
-  assert.deepEqual(plain(Settings.moduleFields(undefined)), []);
-});
-
-test('modulePages gives each loaded module a page under Modules', () => {
-  assert.deepEqual(plain(Settings.modulePages([{ moduleId: 'media', title: 'Now playing' }, { moduleId: 'bare' }, null])),
-    [{ id: 'modules/media', label: 'Now playing' }, { id: 'modules/bare', label: 'bare' }]);
-});
-
 const withSub = [
   { id: 'general' }, { id: 'modules' }, { id: 'modules/media' }, { id: 'appearance' }
 ];
@@ -337,19 +310,6 @@ test('moduleInfoPath finds the JSON file next to a module, file or qs: url', () 
   assert.equal(Settings.moduleInfoPath('', '/c'), '');
 });
 
-test('a standalone module\'s page starts with its switch and position', () => {
-  const fields = plain(Settings.moduleFields([
-    { moduleId: 'osd', title: 'OSD', standalone: true, settings: [{ key: 'size', type: 'integer', default: 1 }] }
-  ], 'edge.qml'));
-  assert.deepEqual(fields.map((f) => [f.key, f.page, f.section, f.default]), [
-    ['osd.enabled', 'modules/osd', undefined, true],
-    ['osd.position.edge', 'modules/osd', 'Position', 'top'],
-    ['osd.position.offset', 'modules/osd', 'Position', 0.5],
-    ['osd.size', 'modules/osd', undefined, 1]
-  ]);
-  assert.equal(fields[1].options[0].preview, 'edge.qml');
-});
-
 // Its title and command are its entry's, edited in place: a `command`
 // under its id as well would be a second command for the same terminal.
 test('a terminal of your own: its entry\'s title and command, then the fields of a terminal, its own list', () => {
@@ -364,10 +324,6 @@ test('a terminal of your own: its entry\'s title and command, then the fields of
   assert.equal(Settings.moduleKind({ agent: true }), 'agent');
   // Without a title, the id names it.
   assert.ok(plain(Settings.terminalInfo({ id: 'logs', title: '', command: 'x' })).settings[3].help.includes('logs stops'));
-  // On its page, the entry's keys stay as they are; the others go under its id.
-  const fields = plain(Settings.moduleFields([{ moduleId: 'btop', title: 'System', terminal: true, settings: info.settings }]));
-  assert.deepEqual(fields.map((f) => f.key).slice(0, 3), ['terminals.btop.title', 'terminals.btop.command', 'btop.directory']);
-  assert.ok(fields.every((f) => f.page === 'modules/btop'));
 });
 
 const registry = JSON.parse(fs.readFileSync(new URL('../core/components/components.json', import.meta.url), 'utf8')).components;
@@ -381,24 +337,6 @@ test('the voice modules\' pages have a row for every component they need, and ea
   assert.deepEqual(ids(local), ['libpulse', 'voxtype', 'localai']);
   assert.deepEqual(ids(codex), ['codex-live-audio']);
   for (const id of [...ids(local), ...ids(codex)]) assert.ok(registry.some((c) => c.id === id), id);
-  // a component row keeps its module's page and sections, and takes no config key
-  const fields = plain(Settings.moduleFields([{ moduleId: 'local-live', title: 'Voice', settings: local.settings }], ''));
-  const row = fields.find((f) => f.component === 'voxtype');
-  assert.equal(row.page, 'modules/local-live');
-  assert.equal(row.section, 'Speech to text (STT)');
-  assert.equal(row.key, undefined);
-});
-
-test('the Voice page keeps speech to text and text to speech apart, each with a note', () => {
-  const sections = plain(Settings.sections(plain(Settings.moduleFields([{ moduleId: 'local-live', title: 'Voice', settings: voiceInfo().settings }], '')), 'modules/local-live'));
-  assert.deepEqual(sections.map((s) => s.name), ['Agent', 'Audio', 'Speech to text (STT)', 'Text to speech (TTS)']);
-  const named = (name) => sections.find((s) => s.name === name).fields;
-  for (const name of ['Speech to text (STT)', 'Text to speech (TTS)']) assert.equal(named(name)[0].type, 'note', name);
-  const keys = (name) => named(name).filter((f) => f.key).map((f) => f.key.replace('local-live.', ''));
-  assert.deepEqual(keys('Speech to text (STT)'), ['language', 'speechModel']);
-  assert.deepEqual(keys('Text to speech (TTS)'), ['voiceLanguage', 'voiceModel', 'otherVoiceModel', 'voice', 'localaiUrl']);
-  assert.ok(named('Speech to text (STT)').some((f) => f.component === 'voxtype'));
-  assert.ok(named('Text to speech (TTS)').some((f) => f.component === 'localai'));
 });
 
 test('the languages: one list for what you speak and what speaks, each a choice that keeps its default', () => {
@@ -430,27 +368,6 @@ test('a field with `when` shows only while another field has that value; the def
   assert.deepEqual(shown({ lang: 'xx' }), ['lang', 'c']);
   assert.equal(Settings.effectiveValue(schema, 'lang', () => undefined), 'pt');
   assert.equal(Settings.effectiveValue(schema, 'nope', () => undefined), undefined);
-});
-
-test('moduleFields puts the references to a module\'s own fields under its id, as it does their keys', () => {
-  const fields = plain(Settings.moduleFields([{ moduleId: 'm', title: 'M', settings: [
-    { key: 'lang', type: 'choice', default: 'pt' },
-    { key: 'a', type: 'string', default: '', when: { key: 'lang', is: 'pt' } },
-    { type: 'components', by: { key: 'lang', field: 'language' }, match: { engine: 'piper' } },
-    { key: 'v', type: 'choice', default: '', options: [{ value: 'x', needs: ['id', { engine: 'piper', language: '@lang', plain: 'text' }] }] }
-  ] }], ''));
-  assert.deepEqual(fields[1].when, { key: 'm.lang', is: 'pt' });
-  assert.deepEqual(fields[2].by, { key: 'm.lang', field: 'language' });
-  assert.deepEqual(fields[3].options[0].needs, ['id', { engine: 'piper', language: '@m.lang', plain: 'text' }]);
-  // the same through the whole chain: the voice page's own references resolve to keys it has
-  const voice = plain(Settings.moduleFields([{ moduleId: 'local-live', title: 'Voice', settings: voiceInfo().settings }], ''));
-  const keys = voice.map((f) => f.key).filter(Boolean);
-  for (const f of voice) {
-    if (f.when) assert.ok(keys.includes(f.when.key), 'when ' + f.when.key);
-    if (f.by) assert.ok(keys.includes(f.by.key), 'by ' + f.by.key);
-    for (const o of f.options || []) for (const n of o.needs || []) for (const v of typeof n === 'string' ? [] : Object.values(n))
-      if (String(v).startsWith('@')) assert.ok(keys.includes(v.slice(1)), 'needs ' + v);
-  }
 });
 
 // ------------------------------------------- the daemon's schema, put together

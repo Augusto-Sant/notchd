@@ -15,7 +15,7 @@ QMLLINT ?= $(firstword $(wildcard /usr/lib/qt6/bin/qmllint /usr/lib64/qt6/bin/qm
 # The Omarchy host imports qs.Commons/qs.Ui, which only exist inside the
 # Omarchy shell, so lint skips it; `make restart` and the shell log cover it.
 LINT_FILES = shell.qml core/*.qml core/settings/*.qml core/settings/previews/*.qml \
-	$(wildcard core/modules/*.qml core/client/*.qml core/client/prims/*.qml)
+	$(wildcard core/client/*.qml core/client/prims/*.qml)
 # Not core/terminal/: it imports QMLTermWidget, whose package ships no type
 # information for qmllint. The QML tests load it where it is installed.
 
@@ -38,8 +38,8 @@ TIMED = scripts/timed.py
 check: lint validate test rust
 	@$(MAKE) --no-print-directory -j3 -O integration qmltest visual
 
-# Unit layer: the pure-JS rules (core/*.js, core/settings/*.js) in Node, their
-# Rust ports (native/, cargo test), and
+# Unit layer: the UI-side JS (core/*.js, core/settings/*.js, core/client/) in
+# Node, the Rust core's rules and modules (native/, cargo test), and
 # the Python bridges' and installer's rules as functions (tests/*_test.py,
 # every TestCase without `tier = "integration"`). No processes, no servers.
 test:

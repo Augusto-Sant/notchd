@@ -67,32 +67,22 @@ Item {
   property var hostSettingsPages: []
 
   // -------------------------------------------------------------- built-ins
-  readonly property var builtinModules: ({})
-  // The built-ins that live in the daemon (native/notchd-modules): no QML
-  // file, only the JSON next to where it would be, which gives the settings
-  // page its title and fields. The daemon announces each (`module`) and
-  // the service makes a CoreModule for it.
-  readonly property var coreModules: ({
-    activities: Qt.resolvedUrl("modules/activities.qml"),
-    "claude": Qt.resolvedUrl("modules/claude.qml"),
-    "codex": Qt.resolvedUrl("modules/codex.qml"),
-    "codex-live": Qt.resolvedUrl("modules/codex-live.qml"),
-    "local-live": Qt.resolvedUrl("modules/local-live.qml"),
-    media: Qt.resolvedUrl("modules/media.qml"),
-    resources: Qt.resolvedUrl("modules/resources.qml"),
-    timer: Qt.resolvedUrl("modules/timer.qml")
-  })
+  // The built-in modules, all in the daemon (native/notchd-modules): no QML
+  // file, only core/modules/<id>.json, which gives the settings page its
+  // title and fields and the service its defaults. The daemon announces each
+  // (`module`) and the service makes a CoreModule for it.
+  readonly property var coreModuleIds: ["activities", "claude", "codex", "codex-live", "local-live", "media", "resources", "timer"]
 
-  // The QML file of a module this UI loads itself.
+  // The QML file of a module the host ships (hostModules); built-ins have none.
   function moduleUrl(id) {
-    if (svc.hostModules && svc.hostModules[id]) return svc.hostModules[id]
-    return svc.builtinModules[id] || ""
+    return svc.hostModules && svc.hostModules[id] ? svc.hostModules[id] : ""
   }
-  // Where its JSON file is (a url of the `.qml` beside it), whether it has
-  // a QML file or lives in the daemon.
-  function infoUrl(id) {
+  // Where a module's JSON file is: beside its QML when the host ships one,
+  // else core/modules/<id>.json for a built-in; "" for an unknown id.
+  function infoPathOf(id) {
     var u = svc.moduleUrl(id)
-    return String(u) !== "" ? u : svc.coreModules[id] || ""
+    if (String(u) !== "") return svc.moduleInfoPath(u)
+    return svc.coreModuleIds.indexOf(id) !== -1 ? svc.coreDir + "/modules/" + id + ".json" : ""
   }
   // What loads a module: its QML file, else a CoreModule when the daemon has
   // announced it (a built-in of its own, or a user module).
@@ -104,11 +94,11 @@ Item {
   // Every module the daemon runs, as it announced them.
   readonly property var daemonModuleIds: Object.keys(svc.client.modules || {})
 
-  // Every module that has a file: built-ins first, then the host's. Its
-  // title and settings fields are in a JSON file next to its QML
-  // (media.json), read whether it loads or not (moduleInfo).
+  // Every module that has a JSON file: built-ins first, then the host's. Its
+  // title and settings fields are in it (media.json), read whether it loads
+  // or not (moduleInfo).
   readonly property var fileModuleIds: {
-    var out = Object.keys(svc.builtinModules).concat(Object.keys(svc.coreModules))
+    var out = svc.coreModuleIds.slice()
     var host = Object.keys(svc.hostModules || {})
     for (var i = 0; i < host.length; i++)
       if (out.indexOf(host[i]) === -1) out.push(host[i])
@@ -273,7 +263,7 @@ Item {
     model: svc.fileModuleIds
     delegate: FileView {
       required property string modelData
-      path: svc.moduleInfoPath(svc.infoUrl(modelData))
+      path: svc.infoPathOf(modelData)
       blockLoading: true
       printErrors: false
       onLoaded: {
@@ -284,8 +274,8 @@ Item {
       onLoadFailed: svc.setModuleInfo(modelData, { title: "", settings: [] })
       // A module url in a form moduleInfoPath doesn't know would lose its
       // title and settings without a word.
-      Component.onCompleted: if (path === "" && String(svc.infoUrl(modelData)) !== "")
-        console.warn(svc.logName + ": no settings file for module '" + modelData + "' at " + svc.infoUrl(modelData))
+      Component.onCompleted: if (path === "")
+        console.warn(svc.logName + ": no settings file for module '" + modelData + "'")
     }
   }
 
