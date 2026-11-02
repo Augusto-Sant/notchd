@@ -9,11 +9,15 @@ No symlinks: `omarchy plugin validate` rejects any inside the plugin folder.
 
 ## The daemon
 
-Each host starts the notchd daemon (`native/notchd-daemon`, the `notchd` binary) and connects a `DaemonClient` to it, with `core/client/DaemonLauncher.qml`: it runs `scripts/ensure-daemon.sh` once at startup (`script: Qt.resolvedUrl(".../scripts/ensure-daemon.sh")`) and points its `client` at the socket path the script prints. One daemon serves the user, instance `default`, and it is detached: a shell restart leaves it running and the client reconnects.
+Each host starts the notchd daemon (`native/notchd-daemon`, the `notchd` binary) and connects to it. The host gives its `NotchService` the script (`daemonScript: Qt.resolvedUrl(".../scripts/ensure-daemon.sh")`) and its client name (`daemonClientName`); the service runs `core/client/DaemonLauncher.qml` with them, which runs `scripts/ensure-daemon.sh` at startup and points a `DaemonClient` at the socket path the script prints. One daemon serves the user, instance `default`, and it is detached: a shell restart leaves it running and the client reconnects.
+
+The daemon is the authority for the **config** (it reads, watches and atomically writes the file; the service binds to its `config` message and sends every edit as `set`), the **settings schema** (the service sends the daemon its module catalog, its screens and the settings page, and the window builds its pages from the `schema` that comes back, see [settings.md](settings.md#fields)) and **IPC** (`notchd ipc <method>`). The notch's state (modes, peeks, navigation) is still decided by the service; the daemon computes it in shadow until the next slices.
+
+It also keeps the daemon alive. When the connection drops, or the script fails, the launcher runs the script again after a short backoff (300 ms, doubling up to 5 s; `restartMin`, `restartMax`) for as long as the shell runs, and the client reconnects on its own. Meanwhile the notch shows a small "notchd not running" row at the top of the screen you work on (`NotchSurface` puts a `DaemonDown` window there, in the look of a module's error row; it shows after `daemonDownDelay`, 1.5 s, so a start does not flash it), and the service keeps its last config and notches. Edits made while the daemon is away wait for it and are sent when it is back; a start that keeps failing logs its reason once.
 
 `scripts/ensure-daemon.sh` finds the binary in this order: `$NOTCHD_BIN`, `notchd` on `PATH`, `$XDG_DATA_HOME/notchd/bin/notchd`; with none, it calls `scripts/fetch-daemon.py --dest "$XDG_DATA_HOME/notchd/bin"` (if present, else the error is "notchd not found"). It then runs `notchd daemon --ensure`, which returns at once when a daemon of the same version answers, and otherwise starts one in its own session with stdio to `$XDG_STATE_HOME/notchd/daemon.log` and waits (at most 10 s) for the socket. A daemon of another version is asked to stop (`notchd ipc shutdown`) and replaced; one that cannot be stopped is an error ("update notchd"). On failure the script prints one line of JSON, `{"error": "..."}`, and exits 1; the launcher logs it once (`state` is `failed`, `error` has the text).
 
-While `NotchService` still decides everything the daemon runs in shadow: the client is connected, the UI shows nothing of it, and a failed start is only a log line. The launcher reads `NOTCHD_INSTANCE` (and the script and daemon `NOTCHD_CONFIG`, `NOTCHD_SOCKET`), which is how `make dev` runs its own `dev` instance on the dev config and never meets the user's daemon.
+The launcher reads `NOTCHD_INSTANCE` (and the script and daemon `NOTCHD_CONFIG`, `NOTCHD_SOCKET`), which is how `make dev` runs its own `dev` instance on the dev config and never meets the user's daemon.
 
 ## NotchService
 
@@ -23,7 +27,8 @@ The single source of truth: config, modules, the notches and IPC. It makes a `No
 |---|---|
 | `ipcTarget` | IPC target name for scripts |
 | `logName` | prefix for log lines; defaults to `ipcTarget` |
-| `configPath` | absolute path of the JSON config (watched, live); defaults to `$XDG_CONFIG_HOME/notchd/config.json` |
+| `daemonScript`, `daemonClientName` | the ensure script (a file URL) the service runs, and the client name of its `hello` ([The daemon](#the-daemon)); `daemonCommand` replaces what runs (tests), `daemonDownDelay` is how long without a daemon before the notch says so |
+| `configPath` | absolute path of the JSON config, as the daemon says it (it reads, watches and writes it; live); defaults to `$XDG_CONFIG_HOME/notchd/config.json`, or `NOTCHD_CONFIG` |
 | `hostModules` | `{ id: url }` of modules the host ships; they win over built-ins |
 | `barEdge` | the screen edge the host's bar is on (`"top"`, `"bottom"`, `"left"`, `"right"`); a notch on that edge hangs from the bar |
 | `compositor` | a compositor adapter: the focused screen, fullscreen windows and workspaces; the `workspaces` setting needs one that knows workspaces |

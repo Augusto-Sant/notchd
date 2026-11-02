@@ -79,7 +79,10 @@ ShellRoot {
     { name: "module-voice-dark", page: "modules/local-live", theme: root.dark, bar: true, fields: root.omarchyFields, scrollTo: "end" },
     { name: "components-working-dark", page: "components", theme: root.dark, bar: true, fields: root.omarchyFields, scrollTo: 700 },
     { name: "components-light", page: "components", theme: root.light, bar: true, fields: root.omarchyFields },
-    { name: "agents-dark", agents: true, theme: root.dark }
+    { name: "agents-dark", agents: true, theme: root.dark },
+    // The notch while the daemon is away.
+    { name: "daemon-down-dark", down: true, theme: root.dark },
+    { name: "daemon-down-light", down: true, theme: root.light }
   ]
   property int index: -1
   readonly property var scenario: index >= 0 && index < scenarios.length ? scenarios[index] : null
@@ -95,7 +98,7 @@ ShellRoot {
     function activeWorkspace(screen) { return null }
   }
 
-  NotchService {
+  TestService {
     id: svc
     ipcTarget: "notchd-visual"
     compositor: fakeCompositor
@@ -112,7 +115,7 @@ ShellRoot {
   // ------------------------------------------------------------ notch
   // Real services with the real modules, the media one playing
   // demo-player.py's track: what each module shows on each edge.
-  component DemoService: NotchService {
+  component DemoService: TestService {
     property string tag: ""
     ipcTarget: "notchd-visual-" + tag
     configPath: root.outDir + "/edge-" + tag + ".json"
@@ -498,6 +501,21 @@ ShellRoot {
   }
 
   FloatingWindow {
+    id: downWin
+    visible: !!root.scenario && !!root.scenario.down
+    implicitWidth: downScene.width
+    implicitHeight: downScene.height
+    color: Theme.background
+    Rectangle {
+      id: downScene
+      width: Theme.space(320)
+      height: Theme.space(90)
+      color: Theme.mix(Theme.background, Theme.foreground, 0.12)
+      DaemonDownRow { anchors.centerIn: parent }
+    }
+  }
+
+  FloatingWindow {
     id: agentsWin
     visible: !!root.scenario && !!root.scenario.agents
     implicitWidth: agentsScene.width
@@ -542,14 +560,30 @@ ShellRoot {
     scrollTimer.start()
   }
 
-  Timer { interval: 600; running: true; onTriggered: root.next() }
+  // Every service has a daemon of its own (tests/qml/TestService.qml): the
+  // first scenario starts once each has answered.
+  Timer {
+    id: startTimer
+    property int waited: 0
+    interval: 100
+    repeat: true
+    running: true
+    onTriggered: {
+      var all = [svc, mediaSvc, activitySvc, osdSvc, openSvc, resourcesSvc, resourcesOpenSvc, timerSvc, pomodoroSvc, timerIdleSvc,
+                 timerDoneSvc, restSvc, claudeSvc, claudeBusySvc, codexSvc, codexBusySvc, liveSvc, liveClosedSvc, agentsTabsSvc,
+                 agentsStackSvc, agentsClosedSvc, agentsSideSvc, navSvc]
+      if (++waited < 100 && !all.every(function(s) { return s.daemonReady })) return
+      stop()
+      root.next()
+    }
+  }
   Timer {
     id: grabTimer
     interval: 400
     onTriggered: {
       var name = root.scenario.name
       var target = root.scenario.chat ? chatScene : root.scenario.codex ? codexScene : root.scenario.agents ? agentsScene
-        : root.scenario.live ? liveScene
+        : root.scenario.live ? liveScene : root.scenario.down ? downScene
         : root.scenario.edge ? notchScene : win.contentItem.children[0]
       target.grabToImage(function(result) {
         if (!result.saveToFile(root.outDir + "/" + name + ".png")) console.warn("could not save " + name)

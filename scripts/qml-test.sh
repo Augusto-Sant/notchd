@@ -10,7 +10,7 @@
 # writes). Two more shards: the daemon client's (client.qml, a fake daemon) and
 # the shadow test's (shadow.qml, the real daemon, which `make qmltest` builds).
 # QMLTEST_ONLY=<text> runs only the cases whose name contains it;
-# QMLTEST_VERBOSE=1 lists the cases that passed too.
+# QMLTEST_VERBOSE=1 lists the cases that passed too; QMLTEST_KEEP=1 keeps the scratch dir.
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -22,7 +22,7 @@ jobs=${QMLTEST_JOBS:-$(( $(nproc) < 8 ? $(nproc) : 8 ))}
 [[ -n ${QMLTEST_ONLY:-} ]] && jobs=1
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/notchd-qmltest.XXXXXX")
-trap 'rm -rf -- "$scratch"' EXIT
+trap 'pkill -f -- "notchd --socket $scratch" 2>/dev/null || true; [[ -n ${QMLTEST_KEEP:-} ]] || rm -rf -- "$scratch"' EXIT
 
 # One line per shard: the indexes of its cases. Longest first, each to the
 # shard with the least to do; a case not timed yet counts as 2 s.
@@ -49,15 +49,17 @@ EOF
 
 run_shard() {
   local dir=$1 cases=$2
-  mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime"
+  mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime" "$dir/sock"
   ln -s -- "$root/core" "$dir/config/core"
   ln -s -- "$root/hosts" "$dir/config/hosts"
   ln -s -- "$root/tests/qml/shell.qml" "$dir/config/shell.qml"
   ln -s -- "$root/tests/qml/fixtures" "$dir/config/fixtures"
+  cp -- "$root/tests/qml/TestService.qml" "$dir/config/TestService.qml"
   # Fake `claude` and `codex` terminal UIs (tests/qml/fixtures/bin), state,
   # data, cache and Claude Code's dir in the scratch dir; a fake live bridge
   # and a fake components installer.
-  NOTCHD_QMLTEST_CASES="$cases" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
+  NOTCHD_TEST_DAEMON="$daemon_bin" NOTCHD_TEST_SOCKETS="$dir/sock" \
+    NOTCHD_QMLTEST_CASES="$cases" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
     NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
     CLAUDE_CONFIG_DIR="$dir/data/claude" \
     NOTCHD_LIVE_BRIDGE="$root/tests/qml/fixtures/bin/codex-live" NOTCHD_FAKE_LIVE_ARGS="$dir/data/live-args" \
@@ -66,6 +68,8 @@ run_shard() {
     PATH="$root/tests/qml/fixtures/bin:$PATH" \
     NOTCHD_FAKE_CLAUDE_ARGS="$dir/data/claude-args" NOTCHD_FAKE_CODEX_ARGS="$dir/data/codex-args" "$root/scripts/isolated.sh" "$dir/runtime" \
     timeout -k 5 90 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
+  # The services' daemons (tests/qml/TestService.qml) outlive the shell: stop them.
+  pkill -f -- "notchd --socket $dir/sock" 2>/dev/null || true
 }
 
 # The client's cases (tests/qml/client.qml) are one more shard, with the fake
@@ -139,7 +143,7 @@ for ((i = 0; i < n; i++)); do
   # The client's cases drop and refuse the connection on purpose: Quickshell
   # warns of each socket error, and the client of the junk line it is sent.
   if [[ -f $(dirname -- "$log")/daemon.log || -d $(dirname -- "$log")/sock ]]; then
-    problems=$(grep -vE 'quickshell\.io\.socket: Socket error|notchd client: ignoring a line|qmltest: the notchd daemon did not start' <<< "$problems" || true)
+    problems=$(grep -vE 'quickshell\.io\.socket: Socket error|notchd client: ignoring a line|qmltest: the notchd daemon did not start|notchd-qmltest-daemon: ignoring ' <<< "$problems" || true)
   fi
   if [[ -n $problems ]]; then
     echo "QML warnings during the tests (shard $i):" >&2

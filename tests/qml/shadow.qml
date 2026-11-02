@@ -155,8 +155,9 @@ ShellRoot {
       readonly property string sock: root.socketDir + "/" + w.tag + ".sock"
       readonly property string cfgFile: root.socketDir + "/" + w.tag + ".json"
       readonly property alias svc: service
-      readonly property alias client: client
-      readonly property alias daemon: proc
+      // The service's own client: it starts the daemon (the launcher's path,
+      // `daemon --ensure`, with the test hooks on) and is its UI.
+      readonly property alias client: service.client
       // The inputs, kept to send both sides the same.
       property var screenSpec: ({ names: ["A", "B"], focused: "B", fullscreen: [], workspaces: ({}), known: [], supports: false })
       property var facts: ({})
@@ -179,7 +180,9 @@ ShellRoot {
       NotchService {
         id: service
         ipcTarget: "shadow-" + w.tag
-        configPath: root.dir + "/" + w.tag + ".json"
+        // The daemon (with the test hooks on) is started by the service itself.
+        daemonCommand: ["env", "NOTCHD_TEST_HOOKS=1", root.daemonBin, "--socket", w.sock, "--config", w.cfgFile, "daemon", "--ensure"]
+        daemonDownDelay: 60000
         compositor: compositor
         screens: [{ name: "A" }, { name: "B" }]
         defaultModules: []
@@ -191,25 +194,9 @@ ShellRoot {
         })
       }
 
-      Process {
-        id: proc
-        command: [root.daemonBin, "--socket", w.sock, "--config", w.cfgFile, "daemon"]
-        environment: ({ NOTCHD_TEST_HOOKS: "1" })
-        running: false
-      }
-
-      DaemonClient {
-        id: client
-        socketPath: ""
-        clientName: "shadow"
-        clientVersion: "0.0.1"
-        reconnectMin: 30
-        reconnectMax: 100
-      }
 
       function destroyWorld() {
-        client.enabled = false
-        proc.running = false
+        client.ipc("shutdown", [])
         w.destroy()
       }
 
@@ -321,7 +308,7 @@ ShellRoot {
       }
       function set(key, value) {
         service.setConfigValue(key, value)
-        client.set(key, value)
+        service.flushConfig()
       }
       // A notch dropped at `place` ({ edge, offset, screen }).
       function drop(notch, screen, place) {
@@ -428,15 +415,12 @@ ShellRoot {
     root.world = w
     // The standalone fixture loads whenever it is switched on (by default).
     var mods = Object.assign({ solo: {} }, sc.modules || {})
-    w.client.socketPath = w.sock
-    w.client.enabled = true
-    w.daemon.running = true
     root.until(function() { return w.client.ready }, function() {
       if (!root.check(w.client.ready, "the daemon did not come up")) { root.done(); return }
-      // The same config to both; the service writes its own file, the daemon its own.
+      // The config goes through the service to the daemon, the file's one authority.
       var cfg = Object.assign({ hoverOpenDelay: 100, hoverCloseDelay: 150 }, sc.config)
       w.svc.replaceConfig(cfg)
-      Object.keys(cfg).forEach(function(k) { w.client.set(k, cfg[k]) })
+      w.svc.flushConfig()
       w.screens(sc.screens || {})
       root.until(function() { return w.svc.configResolved && w.svc.moduleIds.length > 0 && w.svc.modules.length === w.svc.moduleIds.length && w.svc.notches.length > 0 },
         function() {

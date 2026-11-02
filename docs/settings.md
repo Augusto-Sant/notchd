@@ -1,10 +1,15 @@
 # Settings window
 
-`core/settings/SettingsWindow.qml`. An ordinary toplevel window with a fixed size, so tiling compositors float it, and it takes keyboard input, which the notch overlay never does. Every change goes through `NotchService.setConfigValue`: it applies at once and is written to the config file shortly after.
+`core/settings/SettingsWindow.qml`. An ordinary toplevel window with a fixed size, so tiling compositors float it, and it takes keyboard input, which the notch overlay never does. Every change goes through `NotchService.setConfigValue`: it applies at once and is sent to the daemon (`set`), which writes the config file atomically and sends the result back; sets to one key within 120 ms are one write, so a slider drag is not a write per step.
 
 ## Fields
 
-The window is generated from `NotchService.settingsSchema`: the core's fields, then the host's `hostSettingsSchema`. Each field is an object:
+The window is generated from `NotchService.settingsSchema`, put together from two sources:
+
+- **the daemon's `schema` message** ([architecture.md](architecture.md#settings)): the core's fields (General, Notches, the Modules page's lists, each notch's page) and the pages and fields of a user module. The service tells the daemon what it needs to build them: the modules it loads itself (`catalog`: id, title, kind and fields of each built-in module, the host's and the config's terminals), the screens and the compositor's workspaces (`screens`), and the page the window shows (`settings`, which picks the notch the notch pages edit). `Settings.windowPages` and `Settings.windowFields` put them in the window's format (the edge cards get their `preview` there: a QML file the daemon cannot name).
+- **built here, for later slices to move**: the Components page (`Components.overviewFields`, `decorate`, `gate`, which need the installer's state), the built-in modules' own pages (`Settings.moduleFields`: their choices wait on components, `needs`), and the host's `hostSettingsSchema`.
+
+The window reads the config for the value of a field (`NotchService.config`, the daemon's), and the daemon's `default`; a field that is not in the schema yet is not shown, so after an edit that adds one (a second notch) the page fills in a moment later. Each field is an object:
 
 | Key | |
 |---|---|
@@ -47,7 +52,7 @@ The Modules page lists every module the host can load (`availableModuleIds`) in 
 
 ## Pages
 
-`NotchService.settingsPages`: the core's (General, Notches, Modules, Components, Appearance), then the host's `hostSettingsPages`, each `{ id, label, icon }` with `icon` a Nerd Font code point, then a page per notch and per module. A host page with a core page's id replaces its label or icon. A page with no fields is hidden. A page whose id has a `/` is a sub-page of the part before it (`notch/1` of `notch`, `modules/media` of `modules`): it has no sidebar entry, the sidebar marks its parent while it shows, a link above its fields leads back, and so does Escape. A sub-page that goes away (its notch removed) falls back to its parent. The page shown is kept on the service, so it survives closing the window; it starts on General.
+`NotchService.settingsPages`: the core's (General, Notches, Modules, Components, Appearance), then the host's `hostSettingsPages`, each `{ id, label, icon }` with `icon` a Nerd Font code point, then a page per notch (the daemon's) and per module (the built-in ones' from the catalog, a user module's the daemon's; `Settings.windowPages`). A host page with a core page's id replaces its label or icon. A page with no fields is hidden. A page whose id has a `/` is a sub-page of the part before it (`notch/1` of `notch`, `modules/media` of `modules`): it has no sidebar entry, the sidebar marks its parent while it shows, a link above its fields leads back, and so does Escape. A sub-page that goes away (its notch removed) falls back to its parent. The page shown is kept on the service, so it survives closing the window; it starts on General.
 
 ## Card pictures
 

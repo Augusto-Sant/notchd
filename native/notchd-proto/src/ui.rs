@@ -94,6 +94,8 @@ pub enum ToDaemon {
     Tab(Tab),
     #[serde(rename = "settings")]
     Settings(SettingsOpen),
+    #[serde(rename = "catalog")]
+    Catalog(Catalog),
     #[serde(rename = "reserve-applied")]
     ReserveApplied(ReserveApplied),
     #[serde(rename = "measure")]
@@ -121,6 +123,7 @@ impl ToDaemon {
         "event",
         "tab",
         "settings",
+        "catalog",
         "reserve-applied",
         "measure",
         "set",
@@ -342,6 +345,17 @@ pub struct SettingsOpen {
     pub open: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<String>,
+}
+
+/// The modules the UI itself loads (the built-ins and the host's, a terminal
+/// of the config): `{ moduleId, title, settings, standalone, agent, live,
+/// terminal }` each, free-form like a module's settings fields. The daemon
+/// builds the settings pages that depend on them (which lists the Modules
+/// page has, what a notch's module list says). It replaces the last list; a
+/// user module's own entry (from its `module.json`) is not in it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Catalog {
+    pub modules: Vec<Value>,
 }
 
 /// The reserve target the UI now has mapped.

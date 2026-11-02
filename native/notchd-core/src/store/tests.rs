@@ -1050,6 +1050,45 @@ fn the_schema_rev_moves_only_when_the_schema_changes() {
 }
 
 #[test]
+fn the_uis_catalog_shapes_the_schema_and_a_user_module_wins_its_id() {
+    let mut s = store(json!({}));
+    let _ = s.take_changes(0);
+    let agent = json!({"moduleId": "claude", "title": "Claude Code", "agent": true,
+        "settings": [{"key": "directory", "type": "string", "label": "Folder"}]});
+    s.set_ui_catalog(vec![
+        agent.clone(),
+        json!({"moduleId": "osd", "title": "OSD", "standalone": true, "settings": []}),
+    ]);
+    let schema = s.take_changes(1).schema.expect("the catalog changed it");
+    // The lists of the Modules page that only exist with such modules.
+    let parts: Vec<_> = schema
+        .fields
+        .iter()
+        .filter_map(|f| f.part.as_deref())
+        .collect();
+    assert!(
+        parts.contains(&"agent") && parts.contains(&"standalone"),
+        "{parts:?}"
+    );
+    assert!(schema.pages.iter().any(|p| p.id == "modules/claude"));
+    // A user module with the same id replaces the UI's entry.
+    s.set_module_def(json!({"moduleId": "claude", "title": "Mine", "settings": [
+        {"key": "x", "type": "string", "label": "X"}]}));
+    let schema = s.take_changes(2).schema.expect("changed");
+    assert!(
+        schema
+            .fields
+            .iter()
+            .all(|f| f.key.as_deref() != Some("claude.directory"))
+    );
+    // A new report replaces the last one.
+    s.remove_module_def("claude");
+    s.set_ui_catalog(Vec::new());
+    let schema = s.take_changes(3).schema.expect("changed");
+    assert!(!schema.pages.iter().any(|p| p.id == "modules/claude"));
+}
+
+#[test]
 fn showing_a_notchs_page_picks_the_notch_the_schema_edits() {
     let mut s = store(json!({"notches": [{"id": "a", "modules": ["media"]}, {"id": "b"}]}));
     s.settings(true, Some("notch/1".into()));

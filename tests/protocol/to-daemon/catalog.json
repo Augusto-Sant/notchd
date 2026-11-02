@@ -1,0 +1,11 @@
+{
+ "message": "catalog",
+ "valid": [
+  {"t":"catalog","modules":[{"moduleId":"media","settings":[],"title":"Now playing"}]},
+  {"t":"catalog","modules":[]}
+ ],
+ "invalid": [
+  {"why":"modules missing","json":{"t":"catalog"}},
+  {"why":"modules is not a list","json":{"t":"catalog","modules":{"moduleId":"media"}}}
+ ]
+}

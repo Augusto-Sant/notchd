@@ -557,3 +557,57 @@ function snapToStep(v, min, max, step) {
 function storedValue(field, value) {
   return field && field["default"] !== undefined && value === field["default"] ? undefined : value
 }
+
+// ------------------------------------------------- the daemon's schema
+// The daemon builds the settings schema (the `schema` message: pages and
+// fields) from the config, the screens and the modules it knows: the core's
+// pages, a page per notch, and a user module's own. What it does not carry
+// yet the QML adds (NotchService): the Components page, the built-in modules'
+// pages (their choices wait on components: `needs`), the host's own fields
+// and the edge cards' previews. These put the halves together.
+
+// The module a page is the settings of ("modules/media" is "media"), else "".
+function pageModule(id) {
+  var m = /^modules\/(.+)$/.exec(String(id || ""))
+  return m ? m[1] : ""
+}
+
+// The ids of the modules the QML loads itself (NotchService.moduleCatalog).
+function catalogIds(catalog) {
+  return Array.prototype.map.call(catalog || [], function(m) { return m && m.moduleId })
+}
+
+// The pages of the window: the core's and the host's, then a page per notch
+// (the daemon's), the built-in modules' (from the catalog) and the daemon's
+// pages of a user module. `daemonPages` is the schema's `pages`.
+function windowPages(core, host, daemonPages, catalog) {
+  var own = catalogIds(catalog)
+  var subs = Array.prototype.filter.call(daemonPages || [], function(p) { return !!p && !!p.sub })
+  function page(p) { return { id: p.id, label: p.label, icon: p.icon } }
+  var notches = subs.filter(function(p) { return notchIndexOfPage(p.id) !== -1 })
+  var users = subs.filter(function(p) { return pageModule(p.id) !== "" && own.indexOf(pageModule(p.id)) === -1 })
+  return mergePages(core, host).concat(notches.map(page), modulePages(catalog), users.map(page))
+}
+
+// The fields of the window the daemon's schema gives: all but the built-in
+// modules' own, as the loose descriptors the controls read (without the
+// daemon's resolved `value`, `visible` and `locked`: the window reads the
+// config for them). The edge cards get `preview`, a QML file the daemon
+// cannot name.
+function windowFields(daemonFields, catalog, edgePreview) {
+  var own = catalogIds(catalog)
+  var out = []
+  Array.prototype.forEach.call(daemonFields || [], function(f) {
+    var module = pageModule(pageOf(f))
+    if (module !== "" && own.indexOf(module) !== -1) return
+    var field = Object.assign({}, f)
+    delete field.value
+    delete field.visible
+    delete field.locked
+    if (field.type === "choice" && field.display === "cards" && field.options
+        && /(^|\.)position\.edge$/.test(String(field.key || "")))
+      field.options = Array.prototype.map.call(field.options, function(o) { return Object.assign({}, o, { preview: edgePreview }) })
+    out.push(field)
+  })
+  return out
+}

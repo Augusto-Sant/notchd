@@ -8,8 +8,10 @@ import "../Components.js" as Components
 
 // The settings window: a sidebar of pages and, for the current page, its
 // fields grouped by section. Built from NotchService.settingsPages and
-// settingsSchema; every change applies at once and is written back to the
-// config file (NotchService.setConfigValue), so there is no Apply button.
+// settingsSchema (the daemon's `schema`, plus what the QML still builds: see
+// docs/settings.md); every change applies at once and goes to the daemon,
+// which writes the config file (NotchService.setConfigValue), so there is no
+// Apply button.
 //
 // An ordinary toplevel window, so it works on any compositor and takes
 // keyboard input, which the notch overlay never does.

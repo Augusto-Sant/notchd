@@ -72,7 +72,7 @@ qmltest: daemon
 
 # Renders the settings window offscreen into build/visual/; fails on any QML
 # warning, so it also proves the core loads.
-visual:
+visual: daemon
 	@$(TIMED) visual scripts/visual-test.sh
 
 # The pyramid from the last run of each layer: tests, wall and CPU time per
@@ -85,7 +85,7 @@ times:
 # demo media player on a private D-Bus, over Omarchy's Gruvbox wallpaper
 # (WALLPAPER=<image> for another). Rerun after a visual change to the notch
 # and commit the image.
-hero:
+hero: daemon
 	scripts/hero.sh
 
 # The app icon at every hicolor size, plus notchd.ico, from

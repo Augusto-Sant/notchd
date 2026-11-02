@@ -28,7 +28,7 @@ ShellRoot {
   })
   Component.onCompleted: Theme.provider = root.palette
 
-  component Service: NotchService {
+  component Service: TestService {
     property string tag: ""
     ipcTarget: "notchd-hero-" + tag
     configPath: root.outDir + "/hero-" + tag + ".json"

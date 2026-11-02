@@ -216,6 +216,9 @@ pub struct Store {
     /// The modules' `{ moduleId, title, settings, standalone }`, as their
     /// JSON files give them (`moduleCatalog`), for the schema.
     module_defs: BTreeMap<String, Value>,
+    /// The same for the modules the UI loads itself (`catalog`), kept
+    /// apart so a user module coming and going never touches them.
+    ui_defs: Vec<Value>,
     schema_rev: u64,
     last_schema: Option<Schema>,
 
@@ -1780,6 +1783,13 @@ impl Store {
         self.last_schema.clone()
     }
 
+    /// The modules the UI loads itself, as it reports them (`catalog`): they
+    /// replace the last report. An entry with the id of a user module's own
+    /// def loses to it.
+    pub fn set_ui_catalog(&mut self, modules: Vec<Value>) {
+        self.ui_defs = modules;
+    }
+
     pub fn remove_module_def(&mut self, id: &str) {
         self.module_defs.remove(id);
     }
@@ -1788,7 +1798,17 @@ impl Store {
     /// rev is given as it is sent).
     pub fn compute_schema(&self) -> Schema {
         let notches = config::notches(&self.config, &DEFAULT_MODULES);
-        let catalog: Vec<Value> = self.module_defs.values().cloned().collect();
+        let mut catalog: Vec<Value> = self
+            .ui_defs
+            .iter()
+            .filter(|d| {
+                d.get("moduleId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !self.module_defs.contains_key(id))
+            })
+            .cloned()
+            .collect();
+        catalog.extend(self.module_defs.values().cloned());
         let screens: Vec<String> = self.screen_names();
         schema::build(&schema::Inputs {
             config: &self.config,

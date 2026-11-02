@@ -31,6 +31,12 @@ Item {
   property bool barHidden: false
   property string layerNamespace: "notchd"
 
+  // "notchd not running" while the daemon is away.
+  DaemonDown {
+    svc: root.svc
+    barHeight: root.barHeight
+  }
+
   // The window of each copy, in the service's order.
   readonly property var windows: windowVariants.instances
 

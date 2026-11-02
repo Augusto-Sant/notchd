@@ -17,18 +17,20 @@ for tool in quickshell magick dbus-run-session python3; do
 done
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/notchd-visual.XXXXXX")
-trap 'rm -rf -- "$scratch"' EXIT
-mkdir -- "$scratch/config" "$scratch/shots" "$scratch/demo"
+trap 'pkill -f -- "notchd --socket $scratch" 2>/dev/null || true; rm -rf -- "$scratch"' EXIT
+mkdir -- "$scratch/config" "$scratch/shots" "$scratch/demo" "$scratch/sock"
 ln -s -- "$root/core" "$scratch/config/core"
 ln -s -- "$root/hosts" "$scratch/config/hosts"
 ln -s -- "$root/tests/visual/shell.qml" "$scratch/config/shell.qml"
+cp -- "$root/tests/qml/TestService.qml" "$scratch/config/TestService.qml"
 
 # Cut off from the session, so nothing here touches its sockets, with the
 # demo player as the only MPRIS player (with-demo-player.sh).
 # Fake `claude` and `codex` terminal UIs, state, data and cache in the
 # scratch dir. A fake live bridge (no microphone, no network) and a fake
 # components installer (nothing is installed).
-NOTCHD_VISUAL_DIR="$scratch/shots" XDG_STATE_HOME="$scratch/shots/state" XDG_DATA_HOME="$scratch/shots/share" XDG_CACHE_HOME="$scratch/shots/cache" \
+NOTCHD_TEST_DAEMON="$root/native/target/release/notchd" NOTCHD_TEST_SOCKETS="$scratch/sock" \
+  NOTCHD_VISUAL_DIR="$scratch/shots" XDG_STATE_HOME="$scratch/shots/state" XDG_DATA_HOME="$scratch/shots/share" XDG_CACHE_HOME="$scratch/shots/cache" \
   CLAUDE_CONFIG_DIR="$scratch/shots/claude" \
   NOTCHD_LIVE_BRIDGE="$root/tests/qml/fixtures/bin/codex-live" \
   NOTCHD_COMPONENTS_INSTALLER="$root/tests/qml/fixtures/bin/components" NOTCHD_FAKE_COMPONENTS_DIR="$scratch/shots/components" \

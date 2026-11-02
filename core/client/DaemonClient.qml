@@ -5,7 +5,8 @@ import "Protocol.js" as Protocol
 // A client of the notchd daemon (docs/architecture.md, "Protocol: core to
 // UI"): connects to its socket, says hello, keeps the latest of each entity
 // the daemon sends, sends requests with a reply callback, and reconnects when
-// the socket drops (the daemon may restart). Nothing in the shell uses it yet.
+// the socket drops (the daemon may restart). NotchService holds one, through
+// its DaemonLauncher.
 //
 // The host sets `socketPath`; `status` says where the connection is:
 //   "disconnected"  no socket (waiting to retry, or `enabled` is off)

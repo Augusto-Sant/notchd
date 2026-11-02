@@ -470,3 +470,46 @@ test('the Voice page shows the voices of the chosen language only, and every lan
   assert.equal(overview.filter((f) => f.component && registry.find((c) => c.id === f.component).engine).length, registry.filter((c) => c.engine).length);
   assert.ok(new Set(overview.map((f) => f.section)).size > 7);
 });
+
+// ------------------------------------------- the daemon's schema, put together
+const catalog = [{ moduleId: 'media', title: 'Now playing' }, { moduleId: 'btop', title: 'btop', terminal: true }];
+const daemonPages = [
+  { id: 'general', label: 'General', icon: 'g', sub: false },
+  { id: 'notch/0', label: 'main', icon: '', sub: true },
+  { id: 'notch/1', label: 'side', icon: '', sub: true },
+  { id: 'modules/media', label: 'Now playing', icon: '', sub: true },
+  { id: 'modules/weather', label: 'Weather', icon: '', sub: true },
+];
+
+test('windowPages: the host core pages, the daemon notch pages, the QML module pages and the daemon user module pages', () => {
+  const pages = plain(Settings.windowPages(core, [], daemonPages, catalog));
+  assert.deepEqual(pages.map((p) => p.id),
+    ['general', 'modules', 'notch/0', 'notch/1', 'modules/media', 'modules/btop', 'modules/weather']);
+  // a module the QML loads keeps its own page, not the daemon's copy
+  assert.equal(pages.filter((p) => p.id === 'modules/media').length, 1);
+  assert.equal(pages.find((p) => p.id === 'notch/1').label, 'side');
+  assert.deepEqual(plain(Settings.windowPages(core, [], null, [])).map((p) => p.id), ['general', 'modules']);
+});
+
+test('windowFields: drops the built-in modules\' own fields and the daemon\'s resolved parts, previews the edge cards', () => {
+  const edge = { page: 'notch/0', key: 'position.edge', type: 'choice', display: 'cards', value: 'top', visible: true, locked: null,
+    options: [{ value: 'top', label: 'Top' }, { value: 'left', label: 'Left' }] };
+  const other = { page: 'general', key: 'hoverOpenDelay', type: 'integer', default: 120, value: 120, visible: true, locked: null };
+  const media = { page: 'modules/media', key: 'media.x', type: 'boolean' };
+  const weather = { page: 'modules/weather', key: 'weather.city', type: 'string' };
+  const nested = { page: 'notch/1', key: 'notches.1.position.edge', type: 'choice', display: 'cards', options: [{ value: 'top', label: 'Top' }] };
+  const fields = plain(Settings.windowFields([edge, other, media, weather, nested], catalog, 'Edge.qml'));
+  assert.deepEqual(fields.map((f) => f.key), ['position.edge', 'hoverOpenDelay', 'weather.city', 'notches.1.position.edge']);
+  assert.deepEqual(fields[0].options.map((o) => o.preview), ['Edge.qml', 'Edge.qml']);
+  assert.equal(fields[3].options[0].preview, 'Edge.qml');
+  assert.ok(!('value' in fields[0]) && !('visible' in fields[0]) && !('locked' in fields[1]));
+  assert.equal(fields[1].default, 120);
+  assert.equal(other.value, 120, 'the daemon\'s field is not mutated');
+  assert.deepEqual(plain(Settings.windowFields(null, catalog, 'Edge.qml')), []);
+});
+
+test('windowFields: an array that is a sequence (not Array.isArray) still gets its previews', () => {
+  const options = new Proxy([{ value: 'top', label: 'Top' }], { getPrototypeOf: () => Object.prototype });
+  const out = plain(Settings.windowFields([{ page: 'notch/0', key: 'position.edge', type: 'choice', display: 'cards', options }], [], 'E.qml'));
+  assert.equal(out[0].options[0].preview, 'E.qml');
+});

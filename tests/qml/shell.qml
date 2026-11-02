@@ -162,6 +162,9 @@ ShellRoot {
       { name: "live: without its packages it says what to install, and the config stays as it was", run: root.liveMissingPackages },
       { name: "live: a new session ends the one running, clears the transcript and starts another", run: root.liveNewSession },
       { name: "live: the local voice starts its own bridge with its settings", run: root.localLiveArgs },
+      { name: "daemon: a settings edit goes to the daemon and comes back; defaults are never written; a slider drag is one write", run: root.daemonSettingsRoundTrip },
+      { name: "daemon: ipc set answers as before, the daemon's own ipc set and a hand edit of the file reach the UI, a bad file is ignored", run: root.daemonIpcAndFile },
+      { name: "daemon: killed, the notch says notchd is not running, the config stays, an edit waits, and it all comes back", run: root.daemonDownAndBack },
       { name: "components: the settings rows show the installer's state, install, cancel and remove (twice) through it, and lock a voice until it is installed", run: root.componentRows }
     ]
     // scripts/qml-test.sh runs the cases in shards at once: NOTCHD_QMLTEST_CASES
@@ -177,7 +180,18 @@ ShellRoot {
   }
   // The offscreen windows take a moment to be exposed; pointer events sent
   // before that are lost.
-  Timer { id: warmup; interval: 300; onTriggered: root.next() }
+  // Every service has a daemon of its own (tests/qml/TestService.qml): the
+  // cases start once each has answered and sent its config.
+  Timer {
+    id: warmup
+    interval: 300
+    onTriggered: root.until(root.daemonsReady, root.next, 15000)
+  }
+  function daemonsReady() {
+    var services = [service, multi, standaloneSvc, resourced, timed, typer, dropSvc, codexSvc, claudeSvc, codexMissingSvc,
+                    ownTermSvc, liveSvc, localLiveSvc, componentSvc, tallSvc, tabsSvc, idleSvc]
+    return services.every(function(s) { return s.daemonReady })
+  }
 
   // --------------------------------------------------------------- fakes
   // A compositor whose every screen shows workspace 4.
@@ -190,7 +204,7 @@ ShellRoot {
     function activeWorkspace(screen) { return { id: 4, name: "4" } }
   }
 
-  NotchService {
+  TestService {
     id: service
     ipcTarget: "notchd-qmltest"
     configPath: root.dir + "/config.json"
@@ -207,7 +221,7 @@ ShellRoot {
     function activeWorkspace(screen) { return null }
   }
 
-  NotchService {
+  TestService {
     id: multi
     ipcTarget: "notchd-qmltest-multi"
     configPath: root.dir + "/multi.json"
@@ -894,7 +908,7 @@ ShellRoot {
   // `modules` list them: they load on their own (unless switched off) and
   // peek in a notch of their own, on the focused screen, where
   // "<id>.position" says.
-  NotchService {
+  TestService {
     id: standaloneSvc
     ipcTarget: "notchd-qmltest-standalone"
     configPath: root.dir + "/standalone.json"
@@ -967,22 +981,29 @@ ShellRoot {
     multi.replaceConfig({ notches: [{ modules: ["activities"] }, { id: "side", position: { edge: "bottom" } }] })
     multi.settingsPage = "notch/1"
     root.check(multi.settingsNotch === 1, "showing notch/1 edits notch " + multi.settingsNotch)
-    var schema = multi.settingsSchema
-    var lists = schema.filter(function(f) { return f.type === "notches" })
-    root.check(lists.length === 1 && lists[0].page === "notch", "lists: " + JSON.stringify(lists.map(function(f) { return f.page })))
-    schema.forEach(function(f) {
-      var own = !!f.key && f.key.indexOf("notches.") === 0
-      if (own) root.check(f.page === "notch/1", f.key + " is on " + f.page)
-      else if (f.key && f.key !== "notches") root.check(f.page.indexOf("notch") !== 0, f.key + " applies to every notch but is on " + f.page)
+    // The schema is the daemon's: it follows the config and the page once
+    // they have been through it.
+    root.until(function() {
+      return multi.settingsSchema.some(function(f) { return f.key === "notches.1.modules" })
+        && multi.settingsPages.some(function(p) { return p.id === "notch/1" && p.label === "side" })
+    }, function() {
+      var schema = multi.settingsSchema
+      var lists = schema.filter(function(f) { return f.type === "notches" })
+      root.check(lists.length === 1 && lists[0].page === "notch", "lists: " + JSON.stringify(lists.map(function(f) { return f.page })))
+      schema.forEach(function(f) {
+        var own = !!f.key && f.key.indexOf("notches.") === 0
+        if (own) root.check(f.page === "notch/1", f.key + " is on " + f.page)
+        else if (f.key && f.key !== "notches") root.check(f.page.indexOf("notch") !== 0, f.key + " applies to every notch but is on " + f.page)
+      })
+      root.check(schema.some(function(f) { return f.key === "notches.1.modules" }), "the notch's modules are missing")
+      root.check(multi.settingsPages.some(function(p) { return p.id === "notch/1" && p.label === "side" }), "no page for side")
+      multi.settingsPage = "general"
+      multi.openSettings(0)
+      root.check(multi.settingsPage === "notch/0" && multi.settingsNotch === 0, "openSettings(0) opened " + multi.settingsPage)
+      multi.closeSettings()
+      multi.replaceConfig({})
+      root.done()
     })
-    root.check(schema.some(function(f) { return f.key === "notches.1.modules" }), "the notch's modules are missing")
-    root.check(multi.settingsPages.some(function(p) { return p.id === "notch/1" && p.label === "side" }), "no page for side")
-    multi.settingsPage = "general"
-    multi.openSettings(0)
-    root.check(multi.settingsPage === "notch/0" && multi.settingsNotch === 0, "openSettings(0) opened " + multi.settingsPage)
-    multi.closeSettings()
-    multi.replaceConfig({})
-    root.done()
   }
 
   // A module's settings were read from the loaded module, so one no notch
@@ -1003,7 +1024,7 @@ ShellRoot {
     root.done()
   }
 
-  NotchService {
+  TestService {
     id: resourced
     ipcTarget: "notchd-qmltest-resources"
     configPath: root.dir + "/resources.json"
@@ -1057,7 +1078,7 @@ ShellRoot {
     root.done()
   }
 
-  NotchService {
+  TestService {
     id: timed
     ipcTarget: "notchd-qmltest-timer"
     configPath: root.dir + "/timer.json"
@@ -1334,7 +1355,7 @@ ShellRoot {
   // A notch window takes the keyboard (layer-shell Exclusive) only while
   // pinned open on a module you type into: hover alone must never take it
   // from the window you are typing in.
-  NotchService {
+  TestService {
     id: typer
     ipcTarget: "notchd-qmltest-typing"
     configPath: root.dir + "/typing.json"
@@ -1440,7 +1461,7 @@ ShellRoot {
   // dropped on the top edge was saved without `edge` (top is the default),
   // took "left" from the top level and jumped back. The drop saves what
   // NotchWindow saves: Position.configValue(drop, notch.inheritedPosition).
-  NotchService {
+  TestService {
     id: dropSvc
     ipcTarget: "notchd-qmltest-drop"
     configPath: root.dir + "/drop.json"
@@ -1468,7 +1489,7 @@ ShellRoot {
   // (tests/qml/fixtures/bin) that set the terminal's title as Claude Code and
   // Codex do. The terminal needs the qmltermwidget package; where it isn't
   // installed, the cases that need it note so in the log and pass.
-  NotchService {
+  TestService {
     id: codexSvc
     ipcTarget: "notchd-qmltest-codex"
     configPath: root.dir + "/codex.json"
@@ -1482,7 +1503,7 @@ ShellRoot {
     NotchCard { notch: codexSvc.notches.length > 0 ? codexSvc.notches[0].copies[0] : null }
     TestCase { id: codexKeys; when: false }
   }
-  NotchService {
+  TestService {
     id: claudeSvc
     ipcTarget: "notchd-qmltest-claude"
     configPath: root.dir + "/claude.json"
@@ -1532,7 +1553,7 @@ ShellRoot {
       root.done()
     })
   }
-  NotchService {
+  TestService {
     id: codexMissingSvc
     ipcTarget: "notchd-qmltest-codex-missing"
     configPath: root.dir + "/codex-missing.json"
@@ -1742,7 +1763,7 @@ ShellRoot {
   // with its title and the fields of a terminal; it runs its command in
   // your home, shows the title the program sets, and `terminal <id>`
   // reaches it, `agent <id>` doesn't.
-  NotchService {
+  TestService {
     id: ownTermSvc
     ipcTarget: "notchd-qmltest-own-terminal"
     configPath: root.dir + "/own-terminal.json"
@@ -1880,7 +1901,7 @@ ShellRoot {
   // A spoken conversation (LiveModule) with a fake bridge
   // (tests/qml/fixtures/bin/codex-live): it says it is live, hears a
   // question, answers, and closes on {"stop": true}.
-  NotchService {
+  TestService {
     id: liveSvc
     ipcTarget: "notchd-qmltest-live"
     configPath: root.dir + "/live.json"
@@ -1901,7 +1922,7 @@ ShellRoot {
   function liveCopy() { return liveSvc.notches[0].copies[0] }
 
   // The local voice (modules/local-live.qml): its own bridge and arguments.
-  NotchService {
+  TestService {
     id: localLiveSvc
     ipcTarget: "notchd-qmltest-local-live"
     configPath: root.dir + "/local-live.json"
@@ -1955,7 +1976,7 @@ ShellRoot {
   // against a fake installer (fixtures/bin/components): the state it reports
   // reaches the rows, their buttons run it, and a choice that needs a
   // component is locked until it is installed.
-  NotchService {
+  TestService {
     id: componentSvc
     ipcTarget: "notchd-qmltest-components"
     configPath: root.dir + "/components.json"
@@ -2364,7 +2385,7 @@ ShellRoot {
   // didn't: two terminals one above the other on a laptop screen ran past
   // the bottom, cut off, with no way to reach them. Now the modules scroll
   // past the room the card has: the wheel, and a scrollbar.
-  NotchService {
+  TestService {
     id: tallSvc
     ipcTarget: "notchd-qmltest-tall"
     configPath: root.dir + "/tall.json"
@@ -2453,7 +2474,7 @@ ShellRoot {
   }
 
   // Two modules, with tabs: the closed notch and missed news.
-  NotchService {
+  TestService {
     id: tabsSvc
     ipcTarget: "notchd-qmltest-tabs"
     configPath: root.dir + "/tabs.json"
@@ -2528,7 +2549,7 @@ ShellRoot {
   // empty (a notch of its own rested; beside claude and codex it was
   // missing). Now an idle module shows its icon there (NotchModule.icon),
   // unless the notch's idleIcons is off.
-  NotchService {
+  TestService {
     id: idleSvc
     ipcTarget: "notchd-qmltest-idle"
     configPath: root.dir + "/idle.json"
@@ -2566,5 +2587,174 @@ ShellRoot {
                    + copy.compactModules.length + " modules")
       }]
     ], function() { root.done() })
+  }
+
+  // ------------------------------------------------------ the daemon owns it
+  // The config, the schema and IPC are the daemon's (docs/architecture.md).
+  // These cases have services of their own, so that killing a daemon leaves
+  // no other case without one.
+  TestService {
+    id: daemonSvc
+    ipcTarget: "notchd-qmltest-daemon"
+    configPath: root.dir + "/daemon.json"
+    compositor: workspace4
+    defaultModules: ["activities"]
+  }
+  TestService {
+    id: downSvc
+    ipcTarget: "notchd-qmltest-down"
+    configPath: root.dir + "/down.json"
+    compositor: workspace4
+    defaultModules: ["activities"]
+    daemonDownDelay: 150
+  }
+  FileView {
+    id: daemonFile
+    path: root.dir + "/daemon.json"
+    blockLoading: true
+    printErrors: false
+  }
+  FileView {
+    id: downFile
+    path: root.dir + "/down.json"
+    blockLoading: true
+    printErrors: false
+  }
+  SettingRow { id: daemonRow; svc: daemonSvc }
+
+  // A config file as the daemon wrote it, null while it is missing or torn.
+  function fileConfig(view) {
+    view.reload()
+    try { return JSON.parse(view.text()) } catch (e) { return null }
+  }
+  // Whether the file has `key` at `value` (`undefined`: no such key).
+  function fileHas(view, key, value) {
+    var c = root.fileConfig(view)
+    return !!c && (value === undefined ? c[key] === undefined : c[key] === value)
+  }
+  function ipcHandler(svc) {
+    for (var i = 0; i < svc.data.length; i++) {
+      var o = svc.data[i]
+      if (o && o.target === svc.ipcTarget && typeof o.set === "function") return o
+    }
+    return null
+  }
+
+  // The window's row for a field the daemon's schema gives: the edit applies
+  // at once, goes to the daemon, which writes the file and sends it back. A
+  // value equal to the default removes the key (the file never holds
+  // defaults); many edits of one key (a slider) reach the daemon as one.
+  function daemonSettingsRoundTrip() {
+    var s = daemonSvc
+    function field() { return s.settingsSchema.filter(function(f) { return f.key === "hoverOpenDelay" })[0] }
+    root.until(function() { return s.daemonReady && !!field() }, function() {
+      var f = field()
+      if (!root.check(!!f, "the open delay is not in the schema the daemon sent")) { root.done(); return }
+      root.check(f.type === "integer" && f.page === "general" && f.section === "Hover" && f.default !== undefined,
+                 "the field from the daemon: " + JSON.stringify(f))
+      root.check(s.settingsPages.some(function(p) { return p.id === "general" }), "no General page")
+      daemonRow.field = f
+      daemonRow.edit(500)
+      root.check(s.hoverOpenDelay === 500, "the edit did not apply at once: " + s.hoverOpenDelay)
+      root.until(function() { return root.fileHas(daemonFile, "hoverOpenDelay", 500) && s.client.config.cfg.hoverOpenDelay === 500 }, function() {
+        root.check(root.fileHas(daemonFile, "hoverOpenDelay", 500), "the daemon did not write the edit: " + JSON.stringify(root.fileConfig(daemonFile)))
+        root.check(s.client.config.cfg.hoverOpenDelay === 500, "the daemon's config is " + JSON.stringify(s.client.config.cfg))
+        // Back to the default: the key goes, the file is empty again.
+        daemonRow.edit(f.default)
+        root.until(function() { return root.fileHas(daemonFile, "hoverOpenDelay", undefined) }, function() {
+          var c = root.fileConfig(daemonFile)
+          root.check(!!c && Object.keys(c).length === 0, "a default was written: " + JSON.stringify(c))
+          root.check(s.hoverOpenDelay === f.default, "the delay is " + s.hoverOpenDelay)
+          // A drag: twenty steps in a burst, one write, the last value.
+          for (var i = 1; i <= 20; i++) s.setConfigValue("hoverCloseDelay", 100 + i)
+          root.check(s.pendingSets.length === 1, "the burst is " + s.pendingSets.length + " sets, not one")
+          root.until(function() { return root.fileHas(daemonFile, "hoverCloseDelay", 120) && !s.configSyncing }, function() {
+            root.check(root.fileHas(daemonFile, "hoverCloseDelay", 120), "the last step is not in the file")
+            root.check(s.hoverCloseDelay === 120, "the service settled on " + s.hoverCloseDelay)
+            s.setConfigValue("hoverCloseDelay", undefined)
+            s.flushConfig()
+            root.until(function() { return root.fileHas(daemonFile, "hoverCloseDelay", undefined) }, function() { root.done() })
+          })
+        })
+      })
+    })
+  }
+
+  // `qs ipc call <target> set` answers as it did, and the edit goes to the
+  // daemon (an IPC handler cannot wait for a reply, so the answer is worked
+  // out here). The daemon's own `ipc set` (what `notchd ipc` calls) and an
+  // edit of the file by hand reach the UI as the daemon's `config`; a file
+  // that does not parse is ignored, the last config stays.
+  function daemonIpcAndFile() {
+    var s = daemonSvc
+    var h = root.ipcHandler(s)
+    root.until(function() { return s.daemonReady }, function() {
+      if (!root.check(!!h, "no IPC handler")) { root.done(); return }
+      root.check(h.set("hoverCloseDelay", "333") === "ok", "set did not answer ok")
+      root.check(h.set("hoverCloseDelay", "nope") === "not JSON: nope", "a bad value did not say so")
+      root.check(h.set("", "1") === "usage: set <key> <json value>", "no key did not say the usage")
+      root.until(function() { return root.fileHas(daemonFile, "hoverCloseDelay", 333) }, function() {
+        root.check(root.fileHas(daemonFile, "hoverCloseDelay", 333) && s.hoverCloseDelay === 333, "the set did not reach the file and the service")
+        root.check(h.set("hoverCloseDelay", "") === "ok", "an empty value did not answer ok")
+        root.until(function() { return root.fileHas(daemonFile, "hoverCloseDelay", undefined) }, function() {
+          root.check(root.fileHas(daemonFile, "hoverCloseDelay", undefined) && s.hoverCloseDelay !== 333, "an empty value did not reset the key")
+          // The daemon's own ipc: the same method with no QML write, and `state`.
+          var answer = ""
+          s.client.ipc("set", ["hoverOpenDelay", "444"], function(reply) { answer = reply.result })
+          s.client.ipc("state", [], function(reply) { answer += "|" + (reply.t === "ok" && Array.isArray(JSON.parse(reply.result).notches)) })
+          root.until(function() { return s.hoverOpenDelay === 444 && answer === "ok|true" }, function() {
+            root.check(s.hoverOpenDelay === 444, "the daemon's set did not reach the UI")
+            root.check(answer === "ok|true", "the daemon answered " + answer)
+            // A hand edit of the file.
+            daemonFile.setText("{ \"hoverOpenDelay\": 777 }\n")
+            root.until(function() { return s.hoverOpenDelay === 777 }, function() {
+              root.check(s.hoverOpenDelay === 777, "an edit of the file did not reach the UI: " + s.hoverOpenDelay)
+              // A torn file is ignored: the last config stays.
+              daemonFile.setText("{ \"hoverOpenDelay\": ")
+              root.steps([[700, function() {}]], function() {
+                root.check(s.hoverOpenDelay === 777, "a bad file changed the config to " + s.hoverOpenDelay)
+                daemonFile.setText("{}\n")
+                root.until(function() { return s.hoverOpenDelay !== 777 }, function() {
+                  root.check(s.hoverOpenDelay === 120, "the delay is " + s.hoverOpenDelay)
+                  root.done()
+                })
+              })
+            })
+          })
+        })
+      })
+    })
+  }
+
+  // The daemon killed while the shell runs: the notch says notchd is not
+  // running (after a moment, not at once), keeps its last config, an edit
+  // made meanwhile waits for the daemon, and the launcher brings it back by
+  // itself: the notch is normal again and the edit is in the file.
+  function daemonDownAndBack() {
+    var s = downSvc
+    // Long enough for the notch to say so before the daemon is back.
+    s.launcher.restartMin = 700
+    root.until(function() { return s.daemonReady }, function() {
+      root.check(!s.daemonDown && s.client.ready, "down while the daemon runs")
+      s.setConfigValue("hoverOpenDelay", 321)
+      s.flushConfig()
+      root.until(function() { return root.fileHas(downFile, "hoverOpenDelay", 321) && !s.configSyncing }, function() {
+        s.client.ipc("shutdown", [])
+        root.until(function() { return s.daemonDown }, function() {
+          root.check(s.daemonDown && !s.client.ready, "the notch does not say the daemon is gone")
+          root.check(s.hoverOpenDelay === 321, "the last config went with the daemon: " + s.hoverOpenDelay)
+          // An edit while it is away waits for it.
+          s.setConfigValue("hoverCloseDelay", 222)
+          root.until(function() { return s.client.ready && !s.daemonDown && root.fileHas(downFile, "hoverCloseDelay", 222) }, function() {
+            root.check(s.client.ready && !s.daemonDown, "the daemon did not come back by itself")
+            root.check(root.fileHas(downFile, "hoverCloseDelay", 222) && root.fileHas(downFile, "hoverOpenDelay", 321),
+                       "the file is " + JSON.stringify(root.fileConfig(downFile)))
+            root.check(s.hoverOpenDelay === 321 && s.hoverCloseDelay === 222, "the config is " + s.hoverOpenDelay + ", " + s.hoverCloseDelay)
+            root.check(s.launcher.restarts === 0, "the backoff did not start over: " + s.launcher.restarts)
+            root.done()
+          }, 8000)
+        }, 5000)
+      })
+    })
   }
 }

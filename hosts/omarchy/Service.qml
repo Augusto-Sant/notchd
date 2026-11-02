@@ -3,7 +3,6 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import "../../core"
-import "../../core/client"
 
 // Omarchy host: the notch service as an Omarchy shell plugin. Wires the core
 // to Omarchy: its IPC name, the osd module that receives `omarchy osd` (a
@@ -32,15 +31,12 @@ NotchService {
 
   HyprlandCompositor { id: hyprland }
 
-  // The daemon, started with the shell and kept past it (docs/hosts.md, "The
-  // daemon"). It runs in shadow: this service still decides everything, the
-  // client only connects. A failure is logged once, nothing else shows.
-  DaemonLauncher {
-    id: daemon
-    script: Qt.resolvedUrl("../../scripts/ensure-daemon.sh")
-    logName: svc.logName
-    clientName: "omarchy"
-  }
+  // The daemon (docs/hosts.md, "The daemon"): started with the shell and kept
+  // past it, the authority for the config, the settings schema and IPC. The
+  // service runs the script, connects and starts it again when it dies;
+  // meanwhile the notch says "notchd not running".
+  daemonScript: Qt.resolvedUrl("../../scripts/ensure-daemon.sh")
+  daemonClientName: "omarchy"
 
   // Omarchy's theme mapped onto the core's tokens; follows theme switches.
   QtObject {
