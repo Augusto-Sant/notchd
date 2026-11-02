@@ -35,8 +35,9 @@ use std::io::{BufReader, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -407,6 +408,9 @@ struct Proc {
     child: Child,
     pgid: u32,
     stdin: Option<Sender<String>>,
+    /// Lines queued for the writer thread and not yet written: a module that
+    /// does not read its stdin must not make the host hold provider data.
+    queued: Arc<AtomicUsize>,
     started: Instant,
     got_view: bool,
     no_view_reported: bool,
@@ -466,6 +470,8 @@ struct Supervisor {
     shutdown: Option<Sender<()>>,
 }
 
+/// Provider lines waiting for a module that does not read them, at most.
+const MAX_PROVIDER_BACKLOG: usize = 32;
 const TICK: Duration = Duration::from_millis(20);
 const EOF_GRACE: Duration = Duration::from_secs(1);
 
@@ -535,6 +541,16 @@ impl Supervisor {
                     && p.stopping.is_none()
                     && let Some(stdin) = &p.stdin
                 {
+                    // Provider data is a stream the module may not keep up
+                    // with: past a backlog the newer data wins by being
+                    // sent later, and this one is dropped, never queued
+                    // without end.
+                    if matches!(*msg, ToModule::Provider(_))
+                        && p.queued.load(Ordering::Relaxed) >= MAX_PROVIDER_BACKLOG
+                    {
+                        return;
+                    }
+                    p.queued.fetch_add(1, Ordering::Relaxed);
                     let _ = stdin.send(to_line(&*msg));
                 }
             }
@@ -544,6 +560,7 @@ impl Supervisor {
                     if let Some(p) = m.proc.as_ref().filter(|p| p.stopping.is_none())
                         && let Some(stdin) = &p.stdin
                     {
+                        p.queued.fetch_add(1, Ordering::Relaxed);
                         let _ = stdin.send(to_line(&ToModule::Config(ModuleConfig { config })));
                     }
                 }
@@ -1009,7 +1026,9 @@ impl Ctx {
         // supervisor -> stdin, on its own thread so a module that does not
         // read cannot stall the host
         let (stdin_tx, stdin_rx) = mpsc::channel::<String>();
+        let queued = Arc::new(AtomicUsize::new(0));
         if let Some(mut stdin) = child.stdin.take() {
+            let queued = queued.clone();
             thread::spawn(move || {
                 for line in stdin_rx {
                     if writeln!(stdin, "{line}")
@@ -1018,6 +1037,9 @@ impl Ctx {
                     {
                         break;
                     }
+                    let _ = queued.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                        Some(n.saturating_sub(1))
+                    });
                 }
             });
         }
@@ -1033,6 +1055,7 @@ impl Ctx {
             slots: Slot::ALL.to_vec(),
             dir: m.dir.to_string_lossy().into_owned(),
         });
+        queued.fetch_add(1, Ordering::Relaxed);
         let _ = stdin_tx.send(to_line(&init));
 
         m.log.note(&format!("started pid {pgid}"));
@@ -1042,6 +1065,7 @@ impl Ctx {
             child,
             pgid,
             stdin: Some(stdin_tx),
+            queued,
             started: Instant::now(),
             got_view: false,
             no_view_reported: false,
@@ -1182,7 +1206,10 @@ impl Ctx {
                 self.error(m, ErrorKind::InvalidView, text);
             }
             FromModule::Subscribe(_) | FromModule::Unsubscribe(_) => {
-                if let Some(stdin) = m.proc.as_ref().and_then(|p| p.stdin.as_ref()) {
+                if let Some(p) = m.proc.as_ref()
+                    && let Some(stdin) = p.stdin.as_ref()
+                {
+                    p.queued.fetch_add(1, Ordering::Relaxed);
                     let _ = stdin.send(to_line(&ToModule::Error(CoreError {
                         code: "provider".into(),
                         message: Some(why.into()),

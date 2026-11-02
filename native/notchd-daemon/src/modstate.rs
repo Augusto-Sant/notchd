@@ -36,6 +36,10 @@ struct ModState {
     urgent_peek: bool,
     peek_on_focused_screen: bool,
     standalone: bool,
+    /// The providers its manifest subscribes to.
+    subscribe: Vec<String>,
+    /// Its settings' defaults, as a config object (a key with a dot nests).
+    defaults: Value,
     /// A module that lives in the daemon (`corehost`), not a process.
     builtin: bool,
     /// The error text, and the row that shows it.
@@ -59,6 +63,8 @@ impl ModState {
             urgent_peek: m.urgent_peek.unwrap_or(false),
             peek_on_focused_screen: m.peek_on_focused_screen.unwrap_or(false),
             standalone: m.standalone.unwrap_or(false),
+            subscribe: m.subscribe.clone(),
+            defaults: settings_defaults(m),
             ..ModState::default()
         }
     }
@@ -123,6 +129,53 @@ fn settings_def(id: &str, m: &Manifest) -> Value {
     })
 }
 
+/// The value each settings field has while the config says nothing: the
+/// field's `default`, under its `key` (a dotted key nests).
+fn settings_defaults(m: &Manifest) -> Value {
+    let mut out = Value::Object(Default::default());
+    for f in &m.settings {
+        let Some(key) = f.key.as_deref().filter(|_| !f.default.is_null()) else {
+            continue;
+        };
+        insert_at(&mut out, key, f.default.clone());
+    }
+    out
+}
+
+fn insert_at(into: &mut Value, key: &str, value: Value) {
+    let Value::Object(map) = into else { return };
+    match key.split_once('.') {
+        None => {
+            map.insert(key.to_string(), value);
+        }
+        Some((head, rest)) => {
+            let child = map
+                .entry(head.to_string())
+                .or_insert_with(|| Value::Object(Default::default()));
+            insert_at(child, rest, value);
+        }
+    }
+}
+
+/// `config` over `defaults`, object by object: what a module is sent as its
+/// config, so it reads a setting the user never touched as its default.
+pub fn with_defaults(defaults: &Value, config: &Value) -> Value {
+    match (defaults, config) {
+        (Value::Object(d), Value::Object(c)) => {
+            let mut out = d.clone();
+            for (k, v) in c {
+                let merged = match d.get(k) {
+                    Some(base) => with_defaults(base, v),
+                    None => v.clone(),
+                };
+                out.insert(k.clone(), merged);
+            }
+            Value::Object(out)
+        }
+        (_, c) => c.clone(),
+    }
+}
+
 impl Mods {
     pub fn new() -> Mods {
         Mods::default()
@@ -175,6 +228,23 @@ impl Mods {
             .filter_map(|(slot, tree)| tree.map(|t| (slot, t)))
             .collect();
         self.sync(store, id)
+    }
+
+    /// The providers a user module's manifest subscribes to.
+    pub fn subscriptions(&self, id: &str) -> Vec<String> {
+        self.mods
+            .get(id)
+            .map_or_else(Vec::new, |m| m.subscribe.clone())
+    }
+
+    /// The config a module is sent: its settings' values from the config
+    /// file over the defaults of its manifest.
+    pub fn module_config(&self, id: &str, stored: &Value) -> Value {
+        let defaults = self
+            .mods
+            .get(id)
+            .map_or(Value::Null, |m| m.defaults.clone());
+        with_defaults(&defaults, stored)
     }
 
     pub fn standalone(&self, id: &str) -> bool {

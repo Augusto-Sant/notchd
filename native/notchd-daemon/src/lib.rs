@@ -12,4 +12,5 @@ pub mod modstate;
 pub mod ptyhost;
 pub mod router;
 pub mod server;
+pub mod subs;
 pub mod testhooks;

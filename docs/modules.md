@@ -48,6 +48,107 @@ To move a module to the daemon: write `native/notchd-modules/src/<id>.rs` implem
 
 A tree draws like the QML it replaced where a few general properties say so: `width`, `height`, `minWidth` (and a row's or column's `maxWidth`) fix a size, `fill` takes the rest of a row, and glyphs that need a size are `text` nodes (`size: "body"`), which draw the same Nerd Font.
 
+## User modules
+
+A module of your own, in any language: a folder in the config dir whose program talks to notchd in lines of JSON. No QML, no build, no plugin API. Copy one of [the examples](examples/modules/) to start: `counter` (shell, a button), `cpu` (Python, a provider) and `greeting` (Node, settings).
+
+```
+~/.config/notchd/modules/<id>/
+  module.json     the manifest
+  run.sh          whatever `command` starts (any language)
+```
+
+1. `cp -r docs/examples/modules/counter ~/.config/notchd/modules/`
+2. Turn it on: Settings, Modules, Counter, or put its id in a notch's `modules` list in the config. A module no notch lists is not started.
+3. Edit `run.sh` and save: the module restarts by itself (reload on save). Any file in its folder counts; hidden files, `__pycache__`, `node_modules` and `target` do not.
+
+The folder name is the id: letters, digits, `-` and `_`, and not a config key or built-in id (`modules`, `position`, `theme`, `media`, `timer`...); such a folder is reported in the log and ignored.
+
+### The manifest
+
+```json
+{
+  "title": "Weather",
+  "command": ["python3", "run.py", "${cache}"],
+  "priority": 40,
+  "icon": "",
+  "expandedWidth": 360,
+  "settings": [{ "key": "city", "type": "string", "label": "City", "default": "Berlin" }],
+  "subscribe": ["resources"]
+}
+```
+
+| Field | |
+|---|---|
+| `command` | required: the argv, run with the module's folder as its working directory. `${config}` and `${cache}` become folders of its own (`<config dir>/module-config/<id>` and `module-cache/<id>`), made for it. `NOTCHD_MODULE_ID` and `NOTCHD_MODULE_DIR` are in its environment |
+| `title` | the tab and the settings page; the id by default |
+| `priority`, `icon`, `expandedWidth`, `urgentPeek`, `peekOnFocusedScreen`, `standalone` | the properties of a `NotchModule` of the same name (see the top of this page) |
+| `settings` | fields of its settings page, below |
+| `subscribe` | providers it wants, below |
+| `env` | extra environment variables (a string map; `${config}`, `${cache}` expand) |
+| `permissions` | `network`, `files`, `exec`...: a note for whoever reads the manifest. Nothing is sandboxed: a module can do what you can |
+
+### Messages
+
+Standard input and output, one JSON object per line, UTF-8; an object with an unknown `"t"` is ignored. Standard error is the log.
+
+From notchd:
+
+```json
+{"t":"init","proto":1,"id":"weather","config":{"city":"Berlin"},"tokens":["foreground","muted","accent"],"slots":["compact","verticalCompact","peek","verticalPeek","expanded"],"dir":"/home/you/.config/notchd/modules/weather"}
+{"t":"config","config":{"city":"Paris"}}
+{"t":"event","slot":"expanded","action":"refresh","value":null}
+{"t":"provider","name":"resources","data":{"cpu":0.12,"mem":{"used":6500000000,"total":16000000000},"disk":{"used":300000000000,"total":500000000000,"path":"/"}}}
+{"t":"stop"}
+{"t":"error","code":"provider","message":"..."}
+```
+
+From the module:
+
+```json
+{"t":"set","active":true,"priority":40,"icon":"","attention":false}
+{"t":"view","slot":"compact","tree":{"t":"row","gap":6,"children":[{"t":"icon","glyph":"","tone":"accent"},{"t":"text","text":"18°"}]}}
+{"t":"view","slot":"expanded","tree":{"t":"column","gap":8,"children":[{"t":"text","text":"Berlin","size":"heading"},{"t":"button","label":"Refresh","action":"refresh"}]}}
+{"t":"peek","ms":3000}
+{"t":"notify","title":"Rain","body":"in 10 minutes"}
+{"t":"open"}
+{"t":"log","level":"info","text":"fetched"}
+{"t":"error","message":"network down"}
+{"t":"subscribe","name":"media"}
+{"t":"unsubscribe","name":"media"}
+```
+
+- A module is **not shown until it sends `{"t":"set","active":true}`** and a `view` for a slot. Slots: `compact` (the closed notch), `verticalCompact`, `peek`, `verticalPeek` and `expanded`; one never sent has no view; `"tree":null` clears it.
+- A `view`'s `tree` is made of the [primitives](architecture.md#primitive-tree-v1) (`row`, `column`, `text`, `icon`, `image`, `progress`, `button`, `chip`, `list`, `canvas`...; colors are `tone`s, never hex). A button's `action` comes back as an `event` with that `action` (and a `value` for a `chip` or a seeking `progress`). An invalid tree shows as an error row and the module keeps running.
+- `peek` is the module's request to peek for `ms` (the rules of `requestPeek`); `open` opens the notch on it; `notify` is a desktop notification posted through `notify-send` (one a second per module; the module never takes the notification service over); `log` and standard error go to the log. `set` takes `active`, `priority`, `icon`, `attention`, `urgentPeek`, `expandedWidth`, each optional.
+- You own the timer: print a `view` when something changes. At most 20 views per second per module are kept (the rest are dropped, with one warning in the log); use `progress.anchor` for a bar that moves by itself.
+- The `init` line comes first. A module may ignore stdin, but it should exit on `stop`.
+
+### Settings
+
+`settings` uses the [settings schema's fields](settings.md#fields) (`string`, `boolean`, `integer`, `number`, `choice`, `color`...), `key` relative to the module. They appear on its page (Settings, Modules, its gear); the values are stored in notchd's config under the module's id (`"weather": { "city": "Paris" }`), and only when they differ from the `default`. The module gets them as `init.config` and, after every change, as a `config` message, always with the defaults filled in for what was never touched: it never reads the config file. Do not name a field `enabled` or `position`: standalone modules own them.
+
+### Providers
+
+`subscribe` in the manifest, or `{"t":"subscribe","name":"..."}` while running, sends the module `provider` messages: the latest data at once, then on change. A provider a module cannot have (anything not in this table) is answered with `{"t":"error","code":"provider"}`, and a manifest that lists one is an error row.
+
+| Name | `data` | Sent |
+|---|---|---|
+| `resources` | `{cpu, mem:{used,total}, disk:{used,total,path}}`: CPU as a fraction, bytes | at most once a second; the system is read only while someone wants it |
+| `media` | `{players:[{id,name,playing,title,artist,album,artUrl,length,position,canPlay,...}]}`, seconds | on change (at most 4 a second; a playing position that moves by itself is not a change) |
+| `screens` | the screens as the shell reports them: names, rects, scale, focused, fullscreen, workspaces | on change |
+| `usage` | `{agent:"claude"\|"codex", limits:[{id,label,percent,resetsAt,windowSecs}], stale, problem}`, one message per agent | when the agent's plan usage is read, which the `claude` and `codex` modules do while a notch lists them |
+
+A module that does not read its input is not waited for: provider data beyond a backlog of 32 lines is dropped.
+
+### Logs and errors
+
+`~/.local/state/notchd/logs/<id>.log` (`$XDG_STATE_HOME`) has the module's standard error, its `log` messages and notes of the host (starts, exits), rotated at 1 MiB, five kept. Whatever goes wrong shows in the notch, where the module's views would be, as a red row with the reason, the log's path and a **Restart** button: a crash (`weather exited (1)`), a command that does not start, a bad `module.json` (with its line and column; the running module is left alone until it is fixed), an invalid view, an `error` message, no first view after 5 s. A crash restarts after 1, 2, 4... 30 s (reset after a minute up); five quick ones in a row stop it until you save a file or press Restart. A line over 1 MiB or not JSON is logged and skipped; ten in a row count as a crash. Closing the daemon sends `stop`, then SIGTERM after 1 s and SIGKILL after 3 s to the module's whole process group.
+
+### Not yet
+
+`cmd` (a module's own IPC method), `visible` (which slot is shown), the `peek` message's `slot`, the `audio`, `notifications`, `components` and `osd` providers, webview surfaces, and a sandbox.
+
 ## Settings
 
 A module's title, settings fields and whether it is standalone or an [agent](#agents) live in a JSON file next to its QML, with the same name (`resources.json` for `resources.qml`, the same for a host's modules). The service reads it whether the module loads or not, so the module has its page in the settings window (Modules, then its gear) even while no notch shows it. `settings` uses the settings schema's format (see [settings.md](settings.md)) with `key` relative to the module; values are stored under the module's id, and the module reads them with `setting(key)`: the config's value, else the field's default. A field that names another `page` shows there, under the module's title. A `title` set in the QML wins over the file's; without either, the title is the id. `tests/settings.test.mjs` checks every module file.

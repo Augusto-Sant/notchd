@@ -1,0 +1,13 @@
+{
+  "title": "Greeting",
+  "command": ["node", "run.js"],
+  "priority": 10,
+  "icon": "",
+  "settings": [
+    { "key": "name", "type": "string", "label": "Name", "default": "world",
+      "help": "Who the notch greets." },
+    { "key": "shout", "type": "boolean", "label": "Shout", "default": false },
+    { "key": "size", "type": "choice", "label": "Size", "default": "body",
+      "options": [{ "value": "body", "label": "Normal" }, { "value": "heading", "label": "Large" }] }
+  ]
+}
