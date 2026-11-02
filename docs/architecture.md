@@ -436,7 +436,7 @@ Unchanged for users: `~/.config/notchd/config.json` (`$XDG_CONFIG_HOME/notchd/co
 
 The Omarchy plugin is the repo: `omarchy plugin add <git url>` does `git clone` and nothing else (read in `omarchy-plugin-add`: no build hook). `omarchy plugin validate` requires a manifest with `kinds`, `entryPoints` paths that exist and are relative and safe, a non-reserved id, and **no symlink anywhere in the folder** (read in `omarchy-plugin-validate`). So the plugin cannot symlink a binary, and nothing builds Rust at install. `shell.qml` at the root is the standalone host.
 
-How a host finds and launches the daemon (**Open**; options):
+How a host finds and launches the daemon (options considered):
 
 | Option | How | For | Against |
 |---|---|---|---|
@@ -446,6 +446,11 @@ How a host finds and launches the daemon (**Open**; options):
 | D. Commit prebuilt binaries | `bin/linux-x86_64/notchd` in the repo | zero steps, offline | binary blobs in git, one per arch, nothing reviewable; `validate` allows it (no symlinks needed) |
 
 **Decided** (2026-11-02): **B as the main path on Omarchy, A accepted.** The host runs `notchd daemon --ensure`, the binary found by order: `$NOTCHD_BIN`, `PATH` (an AUR package), `$XDG_DATA_HOME/notchd/bin/notchd`; when none is found, the plugin downloads the release its version pins, verified against a SHA-256 kept in the repo, into that last place. macOS and Windows bundle the daemon inside the app, so the question is Linux-only. The version handshake (`proto`, plus the daemon's version) guards against a stale daemon: the host restarts a daemon older than the plugin, and shows "update notchd" if it cannot.
+
+**Mechanism (B, as built).**
+- *Release.* A `v*` tag runs `.github/workflows/release.yml`: native builds on an x86_64 and an aarch64 runner (no cross toolchain, tests run on the real target, glibc floor of the oldest runner image), `notchd-<version>-<target>.tar.gz` (a folder holding `notchd` and `LICENSE`) plus a `.sha256` uploaded to the GitHub release.
+- *Pins.* The workflow then opens a PR adding the hashes to `native/releases.json` (`{ "<version>": { "<target>": { "url", "sha256" } } }`). The checksums live in the repo and change only by a reviewed merge, never taken from the release at install time. The version the plugin wants is `manifest.json`'s `version`, equal to the daemon crate's (tested).
+- *Fetch.* `scripts/fetch-daemon.py [--dest DIR] [--version V] [--releases FILE]` (standard library only) looks up V and this machine's target, downloads to a temp file, verifies SHA-256, extracts `notchd` atomically into `$XDG_DATA_HOME/notchd/bin`, prints its path, and downloads nothing when `notchd --version` there already says V. A failure prints one JSON line `{"error": <code>, "message": ...}` to stderr and exits with: 2 usage, 3 `no-release`, 4 `unsupported-arch`, 5 `offline`, 6 `checksum-mismatch`, 7 `failed`. Nothing is left behind on a failure. The host runs it as a process and shows the message.
 
 **Instances, decided:** one daemon per user. Every host connects to the `default` instance; other instances exist only for `make dev` and tests, with their own config. The daemon outlives the shell (it is detached, or a systemd user unit from a package), so a shell reload or `make restart` keeps a voice conversation, terminal sessions and timers running; the UI just reconnects.
 

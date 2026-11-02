@@ -1,0 +1,126 @@
+# Publishes the daemon on a `v*` tag, then proposes its checksums to the repo.
+#
+# The plugin never trusts the release for its own checksums: it pins them from
+# native/releases.json, which only a reviewed merge to main changes. So after
+# the build, the `pin` job opens a PR that adds this version's entries; merge
+# it and the plugin on main can fetch (scripts/fetch-daemon.py).
+#
+# Builds run natively on each architecture's runner (ubuntu-22.04 and its arm
+# twin) rather than cross-compiling: no cross linker or sysroot to maintain,
+# `cargo test` runs on the real target, and the oldest runner image keeps the
+# glibc floor at 2.35.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag, manifest.json and the crate agree
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          manifest=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' native/notchd-daemon/Cargo.toml | head -1)
+          [ "$version" = "$manifest" ] && [ "$version" = "$crate" ] \
+            || { echo "tag $version, manifest $manifest, crate $crate differ"; exit 1; }
+      - run: cargo test --workspace --release --manifest-path native/Cargo.toml
+      - run: cargo build --release --locked -p notchd-daemon --manifest-path native/Cargo.toml
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="notchd-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          install -m 755 native/target/release/notchd "dist/$name/notchd"
+          cp LICENSE "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notchd-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/*.tar.gz dist/*.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: dist/*.sha256
+
+  pin:
+    needs: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: dist
+      - name: Add this version to native/releases.json
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, re
+          tag = os.environ["GITHUB_REF_NAME"]
+          version = tag[1:]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          path = "native/releases.json"
+          releases = json.load(open(path))
+          entries = {}
+          for f in sorted(glob.glob("dist/*.sha256")):
+              sha, name = open(f).read().split()
+              target = re.fullmatch(r"notchd-%s-(.+)\.tar\.gz" % re.escape(version), name).group(1)
+              entries[target] = {
+                  "url": "https://github.com/%s/releases/download/%s/%s" % (repo, tag, name),
+                  "sha256": sha,
+              }
+          releases[version] = entries
+          with open(path, "w") as out:
+              json.dump(releases, out, indent=2)
+              out.write("\n")
+          PY
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="release-pin-${GITHUB_REF_NAME}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add native/releases.json
+          git commit -m "build(release): pin the daemon checksums of ${GITHUB_REF_NAME}"
+          git push --force origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "build(release): pin the daemon checksums of ${GITHUB_REF_NAME}" \
+            --body "Adds the SHA-256 of each ${GITHUB_REF_NAME} archive, from this run's build. Check them against the release's .sha256 files, then merge: the plugin pins checksums from this file, not from the release."
