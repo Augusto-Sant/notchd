@@ -495,6 +495,9 @@ pub enum PeekKind {
     Follow,
     /// Kept on a screen.
     Homed,
+    /// Any other kind: like the JS, anything but `homed` peeks everywhere.
+    #[serde(other)]
+    Other,
 }
 
 /// A notch that shows a module, for `needsVisitor` and `focusedPeek`.
