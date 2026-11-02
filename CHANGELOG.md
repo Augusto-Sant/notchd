@@ -4,6 +4,10 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/install.sh` installs the daemon on Ubuntu, Fedora and other distributions: it downloads the release `native/releases.json` pins, verifies its SHA-256, puts `notchd` in `~/.local/bin` and runs it as a systemd user service; running it again upgrades, `--uninstall` removes it and keeps `~/.config/notchd`.
+
 ## [0.4.0] — 2026-11-02
 
 ### Added

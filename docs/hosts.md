@@ -19,6 +19,21 @@ It also keeps the daemon alive. When the connection drops, or the script fails, 
 
 The launcher reads `NOTCHD_INSTANCE` (and the script and daemon `NOTCHD_CONFIG`, `NOTCHD_SOCKET`), which is how `make dev` runs its own `dev` instance on the dev config and never meets the user's daemon.
 
+### Installing the daemon on other distributions
+
+On Ubuntu, Fedora and the like (no Omarchy, no AUR), `scripts/install.sh` installs the pinned release and runs it as a systemd user service:
+
+```sh
+sh scripts/install.sh                 # from a checkout; or curl -fsSL <raw url>/scripts/install.sh | sh
+sh scripts/install.sh --version 0.4.0 # a pinned version other than the newest
+sh scripts/install.sh --prefix ~/opt  # notchd in ~/opt/bin (default ~/.local/bin)
+sh scripts/install.sh --uninstall     # removes the binary and the unit, never ~/.config/notchd
+```
+
+It needs `curl` or `wget`, `tar`, `sha256sum` and `python3` (to read `native/releases.json`; Ubuntu and Fedora ship it). It downloads the archive `native/releases.json` pins for this machine (x86_64 or aarch64), refuses it when its SHA-256 differs from the pinned one (the checksums come from that file, a checkout's or the one on `main`, never from the release), puts `notchd` in `~/.local/bin` atomically (nothing else from the archive), writes `~/.config/systemd/user/notchd.service` (`ExecStart=<prefix>/bin/notchd daemon`, `Restart=on-failure`, wanted by `default.target`), and enables and starts it. Run it again to upgrade: the daemon is stopped (`notchd ipc shutdown`) and started again only when the binary or the unit changed. `--no-service` installs the binary only; `--extension` is reserved for the GNOME Shell extension, which does not exist yet.
+
+The unit runs `notchd daemon` itself, not `--ensure`, and is not socket-activated: the daemon creates and removes its own socket (`native/notchd-daemon/src/server.rs`) and exits when the file goes, which a socket unit would own instead. A host that runs `notchd daemon --ensure` (the standalone shell, the GNOME extension) finds the unit's daemon answering on the socket and starts no second one. If a host started a daemon first, the unit's own start fails with "a daemon already listens" and systemd retries every 5 s, harmlessly; an upgrade through the script stops that daemon too. Programs the daemon starts (agents, terminals) get the user manager's `PATH`: put `claude` and `codex` where it sees them (`~/.local/bin` is on it by default on current systemd).
+
 ## NotchService
 
 The UI's side of the daemon: it binds the daemon's config, schema and state, reports what only the shell knows (screens, workspaces, the modules it loads itself) and answers the host's IPC target. It decides nothing. It makes a `Notch` per notch the daemon's `state` lists (one per entry of the config's `notches`, one without a list): its modules, position, workspaces. The daemon decides the notch state (modes, hover timers, pins, tabs, peeks and where they go, navigation, the screen each copy is on, the space to reserve) and the copies bind it; they send raw inputs (the pointer, a click, a key, a drop) and the modules' facts. The QML keeps the drag's motion, packing, the outline, animations and windows. While the daemon is away the last state stays (frozen) under the "notchd not running" row. Each notch shows as one or more `NotchCopy`: one that moves (following focus, or kept on its home screen), or one per screen with `position.screen` `"all"`. The service also has a default notch (`visitor`), with every module and a copy at the top of each screen; its copies (`guest`) stay hidden, at rest so they hold no live view, with no window on screen until they open (and for a few seconds after: the daemon's `needsWindow`), and only show a peek on a focused screen where no notch with that module is (`needs_visitor` in `native/notchd-core/src/state.rs`). A copy holds the state the pointer and peeks change (hover, pin, peek, drag) and so its own mode.
