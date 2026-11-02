@@ -2086,33 +2086,19 @@ mod tests {
     }
 
     // Node: the Voice page shows the voices of the chosen language only, and every language's on the components page
-    //
-    // The registry's `components` rows are made by `Components.decorate` in
-    // JS; until that is ported the test expands the voice page's one
-    // `components` field itself (a row per match, `when` its language). The
-    // components page half of the Node test (`overviewFields`) belongs to the
-    // components port.
     #[test]
     fn the_voice_page_shows_the_voices_of_the_chosen_language_only() {
-        let registry = registry();
-        let engines = |c: &Value| c.get("engine").is_some();
-        let base: Vec<Value> = voice_fields()
-            .into_iter()
-            .flat_map(|f| {
-                if str_of(&f, "type") != Some("components") {
-                    return vec![f];
-                }
-                let wanted: Vec<&str> = f["match"]["engine"].as_array().unwrap().iter().map(|e| e.as_str().unwrap()).collect();
-                registry
-                    .iter()
-                    .filter(|c| str_of(c, "engine").is_some_and(|e| wanted.contains(&e)))
-                    .map(|c| {
-                        json!({ "type": "component", "component": c["id"], "section": f["section"],
-                                "when": { "key": f["by"]["key"], "is": c[f["by"]["field"].as_str().unwrap()] } })
-                    })
-                    .collect()
-            })
-            .collect();
+        use crate::components::{decorate, overview_fields, parse_catalog};
+        use std::collections::{BTreeMap, HashMap};
+        let text = std::fs::read_to_string(repo("core/components/components.json")).unwrap();
+        let catalog = parse_catalog(&text);
+        let is_voice = |id: Option<&str>| {
+            catalog
+                .iter()
+                .find(|c| Some(c.id.as_str()) == id)
+                .is_some_and(|c| c.engine.is_some())
+        };
+        let base = decorate(&voice_fields(), &catalog, Some(&[]), &HashMap::new());
         let voice_rows = |lang: Option<&str>| -> Vec<String> {
             shown_fields(&base, |k| {
                 if k == voice_key() {
@@ -2122,33 +2108,39 @@ mod tests {
                 }
             })
             .iter()
-            .filter(|f| str_of(f, "type") == Some("component"))
-            .filter(|f| {
-                registry
-                    .iter()
-                    .find(|c| str_of(c, "id") == str_of(f, "component"))
-                    .is_some_and(engines)
-            })
+            .filter(|f| str_of(f, "type") == Some("component") && is_voice(str_of(f, "component")))
             .map(|f| str_of(f, "component").unwrap().to_string())
             .collect()
         };
-        let mut codes: Vec<&str> = registry
+        let mut codes: Vec<&str> = catalog
             .iter()
-            .filter(|c| engines(c))
-            .map(|c| str_of(c, "language").unwrap())
+            .filter(|c| c.engine.is_some())
+            .map(|c| c.language.as_deref().unwrap())
             .collect();
         codes.sort();
         codes.dedup();
         for code in codes {
-            let want: Vec<String> = registry
+            let want: Vec<String> = catalog
                 .iter()
-                .filter(|c| engines(c) && str_of(c, "language") == Some(code))
-                .map(|c| str_of(c, "id").unwrap().to_string())
+                .filter(|c| c.engine.is_some() && c.language.as_deref() == Some(code))
+                .map(|c| c.id.clone())
                 .collect();
             assert_eq!(voice_rows(Some(code)), want, "{code}");
             assert_eq!(want.len(), 2);
         }
         assert_eq!(voice_rows(None), voice_rows(Some("pt"))); // the default language
         assert!(voice_rows(Some("xx")).is_empty());
+        // the overview lists all of them, a section per language
+        let overview = overview_fields(&catalog, &BTreeMap::new());
+        assert_eq!(
+            overview
+                .iter()
+                .filter(|f| f.get("component").is_some() && is_voice(str_of(f, "component")))
+                .count(),
+            catalog.iter().filter(|c| c.engine.is_some()).count()
+        );
+        let sections: std::collections::HashSet<_> =
+            overview.iter().map(|f| str_of(f, "section")).collect();
+        assert!(sections.len() > 7);
     }
 }
