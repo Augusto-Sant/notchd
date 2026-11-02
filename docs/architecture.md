@@ -39,7 +39,7 @@ Decided, not up for debate here:
    * screens/focus: reported by the UI in v1 (see Providers)
 ```
 
-One daemon serves one **instance**: a config path, a socket name and an IPC target name. The Omarchy host and a `make dev` standalone host are two instances today (two services, two notches, [hosts.md](hosts.md)); they stay two instances, each with its own socket (`$XDG_RUNTIME_DIR/notchd/<instance>.sock`). Several UIs may connect to one instance (a bar button and the window host, say). *Inferred*: the default instance `default` is the Omarchy one.
+One daemon serves one **instance**: a config path, a socket name and an IPC target name, with its own socket (`$XDG_RUNTIME_DIR/notchd/<instance>.sock`). There is one daemon per user: every host (Omarchy or standalone) connects to the `default` instance, and several UIs may connect to it. Other instances are for `make dev` and tests only, with their own config.
 
 Responsibility split, the rule everything below follows:
 
@@ -445,7 +445,9 @@ How a host finds and launches the daemon (**Open**; options):
 | C. Build from source on first run | `cargo build --release` from the plugin folder | no release infra | needs a Rust toolchain, minutes of build, a build step inside a shell plugin |
 | D. Commit prebuilt binaries | `bin/linux-x86_64/notchd` in the repo | zero steps, offline | binary blobs in git, one per arch, nothing reviewable; `validate` allows it (no symlinks needed) |
 
-**Recommendation**: A as the primary path, B as the bootstrap fallback when `notchd` is not found. The host QML runs `notchd daemon --ensure`, found by order: `$NOTCHD_BIN`, the plugin's own `bin/` if present, `$XDG_DATA_HOME/notchd/bin/notchd`, then `PATH`. B downloads into the second-to-last place. Either way, the daemon is single-instance per socket (it holds the socket; a second `--ensure` returns at once), and the UI reconnects on drop with backoff, showing a "notchd not running" state, never a blank screen. The version handshake (`proto`) is the guard against a stale daemon: an old daemon with a new plugin gets `{"t":"err","code":"proto"}` and the host shows "update notchd".
+**Decided** (2026-11-02): **B as the main path on Omarchy, A accepted.** The host runs `notchd daemon --ensure`, the binary found by order: `$NOTCHD_BIN`, `PATH` (an AUR package), `$XDG_DATA_HOME/notchd/bin/notchd`; when none is found, the plugin downloads the release its version pins, verified against a SHA-256 kept in the repo, into that last place. macOS and Windows bundle the daemon inside the app, so the question is Linux-only. The version handshake (`proto`, plus the daemon's version) guards against a stale daemon: the host restarts a daemon older than the plugin, and shows "update notchd" if it cannot.
+
+**Instances, decided:** one daemon per user. Every host connects to the `default` instance; other instances exist only for `make dev` and tests, with their own config. The daemon outlives the shell (it is detached, or a systemd user unit from a package), so a shell reload or `make restart` keeps a voice conversation, terminal sessions and timers running; the UI just reconnects.
 
 ## Migration plan
 
@@ -533,8 +535,8 @@ Outside the phases: a `webview` surface in the Linux UI (QtWebEngine is a heavy 
 
 ## Open questions
 
-1. **Daemon discovery and distribution** ([Distribution](#distribution)): A on `PATH` with B as the first-run fallback is recommended. Needs a release process (GitHub releases, a checksum file) and an AUR package. Who runs it for a plugin-only user?
-2. **One daemon per host instance, or one per user?** Omarchy and `make dev` standalone are two instances today. One daemon with named instances is simpler to launch; separate daemons are simpler to isolate in tests.
+1. ~~Daemon discovery and distribution~~: decided, see [Distribution](#distribution).
+2. ~~One daemon per host instance, or one per user?~~: one per user, decided (see [Distribution](#distribution)).
 3. **Geometry in each UI, or one shared crate?** `Position.js`/`Outline.js` are reimplemented per OS from golden vectors in this plan. A `notchd-geometry` crate exposed through FFI (UniFFI for Swift, a C ABI for the rest) would remove the duplication but QML would need to call it per frame. Revisit when the second UI is written.
 4. **Compositor adapters**: UI-reported in v1 (CLAUDE.md keeps compositor code in `*Compositor.qml`). A Rust Hyprland provider (its IPC socket) would let the core serve non-QML UIs on Linux. Not needed by this plan.
 5. **Icons**: v1 uses Nerd Font glyphs, as every module does today. macOS and Windows UIs would want native symbols (SF Symbols, Segoe Fluent). A named-icon table in the protocol (`"icon":"play"`) mapped per UI would fix it and change every module's tree.
