@@ -1,5 +1,5 @@
-//! Port of `core/Terminal.js` (no Node test file exists: the tests below are
-//! written from reading the JS).
+//! Port of `core/Terminal.js` (tests: the Terminal tests of
+//! `tests/agent.test.mjs`, plus a few marked "(added)").
 //!
 //! The terminal a module shows in its expanded view (`core/terminal/
 //! TerminalView.qml`, used by `modules/codex.qml`): whether the widget is
@@ -112,35 +112,187 @@ pub fn plain_title(raw: Option<&str>) -> PlainTitle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| (*x).to_owned()).collect()
     }
 
-    // (written from the JS) expandHome: "~" and "~/x" under home, "" is home, else as given
+    /// Runs `/bin/sh` with `args` in a clean environment (hermetic: only
+    /// what the test gives, plus PATH), returning stdout.
+    fn run_sh(args: &[String], cwd: Option<&Path>, env: &[(&str, &str)]) -> String {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(args).env_clear();
+        cmd.env("PATH", std::env::var("PATH").unwrap_or_default());
+        cmd.envs(env.iter().copied());
+        if let Some(cwd) = cwd {
+            cmd.current_dir(cwd);
+        }
+        let out = cmd.output().expect("run /bin/sh");
+        String::from_utf8(out.stdout).expect("utf8 output")
+    }
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("notchd-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp home");
+        dir
+    }
+
+    // expandHome: ~ and ~/x under home, the rest as given
     #[test]
-    fn expand_home_tilde_under_home_empty_is_home_else_as_given() {
-        assert_eq!(expand_home(Some("~/code"), "/home/u"), "/home/u/code");
+    fn expand_home_tilde_under_home_the_rest_as_given() {
         assert_eq!(expand_home(Some("~"), "/home/u"), "/home/u");
-        assert_eq!(expand_home(Some("  "), "/home/u"), "/home/u");
-        assert_eq!(expand_home(None, "/home/u"), "/home/u");
-        assert_eq!(expand_home(Some("/srv/app"), "/home/u"), "/srv/app");
-        assert_eq!(expand_home(Some(" ~/x "), "/home/u"), "/home/u/x");
-        assert_eq!(expand_home(Some("~user/x"), "/home/u"), "~user/x");
+        assert_eq!(expand_home(Some(""), "/home/u/"), "/home/u");
+        assert_eq!(
+            expand_home(Some("  ~/Projects/x "), "/home/u"),
+            "/home/u/Projects/x"
+        );
+        assert_eq!(expand_home(Some("/srv/work"), "/home/u"), "/srv/work");
+        assert_eq!(expand_home(Some("~other"), "/home/u"), "~other");
+        assert_eq!(expand_home(None, ""), "/");
     }
 
-    // (written from the JS) expandHome: trailing slashes of home go; no home is the root
+    // (added) expandHome: trailing slashes of home go; a missing path is home
     #[test]
-    fn expand_home_trailing_slashes_go_no_home_is_the_root() {
+    fn expand_home_trailing_slashes_go_a_missing_path_is_home() {
         assert_eq!(expand_home(Some("~/x"), "/home/u//"), "/home/u/x");
-        assert_eq!(expand_home(Some("~"), "/home/u/"), "/home/u");
-        assert_eq!(expand_home(Some(""), ""), "/");
         assert_eq!(expand_home(Some("~/x"), ""), "/x");
+        assert_eq!(expand_home(None, "/home/u"), "/home/u");
     }
 
-    // (written from the JS) shellArgs: exec the command with "$@", extra after "sh"
+    // shellArgs: the command is parsed by sh, the extra arguments are not
+    // (run through a real sh: they arrive as given, quotes and brackets included)
     #[test]
-    fn shell_args_exec_the_command_with_extra_after_sh() {
+    fn shell_args_the_command_is_parsed_by_sh_the_extra_arguments_are_not() {
+        let argv = shell_args(
+            "printf '%s|' first",
+            &s(&["-c", "a=[\"x\",\"y\"]", "it's \"x\" $HOME"]),
+            false,
+            false,
+        );
+        assert_eq!(
+            run_sh(&argv, None, &[]),
+            "first|-c|a=[\"x\",\"y\"]|it's \"x\" $HOME|"
+        );
+    }
+
+    // shellArgs: TERM says 256 colors
+    #[test]
+    fn shell_args_term_says_256_colors() {
+        let argv = shell_args("printenv TERM", &[], false, false);
+        assert_eq!(
+            run_sh(&argv, None, &[("TERM", "xterm")]).trim(),
+            "xterm-256color"
+        );
+    }
+
+    // SCHEME: Tango, whose bright black is gray
+    #[test]
+    fn scheme_tango_whose_bright_black_is_gray() {
+        assert_eq!(SCHEME, "Tango");
+    }
+
+    // PROBE imports only the widget
+    #[test]
+    fn probe_imports_only_the_widget() {
+        assert!(PROBE.contains("import QMLTermWidget"));
+    }
+
+    // isLeaveKey: Ctrl+Escape alone; plain Escape is the agent's
+    #[test]
+    fn is_leave_key_ctrl_escape_alone_plain_escape_is_the_agents() {
+        const SHIFT: u32 = 0x0200_0000;
+        assert!(is_leave_key(KEY_ESCAPE, MOD_CONTROL));
+        assert!(is_leave_key(KEY_ESCAPE, MOD_CONTROL | MOD_KEYPAD));
+        assert!(!is_leave_key(KEY_ESCAPE, 0));
+        assert!(!is_leave_key(KEY_ESCAPE, MOD_CONTROL | SHIFT));
+        assert!(!is_leave_key(0x43, MOD_CONTROL)); // Ctrl+C goes to the agent
+    }
+
+    // (added) isLeaveKey: Alt and a lone keypad flag do not leave
+    #[test]
+    fn is_leave_key_alt_and_a_lone_keypad_flag_do_not_leave() {
+        assert!(!is_leave_key(KEY_ESCAPE, MOD_CONTROL | 0x0800_0000)); // Ctrl+Alt
+        assert!(!is_leave_key(KEY_ESCAPE, MOD_KEYPAD));
+    }
+
+    // shellArgs: own folder in the documents folder, ~/Documents when there is none
+    // (no folder set: notchd's own, notchd in the documents folder, made first)
+    #[test]
+    fn shell_args_own_folder_in_the_documents_folder_documents_when_there_is_none() {
+        let home = temp_home("own-dir");
+        let home_s = home.to_str().expect("utf8 path");
+        let config = home.join(".config");
+        let env = [
+            ("HOME", home_s),
+            ("XDG_CONFIG_HOME", config.to_str().unwrap()),
+        ];
+        let pwd = || {
+            run_sh(&shell_args("pwd", &[], true, false), Some(&home), &env)
+                .trim()
+                .to_owned()
+        };
+        assert_eq!(pwd(), home.join("Documents/notchd").to_str().unwrap());
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("user-dirs.dirs"),
+            "XDG_DOCUMENTS_DIR=\"$HOME/Documentos\"\n",
+        )
+        .unwrap();
+        let has_xdg = Command::new("/bin/sh")
+            .args(["-c", "command -v xdg-user-dir"])
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if has_xdg {
+            assert_eq!(pwd(), home.join("Documentos/notchd").to_str().unwrap());
+        }
+        assert!(home.join("Documents/notchd").is_dir());
+        // A folder of its own: the command runs where it is started.
+        let here = run_sh(&shell_args("pwd", &[], false, false), Some(&home), &env);
+        assert_eq!(here.trim(), home_s);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    // plainTitle: a terminal of your own shows its title as it is, never working
+    #[test]
+    fn plain_title_a_terminal_of_your_own_shows_its_title_as_it_is_never_working() {
+        let check = |t: Option<&str>, title: &str| {
+            assert_eq!(
+                plain_title(t),
+                PlainTitle {
+                    working: false,
+                    title: title.into()
+                }
+            );
+        };
+        check(Some(" eryk@box:~ "), "eryk@box:~");
+        check(Some("⠋ spinner"), "⠋ spinner");
+        check(None, "");
+    }
+
+    // shellArgs: a script runs every command in it, its extra arguments as "$@"
+    // (bug: exec in front of "a; b" ran `a` in the shell's place and never `b`)
+    #[test]
+    fn shell_args_a_script_runs_every_command_in_it_its_extra_arguments_as_args() {
+        let argv = shell_args(
+            "printf a; printf '%s' \"$1\" && echo $TERM",
+            &s(&["b"]),
+            false,
+            true,
+        );
+        assert_eq!(
+            run_sh(&argv, None, &[("TERM", "xterm")]),
+            "abxterm-256color\n"
+        );
+    }
+
+    // (added) shellArgs: the exact line for a command and for a script, own folder first
+    #[test]
+    fn shell_args_the_exact_line_for_a_command_and_for_a_script() {
         assert_eq!(
             shell_args(" codex --search ", &s(&["resume", "a b"]), false, false),
             s(&[
@@ -151,66 +303,13 @@ mod tests {
                 "a b"
             ])
         );
-        assert_eq!(shell_args("x", &[], false, false).len(), 3);
-    }
-
-    // (written from the JS) shellArgs: ownDir puts notchd's folder first; script runs as is
-    #[test]
-    fn shell_args_own_dir_first_script_runs_as_is() {
-        let args = shell_args("claude", &[], true, false);
+        let own = shell_args("claude", &[], true, false);
         assert_eq!(
-            args[1],
+            own[1],
             format!("{OWN_DIR}TERM=xterm-256color; export TERM; exec claude \"$@\"")
         );
         let script = shell_args("cd ~/app && npm run dev", &s(&["--x"]), false, true);
-        assert_eq!(
-            script,
-            s(&[
-                "-c",
-                "TERM=xterm-256color; export TERM; cd ~/app && npm run dev",
-                "sh",
-                "--x"
-            ])
-        );
         assert!(!script[1].contains("exec"));
-    }
-
-    // (written from the JS) isLeaveKey: Ctrl+Escape only; the keypad flag doesn't count
-    #[test]
-    fn is_leave_key_ctrl_escape_only_keypad_flag_ignored() {
-        assert!(is_leave_key(KEY_ESCAPE, MOD_CONTROL));
-        assert!(is_leave_key(KEY_ESCAPE, MOD_CONTROL | MOD_KEYPAD));
-        assert!(!is_leave_key(KEY_ESCAPE, 0));
-        assert!(!is_leave_key(KEY_ESCAPE, MOD_KEYPAD));
-        assert!(!is_leave_key(KEY_ESCAPE, MOD_CONTROL | 0x0200_0000)); // Ctrl+Shift
-        assert!(!is_leave_key(KEY_ESCAPE, MOD_CONTROL | 0x0800_0000)); // Ctrl+Alt
-        assert!(!is_leave_key(0x41, MOD_CONTROL)); // Ctrl+A
-    }
-
-    // (written from the JS) plainTitle: the title as it is, trimmed, never working
-    #[test]
-    fn plain_title_as_it_is_never_working() {
-        assert_eq!(
-            plain_title(Some("  ~/code ")),
-            PlainTitle {
-                working: false,
-                title: "~/code".into()
-            }
-        );
-        assert_eq!(
-            plain_title(None),
-            PlainTitle {
-                working: false,
-                title: String::new()
-            }
-        );
-    }
-
-    // (written from the JS) the constants the QML side reads
-    #[test]
-    fn constants_the_view_reads() {
-        assert!(PROBE.contains("import QMLTermWidget"));
-        assert_eq!(SCHEME, "Tango");
-        assert!(OWN_DIR.ends_with("cd -- \"$d\"; "));
+        assert_eq!(script.len(), 4);
     }
 }
