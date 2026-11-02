@@ -125,7 +125,7 @@ ShellRoot {
     return c
   }
   function disposeClients() {
-    root.made.forEach(function(c) { c.enabled = false; c.destroy() })
+    root.made.forEach(function(c) { if (c.enabled !== undefined) c.enabled = false; c.destroy() })
     root.made = []
   }
 
@@ -137,7 +137,9 @@ ShellRoot {
       { name: "client: pointer, key, event, set, edit and ipc reach the daemon; requests get their replies", run: root.sendsAndReplies },
       { name: "client: the daemon restarting is survived: requests fail while it is down, then it reconnects and the revs start over", run: root.reconnects },
       { name: "client: a daemon that is not there yet is waited for, with backoff", run: root.daemonLate },
-      { name: "client: a protocol refusal is an error state, with no retry", run: root.refusal }
+      { name: "client: a protocol refusal is an error state, with no retry", run: root.refusal },
+      { name: "launcher: the socket path the start script prints is connected to", run: root.launcherStarts },
+      { name: "launcher: a start script that fails leaves the client idle and the error readable", run: root.launcherFails }
     ]
     var only = String(Quickshell.env("NOTCHD_QMLTEST_ONLY") || "")
     root.cases = all.filter(function(c) { return !only || c.name.indexOf(only) >= 0 })
@@ -334,6 +336,38 @@ ShellRoot {
         root.check(c.status === "refused" && root.connections() === before, "retried after a refusal: " + root.connections() + " connections")
         root.done()
       })
+    })
+  }
+
+  // A launcher whose start script is `sh -c <script>`.
+  function launcher(script) {
+    var l = launcherComponent.createObject(root, { command: ["sh", "-c", script] })
+    root.made.push(l)
+    return l
+  }
+  Component {
+    id: launcherComponent
+    DaemonLauncher {
+      clientName: "qmltest"
+      logName: "qmltest"
+    }
+  }
+
+  function launcherStarts() {
+    var l = root.launcher('printf "%s\\n" "$NOTCHD_QMLTEST_SOCKET"')
+    root.until(function() { return l.client.ready }, function() {
+      root.check(l.state === "ready" && l.socketPath === root.socketPath, "state " + l.state + ", socket " + l.socketPath)
+      root.check(l.client.ready, "the client did not connect: " + l.client.status)
+      root.done()
+    })
+  }
+
+  function launcherFails() {
+    var l = root.launcher('echo "{\\"error\\":\\"notchd not found\\"}"; exit 1')
+    root.until(function() { return l.state === "failed" }, function() {
+      root.check(l.state === "failed" && l.error === "notchd not found", "state " + l.state + ", error " + l.error)
+      root.check(l.client.status === "disconnected" && l.client.socketPath === "", "the client has a path: " + l.client.socketPath)
+      root.done()
     })
   }
 }

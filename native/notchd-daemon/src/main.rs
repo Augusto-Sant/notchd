@@ -7,7 +7,7 @@ use std::process::exit;
 const USAGE: &str = "\
 usage: notchd [options] <command>
 
-  notchd daemon [--ensure]        run the daemon (--ensure: return at once if one runs)
+  notchd daemon [--ensure]        run the daemon (--ensure: start it detached unless one runs)
   notchd ipc <method> [args...]   send an IPC method to the daemon, print its reply
   notchd --version                its version
   notchd --help                   this text
@@ -59,7 +59,7 @@ fn main() {
         "daemon" => {
             let result = match args.get(1).map(String::as_str) {
                 None => daemon::run(instance),
-                Some("--ensure") => ensure::ensure(instance),
+                Some("--ensure") => ensure::ensure(instance).map(|socket| println!("{socket}")),
                 Some(other) => die(&format!("unknown daemon option {other}"), 2),
             };
             if let Err(e) = result {

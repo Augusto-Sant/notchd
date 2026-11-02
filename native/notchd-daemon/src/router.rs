@@ -118,6 +118,9 @@ fn ipc(store: &mut Store, method: &str, args: &[String], now: u64) -> IpcResult 
             let open = !store.settings_open;
             store.settings(open, None);
         }
+        // The connection layer acts on it (server.rs): stop and exit once
+        // the reply is flushed. The store has nothing to do.
+        "shutdown" => return Ok("ok".into()),
         "navigate" => return Ok(store.navigate(now)),
         "recenter" => store.recenter(),
         "set" => return Ok(ipc_set(store, args)),
@@ -185,6 +188,15 @@ mod tests {
         };
         assert_eq!((e.id, e.code.as_str()), (Some(7), "method"));
         assert!(e.message.as_deref().unwrap().contains("unknown method"));
+    }
+
+    #[test]
+    fn shutdown_is_acknowledged_for_the_connection_to_act_on() {
+        let mut s = store();
+        assert_eq!(
+            result(route(&mut s, &ipc_msg("shutdown", &[]), 0)).unwrap(),
+            "ok"
+        );
     }
 
     #[test]

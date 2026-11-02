@@ -7,6 +7,14 @@ The core (`core/`) has no desktop-specific code. A host instantiates it and fill
 
 No symlinks: `omarchy plugin validate` rejects any inside the plugin folder.
 
+## The daemon
+
+Each host starts the notchd daemon (`native/notchd-daemon`, the `notchd` binary) and connects a `DaemonClient` to it, with `core/client/DaemonLauncher.qml`: it runs `scripts/ensure-daemon.sh` once at startup (`script: Qt.resolvedUrl(".../scripts/ensure-daemon.sh")`) and points its `client` at the socket path the script prints. One daemon serves the user, instance `default`, and it is detached: a shell restart leaves it running and the client reconnects.
+
+`scripts/ensure-daemon.sh` finds the binary in this order: `$NOTCHD_BIN`, `notchd` on `PATH`, `$XDG_DATA_HOME/notchd/bin/notchd`; with none, it calls `scripts/fetch-daemon.py --dest "$XDG_DATA_HOME/notchd/bin"` (if present, else the error is "notchd not found"). It then runs `notchd daemon --ensure`, which returns at once when a daemon of the same version answers, and otherwise starts one in its own session with stdio to `$XDG_STATE_HOME/notchd/daemon.log` and waits (at most 10 s) for the socket. A daemon of another version is asked to stop (`notchd ipc shutdown`) and replaced; one that cannot be stopped is an error ("update notchd"). On failure the script prints one line of JSON, `{"error": "..."}`, and exits 1; the launcher logs it once (`state` is `failed`, `error` has the text).
+
+While `NotchService` still decides everything the daemon runs in shadow: the client is connected, the UI shows nothing of it, and a failed start is only a log line. The launcher reads `NOTCHD_INSTANCE` (and the script and daemon `NOTCHD_CONFIG`, `NOTCHD_SOCKET`), which is how `make dev` runs its own `dev` instance on the dev config and never meets the user's daemon.
+
 ## NotchService
 
 The single source of truth: config, modules, the notches and IPC. It makes a `Notch` per entry of the config's `notches` (one, from the top-level keys, without a list): its modules, position, workspaces. Each notch shows as one or more `NotchCopy`: one that moves (following focus, or kept on its home screen), or one per screen with `position.screen` `"all"`. The service also has a default notch (`visitor`), with every module and a copy at the top of each screen; its copies (`guest`) stay hidden, at rest so they hold no live view, with no window on screen until they open (and for a few seconds after, `State.needsWindow`), and only show a peek on a focused screen where no notch with that module is (`State.needsVisitor`). A copy holds the state the pointer and peeks change (hover, pin, peek, drag) and so its own mode.

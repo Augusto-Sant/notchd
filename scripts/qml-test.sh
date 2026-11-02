@@ -115,7 +115,7 @@ for ((i = 0; i < n; i++)); do
   # The client's cases drop and refuse the connection on purpose: Quickshell
   # warns of each socket error, and the client of the junk line it is sent.
   if [[ -f $(dirname -- "$log")/daemon.log ]]; then
-    problems=$(grep -vE 'quickshell\.io\.socket: Socket error|notchd client: ignoring a line' <<< "$problems" || true)
+    problems=$(grep -vE 'quickshell\.io\.socket: Socket error|notchd client: ignoring a line|qmltest: the notchd daemon did not start' <<< "$problems" || true)
   fi
   if [[ -n $problems ]]; then
     echo "QML warnings during the tests (shard $i):" >&2
