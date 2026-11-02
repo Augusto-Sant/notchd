@@ -76,12 +76,19 @@ impl Server {
         // another daemon's. Without this, detached daemons outlive whatever
         // started them, forever.
         let watched = self.path.clone();
-        let inode = fs::metadata(&watched).map(|m| m.ino()).ok();
+        // Inode and change time: a file made at once in the old one's place
+        // may get its inode number back (it does on CI's filesystem).
+        let ident = |p: &Path| {
+            fs::metadata(p)
+                .map(|m| (m.ino(), m.ctime(), m.ctime_nsec()))
+                .ok()
+        };
+        let inode = ident(&watched);
         let hub_w = Arc::clone(&self.hub);
         thread::spawn(move || {
             loop {
                 thread::sleep(Duration::from_secs(1));
-                if fs::metadata(&watched).map(|m| m.ino()).ok() != inode {
+                if ident(&watched) != inode {
                     hub_w.stop();
                     hub_w.stop_modules();
                     std::process::exit(0);
