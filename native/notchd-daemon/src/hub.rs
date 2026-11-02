@@ -453,6 +453,27 @@ impl Hub {
         if let Err(e) = spawned {
             eprintln!("notchd: cannot start the resources reader: {e}");
         }
+        // The media players: its own threads read the bus (nothing while the
+        // module is not loaded) and hand over each change; the commands go
+        // to them on a channel.
+        let wanted = Arc::downgrade(self);
+        let fed = Arc::downgrade(self);
+        let commands = notchd_providers::media::start(
+            Box::new(move || {
+                wanted
+                    .upgrade()
+                    .is_some_and(|h| h.lock().core.wants_media())
+            }),
+            Box::new(move |data| {
+                let Some(hub) = fed.upgrade() else { return };
+                if let Ok(data) = serde_json::to_value(data) {
+                    hub.feed("media", &data);
+                }
+            }),
+        );
+        if let Some(tx) = commands {
+            self.lock().core.set_media(tx);
+        }
     }
 
     /// Changes the store directly (a module's facts, a peek request: what the
