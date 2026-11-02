@@ -11,7 +11,7 @@ use notchd_proto::{ToDaemon, ToUi, to_line};
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -71,6 +71,23 @@ impl Server {
     pub fn serve(self) {
         let hub = Arc::clone(&self.hub);
         thread::spawn(move || hub.run_ticker());
+        // A daemon nobody can reach any more goes: its socket file was
+        // removed (a test's scratch dir, a cleaned runtime dir) or replaced by
+        // another daemon's. Without this, detached daemons outlive whatever
+        // started them, forever.
+        let watched = self.path.clone();
+        let inode = fs::metadata(&watched).map(|m| m.ino()).ok();
+        let hub_w = Arc::clone(&self.hub);
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(1));
+                if fs::metadata(&watched).map(|m| m.ino()).ok() != inode {
+                    hub_w.stop();
+                    hub_w.stop_modules();
+                    std::process::exit(0);
+                }
+            }
+        });
         for stream in self.listener.incoming() {
             let Ok(stream) = stream else { continue };
             let hub = Arc::clone(&self.hub);

@@ -17,7 +17,7 @@ for tool in quickshell magick dbus-run-session python3; do
 done
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/notchd-visual.XXXXXX")
-trap 'pkill -f -- "notchd --socket $scratch" 2>/dev/null || true; rm -rf -- "$scratch"' EXIT
+trap 'pkill -f -- "--socket $scratch/" 2>/dev/null || true; rm -rf -- "$scratch"' EXIT
 mkdir -- "$scratch/config" "$scratch/shots" "$scratch/demo" "$scratch/sock"
 ln -s -- "$root/core" "$scratch/config/core"
 ln -s -- "$root/hosts" "$scratch/config/hosts"

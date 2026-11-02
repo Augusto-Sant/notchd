@@ -49,6 +49,18 @@ impl Daemon {
         }
         daemon
     }
+
+    /// Waits (bounded) for the daemon to exit on its own; true if it did.
+    pub fn wait_exit(&mut self, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if self.child.try_wait().expect("wait").is_some() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
 }
 
 impl Drop for Daemon {

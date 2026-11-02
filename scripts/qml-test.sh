@@ -22,7 +22,7 @@ jobs=${QMLTEST_JOBS:-$(( $(nproc) < 8 ? $(nproc) : 8 ))}
 [[ -n ${QMLTEST_ONLY:-} ]] && jobs=1
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/notchd-qmltest.XXXXXX")
-trap 'pkill -f -- "notchd --socket $scratch" 2>/dev/null || true; [[ -n ${QMLTEST_KEEP:-} ]] || rm -rf -- "$scratch"' EXIT
+trap 'pkill -f -- "--socket $scratch/" 2>/dev/null || true; [[ -n ${QMLTEST_KEEP:-} ]] || rm -rf -- "$scratch"' EXIT
 
 # One line per shard: the indexes of its cases. Longest first, each to the
 # shard with the least to do; a case not timed yet counts as 2 s.
@@ -69,7 +69,7 @@ run_shard() {
     NOTCHD_FAKE_CLAUDE_ARGS="$dir/data/claude-args" NOTCHD_FAKE_CODEX_ARGS="$dir/data/codex-args" "$root/scripts/isolated.sh" "$dir/runtime" \
     timeout -k 5 90 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
   # The services' daemons (tests/qml/TestService.qml) outlive the shell: stop them.
-  pkill -f -- "notchd --socket $dir/sock" 2>/dev/null || true
+  pkill -f -- "--socket $dir/sock" 2>/dev/null || true
 }
 
 # The client's cases (tests/qml/client.qml) are one more shard, with the fake
@@ -109,7 +109,7 @@ run_shadow_shard() {
   NOTCHD_QMLTEST_SOCKETS="$dir/sock" NOTCHD_QMLTEST_DAEMON="$daemon_bin" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
     NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
     "$root/scripts/isolated.sh" "$dir/runtime" timeout -k 5 120 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
-  pkill -f -- "notchd --socket $dir/sock" 2>/dev/null || true
+  pkill -f -- "--socket $dir/sock" 2>/dev/null || true
 }
 
 command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }

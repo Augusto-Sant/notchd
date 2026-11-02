@@ -207,3 +207,29 @@ fn a_stale_socket_file_is_replaced() {
             .is_some()
     );
 }
+
+// Bug: a detached daemon outlived whatever started it once its socket was
+// gone (a test's scratch dir removed): nothing could reach or stop it, and
+// test runs left hundreds behind. It exits when its socket file goes.
+#[test]
+fn a_daemon_whose_socket_is_removed_exits() {
+    let (_env, mut daemon) = start("socket-removed", None);
+    std::fs::remove_file(&daemon.socket).expect("remove the socket");
+    assert!(
+        daemon.wait_exit(Duration::from_secs(10)),
+        "still running without its socket"
+    );
+}
+
+// The same when another daemon took the path over: the old one cannot be
+// reached through it any more.
+#[test]
+fn a_daemon_whose_socket_is_replaced_exits() {
+    let (_env, mut daemon) = start("socket-replaced", None);
+    std::fs::remove_file(&daemon.socket).expect("remove the socket");
+    let _other = std::os::unix::net::UnixListener::bind(&daemon.socket).expect("bind over it");
+    assert!(
+        daemon.wait_exit(Duration::from_secs(10)),
+        "still running after its socket was replaced"
+    );
+}
