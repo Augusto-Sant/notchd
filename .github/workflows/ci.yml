@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-and-rules:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # native/rust-toolchain.toml pins the toolchain; rustup installs it on first use.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('native/Cargo.lock') }}
+      - run: make rust
+      - run: make test
+      # The fetcher's tests run a local HTTP server and a fake daemon: no network, no real paths.
+      - run: make integration

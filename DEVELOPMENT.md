@@ -124,7 +124,7 @@ The tests are a pyramid: many cheap ones at the bottom, few costly ones on top, 
 | Layer | Target | What it does | Run it |
 |---|---|---|---|
 | unit | `make test` | Node tests of `core/*.js` and `core/settings/*.js`; the Python rules of the live bridges and the components' installer as functions (`tests/*_test.py`, every TestCase without `tier = "integration"`). No processes, no servers | after every change |
-| integration | `make integration` | `tests/codex_live_test.py`'s echo canceller on real GStreamer; `tests/local_live_test.py`, the whole local voice bridge with a fake LocalAI, voxtype, pacat, codex and claude; `tests/components_test.py`, the components' installer with fake `pacman`, `pkexec`, `yay`, a fake LocalAI and downloads from a server on 127.0.0.1. On parallel workers, each in its own process group, killed with what it left behind (every process is also under `timeout -k`) | after a change to `core/live/` or `core/components/` |
+| integration | `make integration` | `tests/codex_live_test.py`'s echo canceller on real GStreamer; `tests/local_live_test.py`, the whole local voice bridge with a fake LocalAI, voxtype, pacat, codex and claude; `tests/components_test.py`, the components' installer with fake `pacman`, `pkexec`, `yay`, a fake LocalAI and downloads from a server on 127.0.0.1; `tests/fetch_daemon_test.py`, `scripts/fetch-daemon.py` against a local release server. On parallel workers, each in its own process group, killed with what it left behind (every process is also under `timeout -k`) | after a change to `core/live/` or `core/components/` |
 | qml | `make qmltest` | the QML behaviour tests, in parallel shards (below) | after a QML change |
 | visual | `make visual` | renders the settings window and the notch on each edge (the real modules, the media one playing the demo player's track) offscreen into `build/visual/`; fails on any QML warning, so it also proves the core loads | after a visual change, and look at the PNGs |
 | static | `make lint` | `qmllint` over `shell.qml` and the core; fails on any warning. Also checks that the Python bridges and installer parse | after a QML change |
@@ -217,12 +217,18 @@ Every user-visible change adds a line to `## [Unreleased]` in [CHANGELOG.md](CHA
 
 ### Versions
 
-`manifest.json`'s `version` is the version. A release:
+`manifest.json`'s `version` is the version, and `native/notchd-daemon/Cargo.toml`'s `version` is the same number (a unit test in `tests/fetch_daemon_test.py` fails when they differ): the plugin wants the daemon of its own version.
+
+### Releasing
+
+The plugin pins the daemon it downloads: `native/releases.json` (`{ "<version>": { "<target>": { "url", "sha256" } } }`) is the only source of checksums, changed only by a reviewed merge to main, so a tampered release asset fails the check. `scripts/fetch-daemon.py` reads it (see [docs/architecture.md](docs/architecture.md#distribution)).
 
 1. `make check`.
-2. Bump `version` in `manifest.json`.
-3. Rename `[Unreleased]` to `[X.Y.Z] — YYYY-MM-DD` and open a new empty `[Unreleased]`.
-4. `git commit -m "vX.Y.Z"`, `git tag -a vX.Y.Z -m "vX.Y.Z"`, push both. Tags are never moved.
+2. Bump `version` in `manifest.json` and in `native/notchd-daemon/Cargo.toml` (then `cargo build` to refresh `native/Cargo.lock`). Rename `[Unreleased]` in `CHANGELOG.md` to `[X.Y.Z] — YYYY-MM-DD` and open a new empty one.
+3. Commit as `vX.Y.Z`, tag it `git tag -a vX.Y.Z -m "vX.Y.Z"`, push both. Tags are never moved.
+4. `.github/workflows/release.yml` builds `notchd` on an x86_64 and an aarch64 runner, uploads `notchd-X.Y.Z-<target>.tar.gz` and its `.sha256` to the GitHub release, and opens a PR on `release-pin-vX.Y.Z` adding the version to `native/releases.json`. Compare the hashes with the release's `.sha256` files and merge it. Until then the plugin on main answers "no release for this version". (Needs "Allow GitHub Actions to create pull requests" in the repo's Actions settings.)
+
+`.github/workflows/ci.yml` runs `make rust`, `make test` and `make integration` on every push to main and every pull request.
 
 ### Documentation
 
