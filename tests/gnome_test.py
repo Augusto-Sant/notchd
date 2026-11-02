@@ -49,8 +49,29 @@ def missing():
     return None
 
 
+class Stalled(Exception):
+    """The shell never finished starting (it loads extensions only then)."""
+
+
 class Shell:
     """One headless GNOME Shell with the extension and its daemon."""
+
+    # GNOME 46 in its container (no systemd, no session) dies in about half
+    # its startups, before "GNOME Shell started" and so before any extension
+    # loads, for a reason not found (not GeoClue, not the SVG loader). A
+    # startup that works takes 1-2 s, so a failed one is retried.
+    STARTED_WITHIN = 10
+    ATTEMPTS = 4
+
+    @classmethod
+    def start(cls, config):
+        for attempt in range(cls.ATTEMPTS):
+            try:
+                return cls(config)
+            except Stalled as e:
+                stalled = e
+                print("gnome-shell did not start (attempt %d): %s" % (attempt + 1, str(e).splitlines()[0]))
+        raise AssertionError("gnome-shell never finished starting in %d attempts:\n%s" % (cls.ATTEMPTS, stalled))
 
     def __init__(self, config):
         # Short on purpose: mutter's Wayland socket path must fit 108 bytes.
@@ -75,17 +96,27 @@ class Shell:
 
     def _connect(self):
         bus_file = os.path.join(self.scratch, "bus")
-        deadline = time.time() + 20
+        deadline = time.time() + self.STARTED_WITHIN
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError("gnome-shell exited:\n" + self.tail())
             if os.path.exists(bus_file) and self._address():
                 break
             time.sleep(0.1)
+        while not self._started():
+            if self.proc.poll() is not None:
+                raise Stalled("exited with %s before starting:\n%s" % (self.proc.returncode, self.tail(5)))
+            if time.time() > deadline:
+                raise Stalled(self.tail(5))
+            time.sleep(0.1)
         address = self._address()
         flags = Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION
         self.bus = Gio.DBusConnection.new_for_address_sync(address, flags, None, None)
         self.until(lambda s: s.get("connected") and s["copies"], 20, "the extension connected and drew a notch")
+
+    def _started(self):
+        with open(self.log_path) as f:
+            return "GNOME Shell started" in f.read()
 
     def _address(self):
         with open(os.path.join(self.scratch, "bus")) as f:
@@ -199,7 +230,7 @@ class ShellCase(unittest.TestCase):
         why = missing()
         if why:
             raise unittest.SkipTest(why)
-        cls.shell = Shell(cls.config)
+        cls.shell = Shell.start(cls.config)
 
     @classmethod
     def tearDownClass(cls):

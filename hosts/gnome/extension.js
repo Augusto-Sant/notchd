@@ -27,8 +27,7 @@ export default class NotchdExtension extends Extension {
             hello: () => Protocol.hello('gnome-shell', version, 'default',
                 {primitives: PRIMITIVES, surfaces: [], webview: false, canvas: false}),
             onConnected: () => {
-                this._screens.reset();
-                this._client.send(this._screens.message());
+                this._screens.resend();
                 for (const copy of this._copies.values())
                     copy.resendMeasure();
             },
@@ -46,9 +45,9 @@ export default class NotchdExtension extends Extension {
             theme: this._theme,
             send: msg => this._client.send(msg),
             store: () => this._client.store,
-            names: () => this._screens.names,
+            names: () => this._screens.names ?? [],
             monitorFor: name => {
-                const i = this._screens.names.indexOf(name);
+                const i = this._screens.names?.indexOf(name) ?? -1;
                 return i >= 0 ? i : this._screens.focusedIndex();
             },
         };
@@ -170,7 +169,7 @@ export default class NotchdExtension extends Extension {
         for (const r of reserve) {
             if (r.edge !== 'top' || !(r.depth > 0))
                 continue;
-            const index = this._screens.names.indexOf(r.screen);
+            const index = this._screens.names?.indexOf(r.screen) ?? -1;
             const monitor = Main.layoutManager.monitors[index];
             if (!monitor)
                 continue;

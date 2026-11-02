@@ -158,7 +158,7 @@ gnome-test: daemon
 # there (its glibc floor is 24.04's). gnome-dev-46 shows the session in an
 # X11 window through Xwayland (DISPLAY): GNOME 46 has no devkit.
 GNOME46_IMAGE = notchd-gnome-46
-GNOME46_RUN = podman run --rm -v "$(CURDIR)":/src $(GNOME46_IMAGE) bash -c 'dbus-daemon --system --fork &&
+GNOME46_RUN = podman run --rm --tmpfs /tmp -v "$(CURDIR)":/src $(GNOME46_IMAGE) bash -c 'dbus-daemon --system --fork &&
 gnome-image-46:
 	podman build -t $(GNOME46_IMAGE) -f tests/containers/gnome-46.Containerfile tests/containers
 

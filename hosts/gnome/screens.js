@@ -2,50 +2,88 @@
 // workspaces as the `screens` message (docs/architecture.md, "UI to core").
 // Reported, never decided: the daemon picks the screens the notch goes on.
 
+import Gio from 'gi://Gio';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-// A monitor's connector name (DP-1, eDP-1), the name the config's
-// `position.screen` uses. Mutter exposes it on Meta.Monitor where the
-// version has it; otherwise the index stands in.
-export function connectors() {
-    const names = {};
-    try {
-        const manager = global.backend.get_monitor_manager();
-        for (const logical of manager.get_logical_monitors?.() ?? []) {
-            const index = logical.get_number?.();
-            const monitor = logical.get_monitors?.()[0];
-            const name = monitor?.get_connector?.();
-            if (index !== undefined && name)
-                names[index] = name;
-        }
-    } catch (e) {
-        console.warn(`notchd: no monitor connectors: ${e.message}`);
-    }
-    return Main.layoutManager.monitors.map((m, i) => names[i] ?? `monitor-${i}`);
+// Mutter's display configuration, served by gnome-shell itself: a call
+// must be async, since a sync one waits on the main loop that answers it.
+const DISPLAY_CONFIG = ['org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig'];
+
+// Monitor connector names (DP-1, eDP-1), the names the config's
+// `position.screen` uses, in Main.layoutManager.monitors' order. They come
+// from DisplayConfig.GetCurrentState on every version (Meta's
+// get_logical_monitors() is missing on 46): a logical monitor is matched to
+// the layout manager's by its origin. `done(names)` gets `monitor-<i>` for
+// a monitor it could not name. Returns a function that drops the answer.
+export function queryConnectors(done) {
+    let cancelled = false;
+    const finish = byOrigin => {
+        if (!cancelled)
+            done(Main.layoutManager.monitors.map((m, i) => byOrigin[`${m.x},${m.y}`] ?? `monitor-${i}`));
+    };
+    Gio.DBus.session.call(DISPLAY_CONFIG[0], DISPLAY_CONFIG[1], DISPLAY_CONFIG[0], 'GetCurrentState',
+        null, null, Gio.DBusCallFlags.NONE, 5000, null, (bus, res) => {
+            const byOrigin = {};
+            try {
+                // (serial, monitors, logical_monitors, properties); a logical
+                // monitor is (x, y, scale, transform, primary, [(connector,
+                // vendor, product, serial)], properties).
+                const [, , logical] = bus.call_finish(res).deepUnpack();
+                for (const [x, y, , , , monitors] of logical) {
+                    if (monitors.length)
+                        byOrigin[`${x},${y}`] = monitors[0][0];
+                }
+            } catch (e) {
+                console.warn(`notchd: no monitor connectors: ${e.message}`);
+            }
+            finish(byOrigin);
+        });
+    return () => {
+        cancelled = true;
+    };
 }
 
 export class Screens {
     constructor(onChanged) {
         this._onChanged = onChanged;
         this._ids = [
-            [Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => this._changed())],
+            [Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => this._monitorsChanged())],
             [global.display, global.display.connect('in-fullscreen-changed', () => this._changed())],
             [global.display, global.display.connect('notify::focus-window', () => this._changed())],
             [global.workspace_manager, global.workspace_manager.connect('active-workspace-changed', () => this._changed())],
             [global.workspace_manager, global.workspace_manager.connect('notify::n-workspaces', () => this._changed())],
         ];
         this._last = '';
-        this.names = connectors();
+        this.names = null;
+        this._query();
     }
 
     destroy() {
         for (const [obj, id] of this._ids)
             obj.disconnect(id);
         this._ids = [];
+        this._cancel?.();
+        this._cancel = null;
+    }
+
+    // No `screens` while the monitors' names are being asked for: a daemon
+    // told `monitor-0`, or a stale name, would place a notch and move it again.
+    _query() {
+        this._cancel?.();
+        this._cancel = queryConnectors(names => {
+            this._cancel = null;
+            this.names = names;
+            this._changed();
+        });
+    }
+
+    _monitorsChanged() {
+        this._query();
     }
 
     _changed() {
-        this.names = connectors();
+        if (!this.names || this._cancel)
+            return;
         const msg = this.message();
         const text = JSON.stringify(msg);
         if (text === this._last)
@@ -54,9 +92,10 @@ export class Screens {
         this._onChanged(msg);
     }
 
-    // Forget the last report, so the next change (or a new daemon) gets one.
-    reset() {
+    // Report again (a new daemon), as soon as the monitors have names.
+    resend() {
         this._last = '';
+        this._changed();
     }
 
     focusedIndex() {
