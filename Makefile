@@ -67,7 +67,7 @@ integration:
 # QML behaviour tests (tests/qml/shell.qml), offscreen, in parallel shards:
 # bindings, signals and animations the Node tests can't reach. Regression
 # tests live here. QMLTEST_ONLY=<part of a name> runs only those cases.
-qmltest:
+qmltest: daemon
 	@$(TIMED) qml scripts/qml-test.sh
 
 # Renders the settings window offscreen into build/visual/; fails on any QML

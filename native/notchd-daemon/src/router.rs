@@ -2,6 +2,7 @@
 //! out. Pure over a [`Store`] and a time, so it is tested without a socket.
 //! Handshake, broadcasting and the config file live in `hub` and `server`.
 
+use crate::testhooks;
 use notchd_core::navigate;
 use notchd_core::store::{EditOp, Store};
 use notchd_proto::request::{EditOp as WireOp, ErrReply, OkReply};
@@ -125,6 +126,10 @@ fn ipc(store: &mut Store, method: &str, args: &[String], now: u64) -> IpcResult 
         "recenter" => store.recenter(),
         "set" => return Ok(ipc_set(store, args)),
         "state" => return Ok(store.ipc_state()),
+        m if m.starts_with("test-") && testhooks::enabled() => {
+            return testhooks::apply(store, m, args, now)
+                .unwrap_or_else(|| Err(("method", format!("unknown method: {m}"))));
+        }
         m if IPC_METHODS.contains(&m) => {
             return Err(("method", format!("{m} is not implemented yet")));
         }

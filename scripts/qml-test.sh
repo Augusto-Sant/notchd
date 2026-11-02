@@ -7,7 +7,9 @@
 # The cases are mostly waits on timers, so they run in QMLTEST_JOBS shards at
 # once (default: the CPUs, at most 8), each its own Quickshell and scratch
 # dir, longest first by the last run's times (build/times/qml.tsv, which this
-# writes). QMLTEST_ONLY=<text> runs only the cases whose name contains it;
+# writes). Two more shards: the daemon client's (client.qml, a fake daemon) and
+# the shadow test's (shadow.qml, the real daemon, which `make qmltest` builds).
+# QMLTEST_ONLY=<text> runs only the cases whose name contains it;
 # QMLTEST_VERBOSE=1 lists the cases that passed too.
 set -euo pipefail
 
@@ -88,7 +90,26 @@ run_client_shard() {
   wait "$daemon_pid" 2>/dev/null || true
 }
 
+# The shadow shard (tests/qml/shadow.qml): the real daemon beside the QML
+# service, given the same inputs and compared. The test starts its own daemon
+# per scenario (NOTCHD_TEST_HOOKS=1, a socket in this shard's scratch dir) and
+# stops it; whatever is left is killed here when the shard ends. The binary is
+# `make daemon`'s (NOTCHD_BIN overrides).
+daemon_bin=${NOTCHD_BIN:-$root/native/target/release/notchd}
+run_shadow_shard() {
+  local dir=$1
+  mkdir -- "$dir" "$dir/config" "$dir/data" "$dir/runtime" "$dir/sock"
+  ln -s -- "$root/core" "$dir/config/core"
+  ln -s -- "$root/tests/qml/shadow.qml" "$dir/config/shell.qml"
+  ln -s -- "$root/tests/qml/fixtures" "$dir/config/fixtures"
+  NOTCHD_QMLTEST_SOCKETS="$dir/sock" NOTCHD_QMLTEST_DAEMON="$daemon_bin" NOTCHD_QMLTEST_ONLY="${QMLTEST_ONLY:-}" \
+    NOTCHD_QMLTEST_DIR="$dir/data" XDG_STATE_HOME="$dir/data/state" XDG_DATA_HOME="$dir/data/share" XDG_CACHE_HOME="$dir/data/cache" \
+    "$root/scripts/isolated.sh" "$dir/runtime" timeout -k 5 120 quickshell -p "$dir/config" --no-color > "$dir/log" 2>&1 || true
+  pkill -f -- "notchd --socket $dir/sock" 2>/dev/null || true
+}
+
 command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
+[[ -x $daemon_bin ]] || { echo "no daemon at $daemon_bin: run make daemon" >&2; exit 1; }
 n=0
 pids=()
 while IFS= read -r cases; do
@@ -97,6 +118,9 @@ while IFS= read -r cases; do
   n=$((n + 1))
 done < "$scratch/shards"
 run_client_shard "$scratch/$n" &
+pids+=("$!")
+n=$((n + 1))
+run_shadow_shard "$scratch/$n" &
 pids+=("$!")
 n=$((n + 1))
 wait "${pids[@]}"
@@ -114,7 +138,7 @@ for ((i = 0; i < n; i++)); do
   problems=$(grep -E '^\s*(WARN|ERROR)' "$log" | grep -vE 'window masks' || true)
   # The client's cases drop and refuse the connection on purpose: Quickshell
   # warns of each socket error, and the client of the junk line it is sent.
-  if [[ -f $(dirname -- "$log")/daemon.log ]]; then
+  if [[ -f $(dirname -- "$log")/daemon.log || -d $(dirname -- "$log")/sock ]]; then
     problems=$(grep -vE 'quickshell\.io\.socket: Socket error|notchd client: ignoring a line|qmltest: the notchd daemon did not start' <<< "$problems" || true)
   fi
   if [[ -n $problems ]]; then

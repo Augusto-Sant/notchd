@@ -8,3 +8,4 @@ pub mod ipc;
 pub mod modhost;
 pub mod router;
 pub mod server;
+pub mod testhooks;
