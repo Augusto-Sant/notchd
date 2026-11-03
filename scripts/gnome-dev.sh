@@ -61,13 +61,14 @@ trap cleanup EXIT
 
 uuid=$("$root/scripts/gnome-build.sh" "$scratch/data/gnome-shell/extensions" | xargs basename)
 
-# A demo config: one notch with modules that need nothing installed.
+# A demo config: one notch with modules that need nothing installed, and
+# the space it takes kept clear of windows (reserveSpace is off by default).
 if [ -n "${NOTCHD_GNOME_CONFIG:-}" ]; then
   cp -- "$NOTCHD_GNOME_CONFIG" "$scratch/notchd.json"
   [ -z "${NOTCHD_GNOME_MODULES:-}" ] || cp -r -- "$NOTCHD_GNOME_MODULES" "$scratch/modules"
 else
   cat > "$scratch/notchd.json" <<'EOF'
-{"modules": ["activities", "timer", "resources", "primitives"]}
+{"modules": ["activities", "timer", "resources", "primitives"], "reserveSpace": true}
 EOF
   # A demo user module that draws the primitives the others do not use.
   cp -r -- "$root/tests/gnome/modules" "$scratch/modules"
