@@ -4,6 +4,10 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Fixed
+
+- `scripts/install.sh` starts the daemon itself (`notchd daemon --ensure`) where `systemctl` is installed but no systemd user manager runs (a container, a session without systemd), instead of ending with "could not start notchd.service" and no daemon.
+
 ## [0.5.0] — 2026-11-03
 
 ### Added
