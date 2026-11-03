@@ -126,13 +126,17 @@ lint-run:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' core/components/install.py \
 	  && echo "install.py: parses"
 
-# The repo root is the Omarchy plugin.
+# The repo root is the Omarchy plugin, validated as committed (a copy of the
+# files git sees: the build folders are not the plugin's).
 validate:
-	@$(TIMED) validate omarchy plugin validate .
+	@$(TIMED) validate scripts/validate-plugin.sh
 
 # The daemon, release build: what the hosts start with the shell.
+# DAEMON_FEATURES=ghostty adds the experimental grid renderer (zig 0.15.2 on
+# PATH; DEVELOPMENT.md, "Omarchy host").
+DAEMON_FEATURES ?=
 daemon:
-	cargo build --release -p notchd-daemon --manifest-path native/Cargo.toml
+	cargo build --release -p notchd-daemon --manifest-path native/Cargo.toml $(if $(DAEMON_FEATURES),--features $(DAEMON_FEATURES))
 
 # The standalone host (shell.qml) against a scratch config and its own daemon
 # instance (DEV_INSTANCE, the dev config): the user's `default` daemon and
