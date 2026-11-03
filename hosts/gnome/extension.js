@@ -86,6 +86,7 @@ export default class NotchdExtension extends Extension {
                     navigating: !!this._navActor,
                     terminals: this._terminals?.describe() ?? null,
                     navigateAction: this._navigateAction ?? 0,
+                    preferencesOpened: this._preferencesOpened ?? 0,
                 }));
             }).catch(e => console.warn(`notchd: no test hooks: ${e.message}`));
         }
@@ -138,6 +139,7 @@ export default class NotchdExtension extends Extension {
         this._theme?.destroy();
         this._theme = null;
         this._host = null;
+        this._settingsOpen = undefined;
     }
 
     _navigateKey() {
@@ -184,7 +186,26 @@ export default class NotchdExtension extends Extension {
         if (key === 'state') {
             this._reserve(state.reserve ?? []);
             this._navigation(!!state.navigation);
+            this._followSettings(state);
         }
+    }
+
+    // Navigation's `s` and `notchd ipc settings` open the settings window
+    // (`settingsOpen` turning true): the preferences (prefs.js), a process
+    // of their own that connects to the daemon, shows its `settingsPage`
+    // and says when it closes. A daemon already open when this connects
+    // opens nothing.
+    _followSettings(state) {
+        const open = !!state.settingsOpen;
+        if (open && this._settingsOpen === false) {
+            this._preferencesOpened = (this._preferencesOpened ?? 0) + 1;
+            try {
+                this.openPreferences();
+            } catch (e) {
+                console.warn(`notchd: no preferences window: ${e.message}`);
+            }
+        }
+        this._settingsOpen = open;
     }
 
     // While navigating, the keyboard is the daemon's: a modal grab on an

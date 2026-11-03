@@ -65,6 +65,8 @@ export class TestHook {
             overview: Main.overview.visible,
             // The chrome actors the extension added (all named notchd-*).
             chrome: (Main.layoutManager._trackedActors ?? []).filter(a => a.actor.name?.startsWith('notchd-')).length,
+            // The windows' titles (the preferences window is "notchd").
+            windows: global.get_window_actors().map(a => a.meta_window.get_title() ?? ''),
             ...this._snapshot()});
     }
 

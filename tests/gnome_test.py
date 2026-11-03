@@ -568,6 +568,23 @@ class DaemonGoesAway(ShellCase):
         sh.ipc("shutdown")
         sh.until(lambda s: not s["connected"] and grabs(s) == 0, 3, "the grab to go with the daemon")
 
+class Preferences(ShellCase):
+    def test_the_daemon_opening_settings_opens_the_preferences_and_closing_them_closes_it(self):
+        # `ipc settings` toggles the daemon's settingsOpen, as navigation's
+        # `s` opens it: the extension opens its preferences (prefs.js, a
+        # process of its own), which connect to the daemon; toggled again,
+        # the window goes.
+        sh = self.shell
+        sh.ipc("settings")
+        s = sh.until(lambda s: "notchd" in s["windows"], 20, "the preferences window")
+        self.assertEqual(s["preferencesOpened"], 1)
+        time.sleep(1)  # the window connects and draws the daemon's pages
+        sh.screenshot("preferences")
+        sh.ipc("settings")
+        sh.until(lambda s: "notchd" not in s["windows"], 5, "the preferences window to close")
+        self.assertEqual(sh.snapshot()["preferencesOpened"], 1)
+
+
 def solid_png(w, h, rgb):
     """A w x h picture of one color, as PNG bytes."""
     def chunk(kind, data):

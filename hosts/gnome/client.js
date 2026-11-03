@@ -72,6 +72,20 @@ export class DaemonClient {
         return true;
     }
 
+    // Sends one message before returning, for a process about to go (the
+    // settings window telling the daemon it closed): an asynchronous write
+    // would be cancelled by `stop()`. False when it could not be written.
+    sendNow(msg) {
+        if (!this._out || this._queue.length > 0)
+            return this.send(msg);
+        try {
+            this._out.write_all(new TextEncoder().encode(Protocol.encode(msg)), null);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
     // An `ipc` request (a method of docs/ipc.md). Its id is a number, as the
     // protocol has it (`notchd-proto`'s Ipc): a string id makes the daemon
     // reject the message. The reply is not waited for.
