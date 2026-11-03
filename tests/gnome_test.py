@@ -466,6 +466,24 @@ class Drag(ShellCase):
         self.assertEqual(main_copy(sh.snapshot())["edge"], "top")
 
 
+class Canvas(ShellCase):
+    """The canvas primitive (a terminal's mark, a `>_` in a rounded tile, and
+    its working dot in the closed notch) drawn with Cairo, not a
+    placeholder."""
+
+    config = {"modules": ["timer", "shell"], "reserveSpace": True,
+              "terminals": {"shell": {"command": "exec sh", "title": "Shell"}}}
+
+    def test_a_terminals_mark_draws_as_a_canvas(self):
+        s = self.shell.until(lambda s: main_copy(s)["canvases"], 3, "a canvas in the closed notch")
+        c = main_copy(s)
+        self.assertFalse([t for t in c["texts"] if "not drawn" in t], c["texts"])
+        self.assertTrue(all(cv["w"] > 0 and cv["h"] > 0 for cv in c["canvases"]), c["canvases"])
+        # The mark has its commands (the dot has none while idle).
+        self.assertTrue(any(cv["cmds"] >= 2 for cv in c["canvases"]), c["canvases"])
+        self.shell.screenshot("canvas")
+
+
 def terminal_window(s):
     return next(iter(s.get("terminals") or []), None)
 

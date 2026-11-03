@@ -1212,6 +1212,7 @@ class NotchCopy extends St.Widget {
             // where it is and reads what a picture shows).
             bars: this._viewActors(a => a._track).map(a => ({...this._boxOf(a._track), seek: !!a.reactive, shown: a._shownFraction ?? null})),
             texts: this._viewActors(a => a instanceof St.Label).map(a => a.text),
+            canvases: this._viewActors(a => a._canvas).map(a => ({w: a.width, h: a.height, cmds: a._canvas.cmds.length})),
             images: this._viewActors(a => a._picture).map(a => ({...a._picture, ...this._boxOf(a)})),
             tabs: (this._tabButtons ?? []).filter(({button}) => button.mapped).map(({tab, button}) => {
                 // Allocations summed up to the card: the transformed extents

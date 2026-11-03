@@ -1,6 +1,6 @@
 // A module's view tree (docs/architecture.md, "Primitive tree (v1)") drawn
-// with St. Every v1 primitive but canvas is drawn (a `surface` is a frame
-// a terminal window shows through); what is not is a visible placeholder,
+// with St. Every v1 primitive is drawn (a `canvas` with Cairo, a `surface`
+// is a frame a terminal window shows through); what is not is a visible placeholder,
 // never a blank (the hello's caps say which ones this UI has, so the daemon
 // knows too).
 //
@@ -11,16 +11,18 @@
 // again. So an equalizer keeps moving and a meter eases from where it was
 // while a module sends views many times a second.
 
+import Cairo from 'cairo';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Graphene from 'gi://Graphene';
 import Pango from 'gi://Pango';
+import PangoCairo from 'gi://PangoCairo';
 import St from 'gi://St';
 
 import * as Tree from './lib/Tree.js';
 
-export const PRIMITIVES = ['row', 'column', 'stack', 'text', 'icon', 'spacer', 'progress', 'button', 'chip', 'image', 'meter', 'equalizer', 'list'];
+export const PRIMITIVES = ['row', 'column', 'stack', 'text', 'icon', 'spacer', 'progress', 'button', 'chip', 'image', 'meter', 'equalizer', 'list', 'canvas'];
 
 // Named icons that are not freedesktop names, mapped to Adwaita's nearest
 // symbolic icon. A freedesktop name is used as `<name>-symbolic`.
@@ -734,6 +736,172 @@ function list(node, ctx, depth, actor) {
     return actor;
 }
 
+// Tier 2, the canvas (docs/architecture.md, "Canvas"; CanvasPrim.qml): a
+// fixed-size box drawn with Cairo from the flat command list, in design
+// pixels and token colors, so it follows a theme switch. A new `view`
+// redraws the same actor (an animated canvas streams views). A bad command
+// is skipped, never a crash.
+function canvas(node, ctx, depth, actor) {
+    const theme = ctx.theme;
+    const w = theme.space(Number(node.w) > 0 ? Number(node.w) : 64);
+    const h = theme.space(Number(node.h) > 0 ? Number(node.h) : 64);
+    if (!actor) {
+        actor = new St.DrawingArea();
+        actor.connect('repaint', area => paintCanvas(area));
+    }
+    actor._canvas = {cmds: Array.isArray(node.cmds) ? node.cmds : [], theme};
+    actor.set_size(w, h);
+    actor.queue_repaint();
+    return actor;
+}
+
+// A token, or {"mix": [a, b, t]}, as {r, g, b, a}; `opacity` multiplies.
+function canvasColor(theme, value, opacity) {
+    const token = name => theme.colors[name] ?? theme.colors.foreground;
+    let c;
+    if (value && typeof value === 'object' && Array.isArray(value.mix)) {
+        const [a, b, t] = value.mix;
+        const x = token(a), y = token(b), k = Math.min(1, Math.max(0, Number(t) || 0));
+        c = {r: x.r + (y.r - x.r) * k, g: x.g + (y.g - x.g) * k, b: x.b + (y.b - x.b) * k, a: x.a + (y.a - x.a) * k};
+    } else {
+        c = token(value);
+    }
+    return [c.r, c.g, c.b, c.a * opacity];
+}
+
+// SVG path data of `M L Q C Z` (an implicit repeat draws every set), in
+// design pixels times `k`.
+function tracePath(cr, d, k) {
+    const re = /([MLQCZ])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g;
+    const segs = [];
+    let m;
+    while ((m = re.exec(String(d))) !== null) {
+        if (m[1])
+            segs.push([m[1]]);
+        else if (segs.length)
+            segs[segs.length - 1].push(parseFloat(m[2]) * k);
+    }
+    for (const [op, ...n] of segs) {
+        if (op === 'Z') {
+            cr.closePath();
+            continue;
+        }
+        const arity = {M: 2, L: 2, Q: 4, C: 6}[op];
+        for (let j = 0; j + arity <= n.length; j += arity) {
+            const a = n.slice(j, j + arity);
+            if (op === 'M') {
+                cr.moveTo(a[0], a[1]);
+            } else if (op === 'L') {
+                cr.lineTo(a[0], a[1]);
+            } else if (op === 'C') {
+                cr.curveTo(...a);
+            } else {
+                // Cairo has cubic curves only: the quadratic raised.
+                const [x0, y0] = cr.hasCurrentPoint?.() === false ? [a[0], a[1]] : cr.getCurrentPoint();
+                cr.curveTo(x0 + 2 / 3 * (a[0] - x0), y0 + 2 / 3 * (a[1] - y0),
+                    a[2] + 2 / 3 * (a[0] - a[2]), a[3] + 2 / 3 * (a[1] - a[3]), a[2], a[3]);
+            }
+        }
+    }
+}
+
+function roundedRect(cr, x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    if (r <= 0) {
+        cr.rectangle(x, y, w, h);
+        return;
+    }
+    cr.newSubPath();
+    cr.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
+    cr.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+    cr.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+    cr.arc(x + r, y + r, r, Math.PI, 3 * Math.PI / 2);
+    cr.closePath();
+}
+
+const CAPS = {butt: Cairo.LineCap.BUTT, round: Cairo.LineCap.ROUND, square: Cairo.LineCap.SQUARE};
+const JOINS = {miter: Cairo.LineJoin.MITER, round: Cairo.LineJoin.ROUND, bevel: Cairo.LineJoin.BEVEL};
+
+function paintCanvas(area) {
+    const {cmds, theme} = area._canvas ?? {cmds: [], theme: null};
+    const cr = area.get_context();
+    if (!theme) {
+        cr.$dispose();
+        return;
+    }
+    const k = theme.scale;
+    const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
+    let clips = 0;
+    for (const c of cmds) {
+        if (!c || typeof c !== 'object')
+            continue;
+        try {
+            if (c.c === 'clip') {
+                cr.save();
+                roundedRect(cr, c.x * k, c.y * k, c.w * k, c.h * k, num(c.r, 0) * k);
+                cr.clip();
+                clips++;
+                continue;
+            }
+            if (c.c === 'unclip') {
+                if (clips > 0) {
+                    cr.restore();
+                    clips--;
+                }
+                continue;
+            }
+            const op = Math.min(1, Math.max(0, num(c.opacity, 1)));
+            cr.newPath();
+            if (c.c === 'rect') {
+                roundedRect(cr, c.x * k, c.y * k, c.w * k, c.h * k, num(c.r, 0) * k);
+            } else if (c.c === 'circle') {
+                cr.newSubPath();
+                cr.arc(c.x * k, c.y * k, c.r * k, 0, 2 * Math.PI);
+            } else if (c.c === 'line') {
+                cr.moveTo(c.x1 * k, c.y1 * k);
+                cr.lineTo(c.x2 * k, c.y2 * k);
+            } else if (c.c === 'path') {
+                tracePath(cr, c.d, k);
+            } else if (c.c === 'text') {
+                const layout = PangoCairo.create_layout(cr);
+                const px = fontSize(c.size, theme, 'body') * k;
+                const font = Pango.FontDescription.from_string('Sans');
+                font.set_absolute_size(px * Pango.SCALE);
+                layout.set_font_description(font);
+                layout.set_text(String(c.text ?? ''), -1);
+                cr.setSourceRGBA(...canvasColor(theme, c.tone ?? 'foreground', op));
+                // `y` is the top of the em, as the QML canvas's
+                // textBaseline "top"; Pango's layout starts above it, at the
+                // line's top (the em's ascent is about 0.8 of its size).
+                const above = layout.get_baseline() / Pango.SCALE - 0.8 * px;
+                cr.moveTo(c.x * k, c.y * k - Math.max(0, above));
+                PangoCairo.show_layout(cr, layout);
+                continue;
+            } else {
+                continue;
+            }
+            if (c.fill !== undefined && c.fill !== null) {
+                cr.setSourceRGBA(...canvasColor(theme, c.fill, op));
+                cr.fillPreserve();
+            }
+            // A line has no inside: its `stroke` is required, the others'
+            // optional.
+            if (c.stroke !== undefined && c.stroke !== null) {
+                cr.setSourceRGBA(...canvasColor(theme, c.stroke, op));
+                cr.setLineWidth(Math.max(0.5, num(c.width, 1) * k));
+                cr.setLineCap(CAPS[c.cap] ?? Cairo.LineCap.BUTT);
+                cr.setLineJoin(JOINS[c.join] ?? Cairo.LineJoin.MITER);
+                cr.stroke();
+            } else {
+                cr.newPath();
+            }
+        } catch (e) {
+            console.warn(`notchd: canvas: skipped a \`${c.c}\` command: ${e.message}`);
+        }
+    }
+    cr.$dispose();
+}
+
 // The free surface: a rectangle something else draws (docs/architecture.md,
 // "Free surface"). A `terminal` is a window of terminal.js's that the notch
 // keeps over this frame (NotchCopy leaves a hole in the card for it); the
@@ -764,10 +932,10 @@ function surface(node, ctx) {
 
 const BUILD = {
     row: rowColumn, column: rowColumn, stack, text, icon, spacer, progress,
-    button, chip, image, meter, equalizer, list, surface,
+    button, chip, image, meter, equalizer, list, surface, canvas,
 };
 // The primitives that update an actor in place (the others draw again).
-const UPDATES = new Set(['row', 'column', 'stack', 'text', 'progress', 'meter', 'equalizer', 'list']);
+const UPDATES = new Set(['row', 'column', 'stack', 'text', 'progress', 'meter', 'equalizer', 'list', 'canvas']);
 
 // `ctx`: { theme, onAction(action, value), onAccent, terminals (whether a
 // terminal surface can be drawn) }. `prev`: the actor

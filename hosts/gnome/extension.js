@@ -44,7 +44,7 @@ export default class NotchdExtension extends Extension {
         this._client = new DaemonClient({
             // A terminal surface where the helper can run (VTE for GTK 4).
             hello: () => Protocol.hello('gnome-shell', version, 'default',
-                {primitives: PRIMITIVES, surfaces: this._terminals ? ['terminal'] : [], webview: false, canvas: false}),
+                {primitives: PRIMITIVES, surfaces: this._terminals ? ['terminal'] : [], webview: false, canvas: true}),
             onConnected: welcome => {
                 this._exe = welcome?.exe ?? '';
                 this._screens.resend();
