@@ -1,6 +1,6 @@
 // The terminal surfaces of the GNOME UI (docs/architecture.md, "Free
 // surface", "GNOME UI"): a window per terminal, from the helper in
-// terminal/helper.js (GTK 4 and VTE running `notchd attach <ref>`), which
+// terminal/grid.js (GTK 4, drawing the screen the daemon emulates), which
 // the extension keeps over the notch: above, on every workspace, out of the
 // window list, and where the view's `surface` node is. The notch leaves a
 // hole there, so the window shows through it and takes the pointer.
@@ -16,8 +16,9 @@ import Meta from 'gi://Meta';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-// Whether this system can run the helper: gjs, GTK 4 and VTE for GTK 4
-// (Ubuntu: gir1.2-vte-3.91; Fedora: vte291-gtk4). `done(bool)`.
+// Whether this system can run the helper: gjs and GTK 4 with Pango and
+// GdkPixbuf (a GNOME desktop has them; the extension's preferences need
+// GTK 4 too). `done(bool)`.
 export function probe(done) {
     const gjs = GLib.find_program_in_path('gjs');
     if (!gjs) {
@@ -26,7 +27,7 @@ export function probe(done) {
     }
     try {
         const proc = Gio.Subprocess.new([gjs, '-c',
-            "imports.gi.versions.Gtk = '4.0'; imports.gi.versions.Vte = '3.91'; imports.gi.Gtk; imports.gi.Vte;"],
+            "imports.gi.versions.Gtk = '4.0'; imports.gi.Gtk; imports.gi.PangoCairo; imports.gi.GdkPixbuf;"],
         Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
         proc.wait_check_async(null, (p, res) => {
             let ok = false;
@@ -337,24 +338,20 @@ export class Terminals {
         });
     }
 
-    // The helper for the renderer: VTE (helper.js), or the grid's (grid.js,
-    // `renderer: ghostty`).
-    _argv(ref, renderer) {
+    _argv(ref) {
         const theme = this._host.theme;
         const color = name => theme.css(name).replace(/\s+/g, '');
-        const helper = renderer === 'ghostty' && this._host.grid ? this._host.grid : this._host.helper;
-        return [GLib.find_program_in_path('gjs') ?? 'gjs', '-m', helper,
+        return [GLib.find_program_in_path('gjs') ?? 'gjs', '-m', this._host.helper,
             this._host.exe(), this._host.socket(), ref, color('background'), color('foreground'), ''];
     }
 
     // The window of `ref` for the run `run` over `rect`, for `owner`
-    // ({ onLine(line) }), drawn by `renderer`'s helper: a new run or another
-    // renderer starts a new window.
-    show(ref, run, rect, owner, renderer = 'widget') {
+    // ({ onLine(line) }): a new run starts a new window.
+    show(ref, run, rect, owner) {
         let entry = this._windows.get(ref);
         // A new run (restart) is a new window; the old one goes now, and
         // its owner's hole closes until the new one is in place.
-        if (entry && (entry.run !== run || entry.renderer !== renderer)) {
+        if (entry && entry.run !== run) {
             entry.window.destroy();
             this._windows.delete(ref);
             entry = null;
@@ -362,10 +359,10 @@ export class Terminals {
         if (!entry) {
             if (!this._host.exe())
                 return;
-            entry = {run, owner, renderer};
+            entry = {run, owner};
             // `placed` false comes from a window let go of: its last owner
             // hears it, to close its hole.
-            entry.window = new TerminalWindow(this._argv(ref, renderer), line => entry.owner?.onLine(line),
+            entry.window = new TerminalWindow(this._argv(ref), line => entry.owner?.onLine(line),
                 placed => (entry.owner ?? entry.lastOwner)?.onPlaced(placed));
             this._windows.set(ref, entry);
         }

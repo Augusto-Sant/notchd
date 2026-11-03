@@ -135,7 +135,7 @@ omarchy-shell eryk.notchd agent claude "ask what does EXDEV mean?"
 omarchy-shell eryk.notchd agent codex "ask explain: $(wl-paste --primary)"   # the selected text, as one line
 ```
 
-It answers `ok`, `the terminal needs the qmltermwidget package` (no UI connected can draw a terminal), the usage, `<id> module not loaded` when no notch lists it, or `no agent <id>` with the agents there are. The agents live in the daemon, which answers: `notchd ipc agent claude ...` prints those. The shell's own target (`omarchy-shell eryk.notchd agent ...`) cannot wait for the daemon and answers `ok` once it has sent the command (it still answers `no agent <id>` and `<id> module not loaded`, which it knows). The program runs in the daemon, so an agent keeps running through a shell reload (`make restart`) and the notch comes back to the same session.
+It answers `ok`, `no UI connected draws a terminal`, the usage, `<id> module not loaded` when no notch lists it, or `no agent <id>` with the agents there are. The agents live in the daemon, which answers: `notchd ipc agent claude ...` prints those. The shell's own target (`omarchy-shell eryk.notchd agent ...`) cannot wait for the daemon and answers `ok` once it has sent the command (it still answers `no agent <id>` and `<id> module not loaded`, which it knows). The program runs in the daemon, so an agent keeps running through a shell reload (`make restart`) and the notch comes back to the same session.
 
 ## Live
 

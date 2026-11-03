@@ -3,10 +3,9 @@ import "../.."
 import "Tree.js" as Tree
 
 // The free surface (tier 3): a rectangle the UI hands to something that draws
-// itself. A `terminal` is the view of a program the daemon runs
-// (docs/architecture.md, "Free surface"): terminal/TerminalSurface.qml draws
-// it with qmltermwidget, attached to the daemon through `notchd attach`. A
-// surface this UI cannot draw (a terminal without that package, a webview) is
+// itself. A `terminal` is the view of a program the daemon runs and emulates
+// (docs/architecture.md, "Free surface"): terminal/GhosttySurface.qml draws
+// the screen the daemon sends. A surface this UI cannot draw (a webview) is
 // a placeholder that says so, so a module's view is never a silent blank.
 //
 // What it needs of the daemon (the socket, the binary, the settings) it asks
@@ -21,18 +20,14 @@ PrimBase {
   readonly property bool isTerminal: prim.node.kind === "terminal"
   property var host: null
   Component.onCompleted: prim.host = Tree.hostOf(prim)
-  // The `ghostty` renderer (experimental): the daemon emulates the terminal
-  // and this UI draws its grid, so it needs no package.
-  readonly property bool ghostty: prim.node.renderer === "ghostty"
-  readonly property bool drawable: prim.isTerminal && !!prim.host && (prim.ghostty || prim.host.terminalAvailable === true)
+  readonly property bool drawable: prim.isTerminal && !!prim.host && prim.host.terminalAvailable === true
   readonly property string reference: typeof prim.node.ref === "string" ? prim.node.ref : ""
 
   Loader {
     id: surface
     anchors.fill: parent
     active: prim.drawable
-    source: !prim.drawable ? ""
-      : Qt.resolvedUrl(prim.ghostty ? "../../terminal/GhosttySurface.qml" : "../../terminal/TerminalSurface.qml")
+    source: prim.drawable ? Qt.resolvedUrl("../../terminal/GhosttySurface.qml") : ""
   }
   Binding { target: surface.item; property: "host"; value: prim.host; when: surface.item !== null }
   Binding { target: surface.item; property: "reference"; value: prim.reference; when: surface.item !== null }
@@ -62,7 +57,7 @@ PrimBase {
     wrapMode: Text.Wrap
     textFormat: Text.PlainText
     text: prim.isTerminal && !!prim.host
-      ? "The terminal needs the qmltermwidget package (the QML port of qtermwidget). Install it, then restart notchd."
+      ? "This UI does not draw terminals."
       : "󰆍 " + (prim.node.kind === undefined ? "" : prim.node.kind) + " surface\n" + prim.reference
     color: Theme.muted
     font.family: Theme.font.family

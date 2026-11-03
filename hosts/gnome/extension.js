@@ -43,7 +43,7 @@ export default class NotchdExtension extends Extension {
         this._screens = new Screens(msg => this._client?.send(msg), () => this._redraw());
         const version = this.metadata['version-name'] ?? '0';
         this._client = new DaemonClient({
-            // A terminal surface where the helper can run (VTE for GTK 4).
+            // A terminal surface where its window can run (gjs and GTK 4).
             hello: () => Protocol.hello('gnome-shell', version, 'default',
                 {primitives: PRIMITIVES, surfaces: this._terminals ? ['terminal'] : [], webview: false, canvas: true}),
             onConnected: welcome => {
@@ -99,14 +99,12 @@ export default class NotchdExtension extends Extension {
                 return;
             if (ok) {
                 this._terminals = new Terminal.Terminals({
-                    theme: this._theme, helper: `${this.path}/terminal/helper.js`,
-                    // The grid renderer's view (`renderer: ghostty`): GTK 4 alone.
-                    grid: `${this.path}/terminal/grid.js`,
+                    theme: this._theme, helper: `${this.path}/terminal/grid.js`,
                     exe: () => this._exe || GLib.find_program_in_path('notchd') || '', socket: () => socketPath(),
                 });
                 this._host.terminals = this._terminals;
             } else {
-                console.log('notchd: no VTE for GTK 4, terminals show a placeholder');
+                console.log('notchd: no gjs with GTK 4, terminals show a placeholder');
             }
             this._client.start();
         });

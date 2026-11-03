@@ -2,8 +2,7 @@
  "message": "surface",
  "valid": [
   {"t":"surface","kind":"terminal","ref":"term:claude","w":480,"h":300},
-  {"t":"surface","kind":"webview","ref":"web:weather"},
-  {"t":"surface","kind":"terminal","ref":"term:claude","h":300,"renderer":"ghostty"}
+  {"t":"surface","kind":"webview","ref":"web:weather"}
  ],
  "invalid": [
   {"why":"kind missing","json":{"t":"surface","ref":"term:claude"}},

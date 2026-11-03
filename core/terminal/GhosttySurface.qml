@@ -5,17 +5,17 @@ import ".."
 import "../client/Protocol.js" as Protocol
 import "../Terminal.js" as Terminal
 
-// A terminal `surface` drawn as a grid (the `ghostty` renderer, experimental):
-// the daemon emulates the terminal with Ghostty's libghostty-vt and sends the
-// screen as rows of styled runs (`attach` with `render: grid`,
-// docs/architecture.md, "Free surface"); this draws them and sends keys,
+// A terminal `surface`: the daemon emulates the terminal with Ghostty's
+// libghostty-vt and sends the screen as rows of styled runs (`attach` with
+// `render: grid`, docs/architecture.md, "Free surface"); this draws them and sends keys,
 // which the daemon encodes for the program (legacy, or the kitty keyboard
 // protocol when the program asks). Nothing here emulates a terminal, and it
 // needs no package: text, rectangles and a socket of its own.
 //
-// The same contract as TerminalSurface.qml: SurfacePrim sets `host`,
-// `reference` and `run`; it fires `typed`, `leave` (Ctrl+Escape),
-// `keyboard` (a press) and `restart` (Enter once the program ended).
+// SurfacePrim sets `host`, `reference` and `run`; it fires `typed`, `leave`
+// (Ctrl+Escape), `keyboard` (a press) and `restart` (Enter once the program
+// ended). The item with the keyboard is named "terminal" and carries the
+// title, whether the program ended, and `write` (the tests read them).
 Item {
   id: surface
 
@@ -32,7 +32,7 @@ Item {
   // The title the program set, and whether it ended.
   property string title: ""
   property bool exited: false
-  // Why the daemon refused the view (a daemon built without the renderer).
+  // Why the daemon refused the view (an unknown terminal, say).
   property string error: ""
 
   FontMetrics {
@@ -132,10 +132,31 @@ Item {
       splitMarker: ""
       onRead: data => surface._feed(data)
     }
+    // Only the daemon's `surface-close` says the program ended. A connection
+    // that drops without it (a slow daemon, a restarted one) is made again:
+    // taken for an end, the next Enter restarted the agent.
     onConnectedChanged: {
-      if (connected) surface._onConnected()
-      else if (surface.launchedKey !== "") surface.exited = true
+      if (connected) {
+        surface._retries = 0
+        surface._onConnected()
+      } else {
+        surface._retry()
+      }
     }
+    // Could not connect (the daemon starting again): tried again too.
+    onError: surface._retry()
+  }
+  function _retry() {
+    if (surface.launchedKey === "" || surface.exited || surface._relaunching || reconnectTimer.running) return
+    reconnectTimer.interval = Math.min(5000, 250 * Math.pow(2, surface._retries))
+    surface._retries++
+    reconnectTimer.restart()
+  }
+  property int _retries: 0
+  property bool _relaunching: false
+  Timer {
+    id: reconnectTimer
+    onTriggered: if (!socket.connected && !surface.exited) socket.connected = true
   }
 
   // A new run (a restart) or a new daemon is a new connection.
@@ -148,12 +169,17 @@ Item {
     var key = surface.socketPath + " " + surface.reference + " " + surface.run + " " + surface.colorsKey
     if (!surface.ready || key === surface.launchedKey) return
     surface.launchedKey = key
+    surface._relaunching = true
     socket.connected = false
+    surface._relaunching = false
+    surface.exited = false
     socket.path = surface.socketPath
     socket.connected = true
     surface.typedSent = false
   }
-  // A Timer of its own, not Qt.callLater (TerminalSurface.qml says why).
+  // A Timer of its own, not Qt.callLater: the surface may go before it
+  // fires, and a queued call would then work on what is gone (a Loader once
+  // crashed the shell so).
   onReadyChanged: launchTimer.restart()
   onRunChanged: launchTimer.restart()
   onReferenceChanged: launchTimer.restart()
@@ -374,6 +400,13 @@ Item {
     cursorVisible: false
     inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase | Qt.ImhPreferLatin
     Component.onCompleted: keyArea.forceActiveFocus()
+    readonly property string title: surface.title
+    readonly property bool exited: surface.exited
+    readonly property bool connected: socket.connected
+    function write(text) { surface.write(text) }
+    // The connection drops, as when the daemon is slow to read or restarts
+    // (the tests do this).
+    function dropConnection() { socket.connected = false }
     function typed() {
       if (surface.typedSent) return
       surface.typedSent = true

@@ -18,9 +18,7 @@ QMLLINT ?= $(firstword $(wildcard /usr/lib/qt6/bin/qmllint /usr/lib64/qt6/bin/qm
 # The Omarchy host imports qs.Commons/qs.Ui, which only exist inside the
 # Omarchy shell, so lint skips it; `make restart` and the shell log cover it.
 LINT_FILES = shell.qml core/*.qml core/settings/*.qml core/settings/previews/*.qml \
-	$(wildcard core/client/*.qml core/client/prims/*.qml)
-# Not core/terminal/: it imports QMLTermWidget, whose package ships no type
-# information for qmllint. The QML tests load it where it is installed.
+	$(wildcard core/client/*.qml core/client/prims/*.qml core/terminal/*.qml)
 
 # Dev config for `make dev`, so it never touches ~/.config/notchd.
 DEV_CONFIG ?= $(CURDIR)/build/dev-config.json
@@ -41,7 +39,7 @@ CARGO = env PATH="$(ZIG_PATH):$$PATH" cargo
 # Each layer records what it cost in build/times/ (scripts/timed.py).
 TIMED = scripts/timed.py
 
-.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate daemon dev restart deps clean gnome-dev gnome-dev-46 gnome-test gnome-test-46 gnome-image-46 gnome-zip
+.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate daemon dev restart clean gnome-dev gnome-dev-46 gnome-test gnome-test-46 gnome-image-46 gnome-zip
 
 # The cheap layers first, one after another: a broken rule fails in seconds,
 # before anything costly starts. Then the costly ones at once.
@@ -186,11 +184,10 @@ gnome-zip:
 # The Omarchy shell does not hot-reload plugin QML. Builds the daemon, stops
 # the running one (it outlives the shell, so it would keep the old build) and
 # copies the build to $XDG_DATA_HOME/notchd/bin/notchd, where the plugin looks
-# when NOTCHD_BIN does not reach the shell. Installs the optional packages
-# first (deps).
+# when NOTCHD_BIN does not reach the shell.
 # The daemon is replaced only when the build differs from the installed one:
 # an unchanged daemon keeps running, with its terminal and agent sessions.
-restart: deps daemon
+restart: daemon
 	@installed="$${XDG_DATA_HOME:-$$HOME/.local/share}/notchd/bin/notchd"; \
 	if cmp -s "$(DAEMON_BIN)" "$$installed"; then \
 	  echo "notchd unchanged: the daemon and its sessions stay"; \
@@ -201,21 +198,7 @@ restart: deps daemon
 	fi
 	NOTCHD_BIN="$(DAEMON_BIN)" omarchy restart shell
 
-# Optional packages the modules use: qmltermwidget, the codex module's
-# terminal. Installed with pacman only when missing (sudo asks then); without
-# pacman, says what to install.
-OPTIONAL_PACKAGES = qmltermwidget
-deps:
-	@for pkg in $(OPTIONAL_PACKAGES); do \
-	  if ! command -v pacman >/dev/null 2>&1; then \
-	    echo "notchd: install $$pkg with your package manager for the codex module" >&2; \
-	  elif ! pacman -Q "$$pkg" >/dev/null 2>&1; then \
-	    echo "notchd: installing $$pkg (the codex module's terminal)"; \
-	    sudo pacman -S --needed --noconfirm "$$pkg"; \
-	  fi; \
-	done
-
-# Nothing else is installed from here. What the voice modules need beyond the
+# Nothing is installed from here. What the voice modules need beyond the
 # app (LocalAI and its voices, Voxtype, system packages) is installed, removed
 # and configured from notchd's settings, Components page (core/components/).
 

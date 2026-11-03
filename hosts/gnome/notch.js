@@ -333,7 +333,7 @@ class NotchCopy extends St.Widget {
         this._termRef = actor._surface.ref;
         this._holeRect = rect;
         this._holeChanged();
-        this._host.terminals.show(this._termRef, actor._surface.run, rect, this, actor._surface.renderer);
+        this._host.terminals.show(this._termRef, actor._surface.run, rect, this);
         if (this._termFocus)
             this._host.terminals.focus(this._termRef);
     }
@@ -413,7 +413,7 @@ class NotchCopy extends St.Widget {
         this._hoverChanged();
     }
 
-    // What the terminal's window says (terminal/helper.js): the pointer on
+    // What the terminal's window says (terminal/grid.js): the pointer on
     // it, or what the QML surface fires as an action of the module's view.
     onLine(line) {
         if (line === 'pointer in' || line === 'pointer out') {

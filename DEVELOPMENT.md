@@ -14,7 +14,8 @@ Working on notchd itself. For using it, see the [README](README.md); for the rul
 | JetBrainsMono Nerd Font | `ttf-jetbrains-mono-nerd` | `make hero` |
 | `rsvg-convert` | `librsvg` | `make icons` |
 | Omarchy 4 | | the Omarchy host, `make validate`, `make restart` |
-| `qmltermwidget` (optional) | `qmltermwidget` | the Linux UI's terminal view for `claude`, `codex` and your terminals (`make deps`); without it their QML tests only check the message that asks for it |
+| `zig` 0.15.2 | (downloaded by `scripts/fetch-zig.sh`) | building the daemon's terminal emulator (Ghostty's libghostty-vt); `make` fetches it into `build/zig` |
+| `git` | `git` | the same build fetches Ghostty's source at a pinned commit |
 | `curl` | `curl` | the daemon's plan-usage requests (tests use a fake network) |
 | GNOME Shell (optional) | `gnome-shell`, `mutter-devkit`, `python-gobject`; `podman` for GNOME 46 | the GNOME extension (`hosts/gnome/`): `make gnome-dev`, `make gnome-test`, and the `-46` ones. Not needed for `make check`; your session stays what it is |
 | The voice modules' parts (optional) | none to develop: Settings › Components installs them (table below). Tests use fakes (a fake bridge, a fake LocalAI and `voxtype`, fake `pacman` and a local download server), so `make check` needs none | Voice, Codex Live |
@@ -70,8 +71,8 @@ core/                 the Linux UI: no desktop-specific code
   Outline.js          the notch's outline: shoulders, corners, joins (pure JS, golden vectors)
   Config.js           the optimistic copy of a config edit, the notch list (the daemon's answer replaces it)
   Terminal.js         the key that leaves a terminal
-  terminal/           TerminalSurface.qml (the frame and the attach) and TerminalView.qml: a terminal
-                      (QMLTermWidget, optional package; `notchd attach` feeds it); lint skips them
+  terminal/           GhosttySurface.qml: a terminal, drawn from the screen the daemon emulates
+                      (its own connection to the daemon; keys, pointer and clipboard go back)
   modules/            claude.svg, the mark the UI bundles (each built-in module's JSON file is in
                       native/notchd-modules/modules/: the daemon's modules have no QML)
   components/         components.json (the registry), install.py (the installer: downloads, LocalAI
@@ -128,10 +129,10 @@ The plugin folder is a symlink to the checkout:
 
 ```sh
 ln -sfn "$PWD" ~/.config/omarchy/plugins/eryk.notchd
-make restart                 # make deps, then omarchy restart shell
+make restart                 # build the daemon, then omarchy restart shell
 ```
 
-The shell does not hot-reload plugin QML: run `make restart` after changing it. It runs `make deps` first, which installs the optional packages the modules use (`qmltermwidget`, for the terminal view) with pacman when they are missing; sudo asks for your password only then. It also builds the daemon (`make daemon`, a release build) and compares it with `$XDG_DATA_HOME/notchd/bin/notchd`: unchanged, the running daemon stays (its terminal and agent sessions with it); changed, it stops the daemon, installs the new build and the shell starts it. Config changes apply live. How the plugin gets enabled, and the stock OSD it replaces, are in [hosts/omarchy](hosts/omarchy/README.md).
+The shell does not hot-reload plugin QML: run `make restart` after changing it. It builds the daemon (`make daemon`, a release build) and compares it with `$XDG_DATA_HOME/notchd/bin/notchd`: unchanged, the running daemon stays (its terminal and agent sessions with it); changed, it stops the daemon, installs the new build and the shell starts it. Config changes apply live. How the plugin gets enabled, and the stock OSD it replaces, are in [hosts/omarchy](hosts/omarchy/README.md).
 
 Building the daemon builds Ghostty's libghostty-vt (its terminal emulator) from source, which needs zig 0.15.2 (Arch's `zig` is newer than Ghostty accepts) and git: every `make` target that runs cargo puts `scripts/fetch-zig.sh`'s zig first on `PATH` (downloaded once into `build/zig`, its SHA-256 checked). Running cargo by hand: `PATH="$(scripts/fetch-zig.sh):$PATH" cargo ...`.
 

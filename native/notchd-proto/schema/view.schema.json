@@ -1049,13 +1049,6 @@
         },
         "h": {
           "type": "number"
-        },
-        "renderer": {
-          "type": "string",
-          "enum": [
-            "widget",
-            "ghostty"
-          ]
         }
       },
       "required": [

@@ -395,7 +395,7 @@ fn ask_needs_a_ui_that_can_draw_a_terminal() {
     let mut ui = FakeUi::connect_hello(&r.socket());
     assert_eq!(
         r.ipc(&mut ui, "claude", &["ask hi"]),
-        "the terminal needs the qmltermwidget package"
+        "no UI connected draws a terminal"
     );
     assert!(r.args(&r.claude_args).is_empty(), "it started anyway");
     // toggle needs nothing of the UI.
@@ -758,8 +758,7 @@ fn a_grid_view_gets_the_screen_as_styled_rows_and_its_keys_follow_the_kitty_prot
         |_| {
             json!({"modules": ["mine"],
                 "terminals": {"mine": {"title": "Mine", "command":
-                    "printf '\\033[1;32mgreen\\033[0m %s\\n' \"$(stty size)\"; printf '\\033[>1u'; exec cat"}},
-                "mine": {"renderer": "ghostty"}})
+                    "printf '\\033[1;32mgreen\\033[0m %s\\n' \"$(stty size)\"; printf '\\033[>1u'; exec cat"}}})
         },
         true,
     );

@@ -272,7 +272,7 @@ class Install(unittest.TestCase):
         self.stub_gnome_extensions()
         code, out = self.run_install("--extension")
         self.assertEqual(code, 0, out)
-        for name in ("metadata.json", "extension.js", "terminal/helper.js", "lib/Protocol.js", "schemas/gschemas.compiled"):
+        for name in ("metadata.json", "extension.js", "terminal/grid.js", "lib/Protocol.js", "schemas/gschemas.compiled"):
             self.assertTrue(os.path.exists(os.path.join(self.ext, name)), name)
         self.assertFalse(os.path.exists(os.path.join(self.ext, "testhook.js")), "test hooks never ship")
         self.assertIn("enable " + self.UUID, self.ext_calls())

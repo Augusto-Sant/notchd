@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Compares the terminal renderers: the same terminal (760x420) drawn by
-# qmltermwidget (`renderer: widget`, through `notchd attach`) and by the grid
-# renderer (`renderer: ghostty`), in the standalone host on your real Wayland
+# Measures what a terminal in the notch costs: the same terminal (760x420),
+# drawn by core/terminal/GhosttySurface.qml from the screen the daemon
+# emulates (libghostty-vt), in the standalone host on your real Wayland
 # session, as scripts/bench.sh runs it (a private D-Bus that activates
 # nothing, a short XDG_RUNTIME_DIR of its own, so its own daemon and a scratch
 # config). The program in the terminal (bench-terminal-driver.py) goes through
@@ -13,12 +13,12 @@
 #   anim    the whole screen redrawn 30 times a second (ANIM_SECONDS), as a TUI
 #
 # and each process is sampled from /proc over each phase: CPU (% of one core,
-# and CPU seconds for the flood), context switches per second, PSS. The
-# processes: quickshell (the view), the daemon (the PTY; with ghostty, the
-# emulator too) and, for the widget, `notchd attach` (the helper the widget
-# runs). A notch shows on your screen while it runs (about a minute per
-# renderer); keep the pointer away and the machine quiet: a click elsewhere
-# closes it, and the phases it was closed in are marked not valid.
+# and CPU seconds for the flood), context switches per second, PSS: quickshell
+# (the view) and the daemon (the PTY and the emulator). The numbers it was
+# chosen on, against qmltermwidget, are in the commit that added it. A notch
+# shows on your screen while it runs (about a minute); keep the pointer away
+# and the machine quiet: a click elsewhere closes it, and the phases it was
+# closed in are marked not valid.
 #
 #   scripts/bench-terminal.sh [out]       # out: build/bench-terminal.md
 #   NOTCHD_BIN=<daemon built with the ghostty feature> (default native/target/release/notchd)
@@ -31,12 +31,12 @@ if [[ ${1:-} == --inner ]]; then
   phases=$scratch/phases-$renderer
   mkdir -p "$phases"
   rm -f "$phases"/*
-  python3 - "$cfg" "$root/scripts/bench-terminal-driver.py" "$phases" "$renderer" <<'EOF'
+  python3 - "$cfg" "$root/scripts/bench-terminal-driver.py" "$phases" <<'EOF'
 import json, sys
-cfg, driver, phases, renderer = sys.argv[1:]
+cfg, driver, phases = sys.argv[1:]
 json.dump({"modules": ["bench"],
            "terminals": {"bench": {"title": "Bench", "command": f"exec python3 {driver} {phases}"}},
-           "bench": {"renderer": renderer, "width": 760, "height": 420}}, open(cfg, "w"))
+           "bench": {"width": 760, "height": 420}}, open(cfg, "w"))
 EOF
   NOTCHD_CONFIG=$cfg quickshell -p "$root" --no-color > "$scratch/qs-$renderer.log" 2>&1 &
   qs_pid=$!
@@ -171,7 +171,7 @@ cat > "$scratch/bus.conf" <<EOF
 EOF
 : > "$scratch/results"
 
-for renderer in ${BENCH_ONLY:-widget ghostty}; do
+for renderer in terminal; do
   echo "bench-terminal: $renderer" >&2
   env -u DBUS_SESSION_BUS_ADDRESS -u QT_QPA_PLATFORMTHEME \
     XDG_RUNTIME_DIR="$runtime" NO_AT_BRIDGE=1 \
@@ -181,14 +181,14 @@ for renderer in ${BENCH_ONLY:-widget ghostty}; do
 done
 
 {
-  echo "# notchd terminal renderers"
+  echo "# notchd terminal"
   echo
   echo "$(date -Iseconds) · $(git -C "$root" describe --always --dirty 2>/dev/null || echo unknown)" \
     "· idle ${secs}s, flood ${FLOOD_MB} MB, anim ${ANIM_SECONDS}s at 30 fps · terminal 760x420"
   echo
   echo "CPU in % of one core over the phase; CPU s is the three processes' CPU time in it."
   echo
-  echo "| Renderer | Phase | Result | quickshell % | daemon % | attach % | total % | CPU s | qs ctx/s | daemon ctx/s | qs PSS MB | daemon PSS MB |"
+  echo "| | Phase | Result | quickshell % | daemon % | attach % | total % | CPU s | qs ctx/s | daemon ctx/s | qs PSS MB | daemon PSS MB |"
   echo "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
   cat "$scratch/results"
 } > "$scratch/report"

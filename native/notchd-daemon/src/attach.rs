@@ -1,18 +1,18 @@
 //! A surface connection (docs/architecture.md, "Free surface"): a view of a
 //! terminal that lives in the daemon, on a socket of its own so a flood of
 //! output never delays a `view` update on the UI's. The first line is
-//! `{"t":"attach","ref":"term:claude","cols":..,"rows":..}`; then the daemon
-//! sends the output so far and what follows (`surface` messages, `ev: data`
-//! with base64 bytes, `title`), and `surface-close` when the program ends or
-//! is replaced; the view sends `input` and `resize`.
+//! `{"t":"attach","ref":"term:claude","cols":..,"rows":..}`. With `render:
+//! grid` (what the UIs ask for) the daemon emulates the terminal and sends
+//! the screen (`grid.rs`). Without it, the program's bytes: the output so
+//! far and what follows (`surface` messages, `ev: data` with base64 bytes,
+//! `title`), `surface-close` when the program ends or is replaced; the view
+//! sends `input` and `resize`, and emulates the terminal itself.
 //!
-//! Both ends are here. [`serve`] is the daemon's. [`Client`] is the view's,
-//! and `notchd attach <ref>` ([`run`]) is that client as a program on a
-//! terminal: how the Linux UI draws a terminal with a widget that can only
-//! run a program (`qmltermwidget` has no way to be fed bytes): the widget
-//! runs `notchd attach`, whose standard output is what the program printed
-//! and whose standard input goes to it. A UI that draws a terminal itself
-//! (macOS, Windows) speaks the same lines with [`Client`]'s counterpart.
+//! Both ends of the bytes are here. [`serve`] is the daemon's. [`Client`] is
+//! the view's, and `notchd attach <ref>` ([`run`]) is that client as a
+//! program on the terminal you run it in: a session of the daemon's (an
+//! agent's, say) in a terminal of your own, its output to standard output,
+//! what you type to the program.
 
 use crate::hub::Hub;
 use crate::ptyhost::Out;

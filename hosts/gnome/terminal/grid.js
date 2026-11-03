@@ -1,15 +1,22 @@
-// The terminal view of the GNOME UI for the grid renderer (a terminal with
-// "renderer": "ghostty", docs/architecture.md, "The grid renderer"): a GTK 4
-// window that draws the screen the daemon sends, with Pango and Cairo, and
-// sends it the keys, the pointer and the clipboard. The daemon emulates the
-// terminal (libghostty-vt); nothing here does, and it needs no VTE. Same
-// contract with the extension as helper.js:
+// The terminal view of the GNOME UI (docs/architecture.md, "Free surface",
+// "Terminals"): a GTK 4 window that draws the screen the daemon sends, with
+// Pango and Cairo, and sends it the keys, the pointer and the clipboard. The
+// daemon emulates the terminal (libghostty-vt); nothing here does. The
+// extension starts it (hosts/gnome/terminal.js) and keeps the window over
+// the notch: above, on every workspace, out of the window list.
 //
 //   gjs -m grid.js <exe> <socket> <ref> <background> <foreground> [font]
 //
-// It says, a line each on its standard output: typed, leave, keyboard,
-// pointer in|out, exited, restart (helper.js tells what each means); and
-// reads: colors <background> <foreground>, quit.
+// It tells the extension what happens, a line each on its standard output:
+//   typed            a key went to the program (once)
+//   leave            Ctrl+Escape: the way out (the program never sees it)
+//   keyboard         a press in the terminal: the notch takes the keyboard
+//   pointer in|out   the pointer entered or left the window
+//   exited           the program ended; Enter then says `restart`
+//   restart
+// and reads, a line each on its standard input:
+//   colors <background> <foreground>
+//   quit
 
 import Gdk from 'gi://Gdk?version=4.0';
 import GdkPixbuf from 'gi://GdkPixbuf';
@@ -49,7 +56,7 @@ function rgba(text) {
 }
 
 // A key as the daemon reads it: W3C KeyboardEvent.code names
-// (docs/architecture.md, "The grid renderer").
+// (docs/architecture.md, "Terminals").
 const NAMES = {
     Return: 'Enter', KP_Enter: 'NumpadEnter', Escape: 'Escape', Tab: 'Tab', ISO_Left_Tab: 'Tab',
     BackSpace: 'Backspace', Insert: 'Insert', Delete: 'Delete', Home: 'Home', End: 'End',
@@ -138,6 +145,7 @@ app.connect('activate', () => {
     let conn = null;
     let ostream = null;
     let reading = null;
+    let retries = 0;
     let sentSize = '';
     const send = msg => {
         if (!ostream)
@@ -219,6 +227,21 @@ app.connect('activate', () => {
         }
     };
 
+    // The connection again, a while later (doubling, at most 5 s).
+    let retryId = 0;
+    const retry = () => {
+        if (retryId)
+            return;
+        const wait = Math.min(5000, 250 * 2 ** retries);
+        retries++;
+        retryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, wait, () => {
+            retryId = 0;
+            if (!exited)
+                connect();
+            return GLib.SOURCE_REMOVE;
+        });
+    };
+
     const connect = () => {
         try {
             conn?.close(null);
@@ -230,11 +253,13 @@ app.connect('activate', () => {
         try {
             conn = client.connect(Gio.UnixSocketAddress.new(socketPath), null);
         } catch (e) {
+            // The daemon may be starting again: tried again, a while later.
             error = `cannot reach notchd: ${e.message}`;
-            exited = true;
-            say('exited');
+            area.queue_draw();
+            retry();
             return;
         }
+        error = '';
         ostream = conn.get_output_stream();
         const input = new Gio.DataInputStream({base_stream: conn.get_input_stream()});
         const cancel = new Gio.Cancellable();
@@ -260,13 +285,14 @@ app.connect('activate', () => {
                 line = null;
             }
             if (line === null) {
-                if (!cancel.is_cancelled() && !exited) {
-                    exited = true;
-                    say('exited');
-                    area.queue_draw();
-                }
+                // Only `surface-close` says the program ended. A connection
+                // that drops without it (a slow or restarted daemon) is made
+                // again: taken for an end, the next Enter restarted it.
+                if (!cancel.is_cancelled() && !exited)
+                    retry();
                 return;
             }
+            retries = 0;
             handle(line);
             next();
         });
