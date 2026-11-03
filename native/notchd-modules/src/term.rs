@@ -151,6 +151,27 @@ impl TermModule {
     }
 
     /// `Math.max(120, Number(height) || 420)`.
+    /// `renderer`: `ghostty` when the daemon emulates the terminal (a grid
+    /// view), else `widget`.
+    pub fn renderer(&self) -> &'static str {
+        if self.text_setting("renderer") == "ghostty" {
+            "ghostty"
+        } else {
+            "widget"
+        }
+    }
+
+    /// The terminal's `surface` node.
+    fn surface_node(&self) -> serde_json::Value {
+        let mut node = json!({"t": "surface", "kind": "terminal", "ref": format!("term:{}", self.kind.id),
+                              "id": format!("run-{}", self.surface_run()), "h": self.terminal_height()});
+        // Experimental, so absent unless asked for: the trees stay as they were.
+        if self.renderer() == "ghostty" {
+            node["renderer"] = json!("ghostty");
+        }
+        node
+    }
+
     pub fn terminal_height(&self) -> u32 {
         self.number("height", 420.0).max(120.0) as u32
     }
@@ -602,12 +623,7 @@ impl TermModule {
         // The terminal; the UI draws its frame. `fill` takes the width.
         parts.push(row(
             0.0,
-            vec![with(
-                json!({"t": "surface", "kind": "terminal", "ref": format!("term:{}", self.kind.id),
-                       "id": format!("run-{}", self.surface_run()), "h": self.terminal_height()}),
-                "fill",
-                json!(true),
-            )],
+            vec![with(self.surface_node(), "fill", json!(true))],
         ));
         if self.exited {
             parts.push(json!({"t": "button",

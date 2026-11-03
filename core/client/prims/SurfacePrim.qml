@@ -21,14 +21,18 @@ PrimBase {
   readonly property bool isTerminal: prim.node.kind === "terminal"
   property var host: null
   Component.onCompleted: prim.host = Tree.hostOf(prim)
-  readonly property bool drawable: prim.isTerminal && !!prim.host && prim.host.terminalAvailable === true
+  // The `ghostty` renderer (experimental): the daemon emulates the terminal
+  // and this UI draws its grid, so it needs no package.
+  readonly property bool ghostty: prim.node.renderer === "ghostty"
+  readonly property bool drawable: prim.isTerminal && !!prim.host && (prim.ghostty || prim.host.terminalAvailable === true)
   readonly property string reference: typeof prim.node.ref === "string" ? prim.node.ref : ""
 
   Loader {
     id: surface
     anchors.fill: parent
     active: prim.drawable
-    source: prim.drawable ? Qt.resolvedUrl("../../terminal/TerminalSurface.qml") : ""
+    source: !prim.drawable ? ""
+      : Qt.resolvedUrl(prim.ghostty ? "../../terminal/GhosttySurface.qml" : "../../terminal/TerminalSurface.qml")
   }
   Binding { target: surface.item; property: "host"; value: prim.host; when: surface.item !== null }
   Binding { target: surface.item; property: "reference"; value: prim.reference; when: surface.item !== null }

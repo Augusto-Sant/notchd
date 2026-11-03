@@ -223,6 +223,8 @@ ShellRoot {
       { name: "settings: a required text field refuses to be emptied", run: root.requiredTextField },
       { name: "renaming or removing a terminal keeps the modules ready, and warns of nothing", run: root.terminalRenameStaysReady },
       { name: "terminal: the band behind your messages (ANSI 8) is gray, not orange", run: root.messageBandGray },
+      { name: "terminal: switching its renderer with the view open swaps the view and crashes nothing", run: root.rendererSwitch },
+      { name: "terminal: tabs of a widget terminal and a ghostty one switch without a crash", run: root.rendererTabs },
       { name: "a window its monitor took away comes back with the monitor", run: root.keepShownReopens },
       { name: "an open notch taller than its screen fits it and scrolls", run: root.tallNotchScrolls },
       { name: "with tabs the open notch shows one module, and opening for a module picks its tab", run: root.tabsShowOne },
@@ -2205,6 +2207,65 @@ ShellRoot {
       root.check(ownTermSvc.terminalCommand("mine", "toggle") === "ok", "toggle failed")
       yield root.settle(ownTermSvc)
       root.check(!copy.pinned, "toggle did not close it")
+    })
+  }
+
+  // Bug: the shell crashed (SIGSEGV in QQuickLoader::setSource) when a
+  // terminal's surface went from qmltermwidget to the ghostty grid with the
+  // view open: the widget's surface was destroyed with its launch still
+  // queued (Qt.callLater), and the launch loaded into a Loader that was gone.
+  // (Ids of their own: an id an earlier case used can stay "taken" for a
+  // while, a separate bug of NotchService's terminal list.)
+  function rendererSwitch() {
+    ownTermSvc.replaceConfig({ terminals: { rswitch: { command: "exec cat" } }, modules: ["rswitch"] })
+    root.go(function*() {
+      yield root.waitFor(function() { return !!ownTermSvc.moduleById("rswitch") && ownTermSvc.isTerminal("rswitch") }, 4000)
+      if (!ownTermSvc.terminalAvailable) {
+        console.log("NOTE " + root.current + ": qmltermwidget is not installed; the switch was not tested")
+        return
+      }
+      var answer = ownTermSvc.terminalCommand("rswitch", "toggle")
+      root.check(answer === "ok", "toggle: " + answer)
+      yield root.settle(ownTermSvc)
+      // At once, while the widget's view is still starting, and then again
+      // after it started.
+      for (var i = 0; i < 2; i++) {
+        ownTermSvc.replaceConfig({ terminals: { rswitch: { command: "exec cat" } }, modules: ["rswitch"], rswitch: { renderer: "ghostty" } })
+        yield root.wait(i === 0 ? 50 : 600)
+        ownTermSvc.replaceConfig({ terminals: { rswitch: { command: "exec cat" } }, modules: ["rswitch"] })
+        yield root.wait(i === 0 ? 50 : 600)
+      }
+      yield root.wait(500)
+      root.check(ownTermSvc.terminalCommand("rswitch", "toggle") === "ok", "the shell no longer answers")
+      ownTermSvc.replaceConfig({})
+    })
+  }
+
+  // The same crash, as it happened: a notch with tabs, one terminal on the
+  // widget and the next on the ghostty grid; the open notch goes from one
+  // tab to the other.
+  function rendererTabs() {
+    var cfg = { tabs: true, terminals: { rtabA: { command: "exec cat" }, rtabB: { command: "exec cat" } },
+                modules: ["rtabA", "rtabB"], rtabB: { renderer: "ghostty" } }
+    ownTermSvc.replaceConfig(cfg)
+    root.go(function*() {
+      yield root.waitFor(function() {
+        return !!ownTermSvc.moduleById("rtabA") && !!ownTermSvc.moduleById("rtabB") && ownTermSvc.isTerminal("rtabA") && ownTermSvc.isTerminal("rtabB")
+      }, 4000)
+      if (!ownTermSvc.terminalAvailable) {
+        console.log("NOTE " + root.current + ": qmltermwidget is not installed; the tabs were not tested")
+        return
+      }
+      var answer = ownTermSvc.terminalCommand("rtabA", "toggle")
+      root.check(answer === "ok", "toggle rtabA: " + answer)
+      yield root.settle(ownTermSvc)
+      for (var i = 0; i < 4; i++) {
+        root.check(ownTermSvc.terminalCommand(i % 2 ? "rtabA" : "rtabB", "toggle") === "ok", "toggle failed")
+        yield root.wait(i < 2 ? 30 : 700)
+      }
+      yield root.wait(500)
+      root.check(ownTermSvc.terminalCommand("rtabA", "toggle") === "ok", "the shell no longer answers")
+      ownTermSvc.replaceConfig({})
     })
   }
 

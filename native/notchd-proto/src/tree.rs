@@ -361,6 +361,11 @@ pub struct SurfaceNode {
     pub w: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h: Option<Num>,
+    /// A terminal's: who emulates it. `widget` (absent): the UI's terminal
+    /// widget, fed the program's bytes; `ghostty`: the daemon, which sends
+    /// the screen as a grid (`attach` with `render: grid`). Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer: Option<String>,
 }
 
 impl Node {

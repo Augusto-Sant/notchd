@@ -33,6 +33,28 @@ pub struct Attach {
     pub cols: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<u32>,
+    /// How the view draws: absent, the program's bytes (`data`) for a widget
+    /// that emulates a terminal itself; `grid`, the daemon emulates it and
+    /// sends the screen as styled rows (`grid`), and takes keys as `key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render: Option<String>,
+    /// `render: grid`: the view's default foreground and background
+    /// (`#rrggbb`, its theme's), what the terminal answers when the program
+    /// asks for them (OSC 10/11) and draws text without colors of its own in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<String>,
+    /// `render: grid`: the view's theme's ANSI colors, `#rrggbb`, from
+    /// color 0 on (16 at most; the rest of the 256 are the terminal's own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub palette: Option<Vec<String>>,
+    /// `render: grid`: the size of a cell in the view's pixels, for what
+    /// the program sizes in pixels (kitty images, size reports).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cw: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ch: Option<u32>,
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -119,10 +141,173 @@ mod tests {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "ev", rename_all = "lowercase")]
 pub enum SurfaceEv {
-    Data { b64: String },
-    Input { b64: String },
-    Resize { cols: u32, rows: u32 },
-    Title { text: String },
+    Data {
+        b64: String,
+    },
+    Input {
+        b64: String,
+    },
+    /// The view's size in cells; `cw`, `ch` a cell's in pixels (a grid's).
+    Resize {
+        cols: u32,
+        rows: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cw: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ch: Option<u32>,
+    },
+    Title {
+        text: String,
+    },
+    /// Core to UI, `render: grid`: the screen, or the rows of it that changed.
+    Grid(Grid),
+    /// UI to core, `render: grid`: a key pressed. The core encodes it for the
+    /// program (legacy, or the kitty keyboard protocol when it asked for it).
+    Key(KeyPress),
+    /// UI to core, `render: grid`: the wheel, in rows (negative: up), at
+    /// the cell the pointer is on (`x`, `y`, in cells; for a program that
+    /// asked for the mouse).
+    Wheel {
+        rows: i32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+    },
+    /// UI to core, `render: grid`: the pointer. The core decides what it
+    /// does: the program's, when it asked for the mouse (the grid's `mouse`)
+    /// and Shift is up; else it selects (a drag; two clicks a word, three a
+    /// line). A motion with no button held is only sent while `mouse`.
+    Mouse(MouseEv),
+    /// Core to UI, `render: grid`: put this text on the clipboard (a copy,
+    /// or the program's OSC 52).
+    Copy {
+        text: String,
+    },
+    /// Core to UI, `render: grid`: send the clipboard's text as `paste`
+    /// (the paste key was pressed).
+    Clipboard {},
+    /// UI to core, `render: grid`: the clipboard's text, to paste (the core
+    /// encodes it: bracketed when the program asked).
+    Paste {
+        text: String,
+    },
+    /// Core to UI, `render: grid`: an image a program sent (the kitty
+    /// graphics protocol), as a PNG in base64: what a grid's `images` with
+    /// this `id` draw. Sent again when the image changes.
+    Image {
+        id: u32,
+        png: String,
+    },
+}
+
+/// Where an image is drawn: from cell `x`, `y` of the screen (negative when
+/// it starts above it), `xo`, `yo` pixels into that cell, `w` by `h` pixels,
+/// of the image's `sx`, `sy`, `sw`, `sh` (pixels). `z` below 0 is under the
+/// text, else over it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GridImage {
+    pub id: u32,
+    pub x: i32,
+    pub y: i32,
+    pub xo: u32,
+    pub yo: u32,
+    pub w: u32,
+    pub h: u32,
+    pub sx: u32,
+    pub sy: u32,
+    pub sw: u32,
+    pub sh: u32,
+    pub z: i32,
+}
+
+/// `action` is `press`, `release` or `motion`; `button` `left`, `middle`
+/// or `right` (absent for a motion with none held); `x`, `y` where, in
+/// cells from the top left (fractions within a cell); `mods` as a key's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MouseEv {
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub button: Option<String>,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub mods: u32,
+}
+
+/// A frame of a grid surface. `full`: every row is in `lines` (the first
+/// frame, a resize, a switch of screens); otherwise only the rows that
+/// changed. Colors are `#rrggbb`; `fg`/`bg` are the defaults a run without
+/// its own uses.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Grid {
+    pub cols: u32,
+    pub rows: u32,
+    pub full: bool,
+    pub fg: String,
+    pub bg: String,
+    /// The program asked for the mouse: the view sends it `mouse` events
+    /// (clicks, drags, the wheel) instead of using them itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mouse: bool,
+    /// The images on the screen, when they changed since the last frame
+    /// (`[]`: none any more); absent, the same as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<GridImage>>,
+    /// The cursor, absent when hidden or off the screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<GridCursor>,
+    pub lines: Vec<GridLine>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GridCursor {
+    pub x: u32,
+    pub y: u32,
+    /// `block`, `bar`, `underline` or `hollow`.
+    pub style: String,
+}
+
+/// A row as runs of one style; cells not covered are blank.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GridLine {
+    pub y: u32,
+    pub runs: Vec<GridRun>,
+    /// The selected columns of the row, first and last (inclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sel: Option<[u32; 2]>,
+}
+
+/// `w` cells from column `x`. `a` is a bit set: 1 bold, 2 italic,
+/// 4 underline, 8 strikethrough, 16 faint, 32 inverse (already applied to
+/// `fg`/`bg`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GridRun {
+    pub x: u32,
+    pub w: u32,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub a: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
+/// A key, named as the W3C `KeyboardEvent.code` names it (`KeyA`,
+/// `Enter`, `ArrowUp`...); `mods` a bit set: 1 shift, 2 alt, 4 ctrl,
+/// 8 super; `text` what it types, when it types something.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KeyPress {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub mods: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

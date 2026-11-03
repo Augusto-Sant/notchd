@@ -49,10 +49,18 @@ Item {
     viewLoader.active = true
     surface.typedSent = false
   }
-  // Once every property SurfacePrim sets is in.
-  onReadyChanged: Qt.callLater(surface.launch)
-  onRunChanged: Qt.callLater(surface.launch)
-  onReferenceChanged: Qt.callLater(surface.launch)
+  // Once every property SurfacePrim sets is in. A Timer of its own, not
+  // Qt.callLater: the surface may go before it fires (a tab whose terminal
+  // has the other renderer replaces it), and a queued call would then load
+  // into a Loader that is gone (the shell crashed so).
+  onReadyChanged: launchTimer.restart()
+  onRunChanged: launchTimer.restart()
+  onReferenceChanged: launchTimer.restart()
+  Timer {
+    id: launchTimer
+    interval: 0
+    onTriggered: surface.launch()
+  }
 
   Rectangle {
     anchors.fill: parent

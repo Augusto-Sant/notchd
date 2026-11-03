@@ -47,6 +47,8 @@ NotchService {
     readonly property color danger: Color.urgent
     // The theme's green: Omarchy's Color has none, its colors.toml does.
     readonly property var success: omarchyGreen.value
+    // The terminal's 16 colors: the theme's ghostty.conf.
+    readonly property var terminalPalette: omarchyPalette.value
     readonly property string fontFamily: Style.font.family
     readonly property int fontCaption: Style.font.caption
     readonly property int fontBodySmall: Style.font.bodySmall
@@ -73,9 +75,33 @@ NotchService {
     }
     onLoadFailed: omarchyGreen.value = ""
   }
+  // `palette = N=#...` from the current theme's ghostty.conf, the ANSI
+  // colors its terminals use; [] while missing.
+  QtObject {
+    id: omarchyPalette
+    property var value: []
+  }
+  FileView {
+    id: ghosttyConf
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/ghostty.conf"
+    printErrors: false
+    onLoaded: {
+      var colors = []
+      var re = /^\s*palette\s*=\s*(\d+)\s*=\s*(#[0-9a-fA-F]{6})/gm
+      var m
+      while ((m = re.exec(text())) !== null) {
+        var i = Number(m[1])
+        if (i < 16) colors[i] = m[2]
+      }
+      var out = []
+      for (var j = 0; j < 16; j++) out.push(colors[j] || "")
+      omarchyPalette.value = colors.length > 0 ? out : []
+    }
+    onLoadFailed: omarchyPalette.value = []
+  }
   Connections {
     target: Color
-    function onShellValuesChanged() { colorsToml.reload() }
+    function onShellValuesChanged() { colorsToml.reload(); ghosttyConf.reload() }
   }
 
   Component.onCompleted: Theme.provider = omarchyTheme

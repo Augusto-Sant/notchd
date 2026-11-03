@@ -708,3 +708,135 @@ fn notchd_attach_exits_promptly_on_hangup_and_term_and_the_session_stays() {
         assert!(text.contains("fake claude ready"), "{text:?}");
     }
 }
+
+/// A grid view (`render: grid`) on a raw socket: its lines as they come.
+fn grid_view(
+    socket: &Path,
+    rf: &str,
+    cols: u32,
+    rows: u32,
+) -> std::io::BufReader<std::os::unix::net::UnixStream> {
+    use std::io::Write;
+    let mut s = std::os::unix::net::UnixStream::connect(socket).unwrap();
+    s.set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
+    writeln!(s, r##"{{"t":"attach","ref":"{rf}","cols":{cols},"rows":{rows},"render":"grid","fg":"#cccccc","bg":"#101010"}}"##).unwrap();
+    std::io::BufReader::new(s)
+}
+
+#[cfg(feature = "ghostty")]
+fn grid_send(view: &std::io::BufReader<std::os::unix::net::UnixStream>, line: &str) {
+    use std::io::Write;
+    let mut s = view.get_ref();
+    writeln!(s, "{line}").unwrap();
+}
+
+/// Reads the view's lines until one makes `done` true, or WAIT passes; what
+/// it read.
+fn grid_until(
+    view: &mut std::io::BufReader<std::os::unix::net::UnixStream>,
+    done: impl Fn(&str) -> bool,
+) -> String {
+    use std::io::BufRead;
+    let limit = Instant::now() + WAIT;
+    let mut all = String::new();
+    while Instant::now() < limit {
+        let mut l = String::new();
+        if view.read_line(&mut l).is_ok_and(|n| n > 0) {
+            all.push_str(&l);
+            if done(&l) {
+                break;
+            }
+        }
+    }
+    all
+}
+
+#[cfg(feature = "ghostty")]
+#[test]
+fn a_grid_view_gets_the_screen_as_styled_rows_and_its_keys_follow_the_kitty_protocol() {
+    let r = rig(
+        "grid",
+        |_| {
+            json!({"modules": ["mine"],
+                "terminals": {"mine": {"title": "Mine", "command":
+                    "printf '\\033[1;32mgreen\\033[0m %s\\n' \"$(stty size)\"; printf '\\033[>1u'; exec cat"}},
+                "mine": {"renderer": "ghostty"}})
+        },
+        true,
+    );
+    let mut ui = r.ui();
+    assert!(
+        ui.wait_for(WAIT, view_has("mine", Slot::Compact, "Mine"))
+            .is_some()
+    );
+    let mut view = grid_view(&r.socket(), "term:mine", 40, 10);
+    // The program runs at the view's size; its colored text is a run of its
+    // own, bold, in its color.
+    let got = grid_until(&mut view, |l| l.contains("10 40"));
+    assert!(got.contains(r#""ev":"grid""#), "{got}");
+    assert!(
+        got.contains(r##""text":"green","fg":"#"##) && got.contains(r#""a":1"#),
+        "{got}"
+    );
+    // The program asked for the kitty protocol (CSI > 1 u): Shift+Enter is
+    // its own key, which the terminal echoes back (cat, a cooked tty: ^[).
+    grid_send(
+        &view,
+        r#"{"t":"surface","ref":"term:mine","ev":"key","key":"Enter","mods":1}"#,
+    );
+    let got = grid_until(&mut view, |l| l.contains("[13;2u"));
+    assert!(got.contains("[13;2u"), "{got}");
+    // A resize reaches the grid and the program.
+    grid_send(
+        &view,
+        r#"{"t":"surface","ref":"term:mine","ev":"resize","cols":50,"rows":12}"#,
+    );
+    let got = grid_until(&mut view, |l| l.contains(r#""cols":50,"rows":12"#));
+    assert!(
+        got.contains(r#""full":true"#),
+        "a resize is a full frame: {got}"
+    ); // Select "green" with a drag (no mouse asked: the pointer selects),
+    // copy it (Ctrl+Shift+C); Ctrl+Shift+V asks the view for the clipboard,
+    // whose text goes to the program (cat echoes it).
+    for ev in [
+        r#"{"t":"surface","ref":"term:mine","ev":"mouse","action":"press","button":"left","x":0.1,"y":0.5}"#,
+        r#"{"t":"surface","ref":"term:mine","ev":"mouse","action":"motion","button":"left","x":4.6,"y":0.5}"#,
+        r#"{"t":"surface","ref":"term:mine","ev":"mouse","action":"release","button":"left","x":4.6,"y":0.5}"#,
+        r#"{"t":"surface","ref":"term:mine","ev":"key","key":"KeyC","mods":5}"#,
+    ] {
+        grid_send(&view, ev);
+    }
+    let got = grid_until(&mut view, |l| l.contains(r#""ev":"copy""#));
+    assert!(got.contains(r#""ev":"copy","text":"green""#), "{got}");
+    grid_send(
+        &view,
+        r#"{"t":"surface","ref":"term:mine","ev":"key","key":"KeyV","mods":5}"#,
+    );
+    let got = grid_until(&mut view, |l| l.contains(r#""ev":"clipboard""#));
+    assert!(got.contains(r#""ev":"clipboard""#), "{got}");
+    grid_send(
+        &view,
+        r#"{"t":"surface","ref":"term:mine","ev":"paste","text":"pasted-here"}"#,
+    );
+    let got = grid_until(&mut view, |l| l.contains("pasted-here"));
+    assert!(got.contains("pasted-here"), "{got}");
+}
+
+#[cfg(not(feature = "ghostty"))]
+#[test]
+fn a_grid_view_is_refused_by_a_daemon_built_without_the_renderer() {
+    let r = rig(
+        "nogrid",
+        |_| json!({"modules": ["mine"], "terminals": {"mine": {"command": "exec cat"}}}),
+        true,
+    );
+    let mut ui = r.ui();
+    assert!(
+        ui.wait_for(WAIT, view_has("mine", Slot::Compact, "mine"))
+            .is_some()
+    );
+    let mut view = grid_view(&r.socket(), "term:mine", 40, 10);
+    let got = grid_until(&mut view, |l| l.contains(r#""t":"err""#));
+    assert!(got.contains("without the grid renderer"), "{got}");
+}

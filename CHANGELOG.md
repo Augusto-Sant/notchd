@@ -4,7 +4,13 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+
+- An experimental terminal renderer built on Ghostty's libghostty-vt: a terminal module with `"renderer": "ghostty"` (for example `notchd ipc set terminal.renderer '"ghostty"'`) is emulated by the daemon and drawn by the UI as text, without `qmltermwidget`. It brings the kitty keyboard protocol (Shift+Enter and the like reach Claude Code), the mouse for programs that ask for it, kitty images, your theme's ANSI colors, selection with the mouse (Shift over a program that has the mouse), Ctrl+Shift+C and Ctrl+Shift+V, a program's OSC 52 copies, input methods and dead keys, and the exact screen when the view opens again. It needs a daemon built with the `ghostty` feature (`make restart DAEMON_FEATURES=ghostty`, zig 0.15.2); the released daemon does not have it yet. See "The grid renderer" in `docs/architecture.md`.
+
 ### Fixed
+
+- The Omarchy shell crashed when a notch with tabs went from a terminal drawn by `qmltermwidget` to one with another renderer: the terminal view was gone before its queued start, which then loaded into a deleted loader.
 
 - `scripts/install.sh` starts the daemon itself (`notchd daemon --ensure`) where `systemctl` is installed but no systemd user manager runs (a container, a session without systemd), instead of ending with "could not start notchd.service" and no daemon.
 

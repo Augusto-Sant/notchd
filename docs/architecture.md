@@ -280,7 +280,7 @@ Every node: `"t"` (the primitive) and optional `"id"` (stable across updates, so
 | `button` | `name`, `glyph` or `label` (`name` and `glyph` as an `icon`'s), `action`, `tone`, `enabled`, `selected`, `variant` (`icon\|outline`), `big` (a larger round button) | the `IconButton`, the Voice start button and the timer's controls |
 | `chip` | `label`, `value` (a string), `action`, `selected` | the timer's presets |
 | `canvas` | `w`, `h`, `cmds`, `animate` | tier 2, below |
-| `surface` | `kind` (`terminal\|webview`), `ref`, `w`, `h` | tier 3, below |
+| `surface` | `kind` (`terminal\|webview`), `ref`, `w`, `h`, `renderer` (`widget\|ghostty`, a terminal's) | tier 3, below |
 
 **Named icons.** An `icon`, a `button`'s icon and an `image`'s fallback `icon` carry an optional `name` next to `glyph`. A UI draws the name with its own symbol set (the QML UI: a Nerd Font glyph from a table in `core/client/prims/Tree.js`; a GNOME UI: the Adwaita symbolic icon of that name) and, when it does not know the name, draws `glyph`. So a module may send only `glyph` (a Nerd Font codepoint, as before), only `name`, or both, which is what the official modules do. An unknown `name` is never an error (forward compatibility); an `icon` with neither is invalid, a `button` needs a `glyph`, a `name` or a `label`. `icon.size` is design pixels or a text size name (`caption`..`display`), so an icon can sit at the size of the text beside it.
 
@@ -323,7 +323,7 @@ A `surface` is a rectangle the UI hands to something that draws itself.
 {"t":"surface-close","ref":"term:claude"}
 ```
 
-`attach` is the UI's first line on a connection of its own for the surface (below); `ev` is `data` or `input` (`b64`), `resize` (`cols`, `rows`) or `title` (`text`). (`surface-open`, `{"t":"surface-open","ref":...,"kind":...,"cols":..,"rows":..}`, is the daemon asking a UI to open a surface; the terminal does not use it.)
+`attach` is the UI's first line on a connection of its own for the surface (below); `ev` is `data` or `input` (`b64`), `resize` (`cols`, `rows`; a grid's also `cw`, `ch`) or `title` (`text`); a grid view's events are [below](#the-grid-renderer-renderer-ghostty-experimental). (`surface-open`, `{"t":"surface-open","ref":...,"kind":...,"cols":..,"rows":..}`, is the daemon asking a UI to open a surface; the terminal does not use it.)
 
 - `ref` names the surface (`term:<module id>`); the core sends `data` (PTY output) and `title` (OSC 0/2, which the agent modules read to decide the compact view and the done peek: `agent.rs`), the UI sends `input` and `resize`. Lines carry base64 PTY bytes.
 - **A surface has a connection of its own**, so a flood of output never delays a `view` update. Its first line is `{"t":"attach","ref":"term:claude","cols":100,"rows":30}` (`cols` and `rows`, the view's size, are optional: the program starts at it); the daemon answers with the output so far (the last 1 MiB of it, as `data`: a view that attaches later draws what the earlier one did, a reload included), then the output as it comes, `title`s, and `surface-close` when the program ends or is replaced; an unknown ref is an `err`. Closing the connection detaches the view and nothing else: **the program and its session stay**. Several views may attach to one session (the last `resize` wins). The queue to a view is bounded, so a slow view slows the program to its pace, as a real terminal does. A view that attaches to a session that already drew something makes the program draw again (a resize one column narrower and back), since a program only redraws on a size change. A session that wrapped its 1 MiB starts the replay at a line end after a reset of the attributes; a TUI's modes set before that point (mouse, alternate screen) are not replayed, which a redraw mostly repairs.
@@ -331,6 +331,28 @@ A `surface` is a rectangle the UI hands to something that draws itself.
 - The view is created by the UI when a `surface` node appears in a view tree, and the module starts the program when the first view attaches (`views` in `term.rs`). The UI says it can draw a terminal with `surfaces: ["terminal"]` in `hello`; without one, the surface node draws a placeholder ("the terminal needs the qmltermwidget package") and `ask` answers so.
 - A surface node's `id` names the **run**: a new session (restart) is a new `id`, and the UI replaces the view; the same `id` keeps the view across updates of the tree (the stack, row and column primitives keep their children by position, not by the list the daemon sent, so a `view` update never remakes a terminal).
 - A webview's close, crash or unresponsiveness (watchdog 5 s) shows the module's error row; the module process is untouched.
+
+#### The grid renderer (`renderer: ghostty`, experimental)
+
+A terminal module whose config has `"renderer": "ghostty"` (`<module>.renderer`, e.g. `terminal.renderer`) puts `"renderer":"ghostty"` on its `surface` node, and the UI draws it as a **grid**: the daemon emulates the terminal with Ghostty's `libghostty-vt` (the `libghostty-vt` crate, `notchd-daemon/src/grid.rs`, behind the `ghostty` cargo feature) and the UI only draws text, rectangles and pictures (`core/terminal/GhosttySurface.qml`, no package). The same session and the same connection as above; the view asks for it in `attach`:
+
+```json
+{"t":"attach","ref":"term:claude","cols":100,"rows":30,"render":"grid","fg":"#d4be98","bg":"#282828","palette":["#282828","#ea6962","..."],"cw":9,"ch":18}
+{"t":"surface","ref":"term:claude","ev":"grid","cols":100,"rows":30,"full":false,"fg":"#d4be98","bg":"#282828","mouse":true,"images":[...],"cursor":{"x":3,"y":1,"style":"block"},"lines":[{"y":1,"runs":[{"x":0,"w":2,"text":"ok","fg":"#a9b665","a":1}],"sel":[0,5]}]}
+{"t":"surface","ref":"term:claude","ev":"key","key":"Enter","mods":1}
+{"t":"surface","ref":"term:claude","ev":"mouse","action":"press","button":"left","x":3.5,"y":2.0}
+{"t":"surface","ref":"term:claude","ev":"wheel","rows":-3,"x":10.5,"y":4.2}
+{"t":"surface","ref":"term:claude","ev":"copy","text":"..."}
+{"t":"surface","ref":"term:claude","ev":"clipboard"}
+{"t":"surface","ref":"term:claude","ev":"paste","text":"..."}
+{"t":"surface","ref":"term:claude","ev":"image","id":1,"png":"iVBORw0..."}
+```
+
+- `attach` carries, with `render: grid`, the view's theme: `fg`, `bg` and its 16 ANSI colors (`palette`), which the terminal answers when a program asks (OSC 10/11) and draws text without colors of its own in; and `cw`, `ch`, a cell in the view's pixels, for what a program sizes in pixels (kitty images, size reports). A theme change is a new connection. The Omarchy host's palette is its theme's `ghostty.conf` (`Theme.terminalPalette`).
+- `grid` is a frame, at most one per 16 ms and only when something changed: `full` (every row: the first frame, a resize, a switch of screens) or only the rows that changed; each row as runs of one style (`x`, `w` cells, `text`, `fg`/`bg` `#rrggbb` when not the defaults, `a` a bit set: 1 bold, 2 italic, 4 underline, 8 strikethrough, 16 faint, 32 inverse, already applied to the colors), a wide character a run of its own on its two cells, and `sel`, the row's selected columns. `mouse`: the program asked for the mouse. `images`, when they changed: the kitty images on the screen (`id`, cell `x`/`y`, `xo`/`yo` pixels into it, `w`/`h` pixels, the source rectangle `sx`/`sy`/`sw`/`sh`, `z` below 0 under the text); each image's PNG comes once as `image` (again when it changes), scaled down past 2048 px.
+- The view sends raw inputs and the daemon decides. `key`: a W3C `KeyboardEvent.code` (`KeyA`, `Enter`, `ArrowUp`), `mods` (1 shift, 2 alt, 4 ctrl, 8 super) and the `text` it types; the daemon encodes it as the program asked (legacy, or the kitty keyboard protocol). What an input method composes (fcitx, dead keys) comes as `key` with `key: ""` and its `text`. Ctrl+Shift+C copies the selection (`copy`), Ctrl+Shift+V asks for the clipboard (`clipboard`, which the view answers with `paste`; bracketed when the program asked). `mouse` (`press`/`release`/`motion`, `button`, `x`/`y` in cells, `mods`): the program's when it asked for the mouse and Shift is up, else a selection (a drag; two clicks a word, three a line); a motion with no button held only while `mouse`. `wheel`: the program's mouse buttons 4/5 when it asked, arrow keys on the alternate screen, else the scrollback. A program's OSC 52 copy comes to the view as `copy`.
+- The daemon built without the feature answers a grid `attach` with an `err` ("built without the grid renderer"). Building it needs zig 0.15.2 on `PATH` (the crate builds libghostty-vt from Ghostty's source): `make restart DAEMON_FEATURES=ghostty` ([DEVELOPMENT.md](../DEVELOPMENT.md#omarchy-host)).
+- Why the daemon and not the UI: one emulator for every UI (a macOS or Windows UI draws the same grid), a view that attaches gets the exact screen (modes included, not a replay of bytes), and the daemon can read the screen. The cost is a second parse of the output (88 MB/s measured, far above what a terminal draws) and a pre-1.0 C API.
 
 ## Protocol: core to module (user modules)
 
