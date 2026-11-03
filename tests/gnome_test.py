@@ -425,6 +425,58 @@ def c_monitor(s):
     return main_copy(s)["monitor"]
 
 
+class Dock(ShellCase):
+    """A dock (the Ubuntu Dock, Dash to Dock) on any edge of the primary
+    monitor: a notch hangs past it and runs beside it, and its reserve adds
+    to the dock's. A fake one here: a chrome actor that reserves its room,
+    as a fixed dock does."""
+
+    DOCK = 64
+
+    def tearDown(self):
+        sh = self.shell
+        sh.call("FakeDock", ("", 0), "(su)")
+        sh.ipc("set", "position", "")
+        sh.until(lambda s: main_copy(s)["edge"] == "top", 3)
+
+    def dock(self, edge):
+        self.shell.call("FakeDock", (edge, self.DOCK), "(su)")
+
+    def place(self, edge, offset=0.5):
+        sh = self.shell
+        sh.ipc("set", "position", json.dumps({"edge": edge, "offset": offset, "screen": sh.snapshot()["screens"][0]}))
+        sh.until(lambda s: main_copy(s)["edge"] == edge and main_copy(s)["monitor"] == 0, 3, "the notch on " + edge)
+        time.sleep(0.6)  # past the spring
+        return sh.snapshot()
+
+    def test_a_notch_on_the_docks_edge_hangs_past_it_and_reserves_past_it(self):
+        for edge in ("left", "bottom", "right"):
+            with self.subTest(edge=edge):
+                self.dock(edge)
+                s = self.place(edge)
+                c, m = main_copy(s), s["monitors"][0]
+                s = self.shell.until(lambda s: s["struts"], 3, "the reserve")
+                work = s["workArea"][0]
+                depth = c["card"]["depth"]
+                if edge == "left":
+                    self.assertEqual(c["x"], m["x"] + self.DOCK)
+                    self.assertGreaterEqual(work["x"], m["x"] + self.DOCK + depth)
+                elif edge == "right":
+                    self.assertEqual(c["x"] + c["w"], m["x"] + m["w"] - self.DOCK)
+                    self.assertLessEqual(work["x"] + work["w"], m["x"] + m["w"] - self.DOCK - depth)
+                else:
+                    self.assertEqual(c["y"] + c["h"], m["y"] + m["h"] - self.DOCK)
+                    self.assertLessEqual(work["y"] + work["h"], m["y"] + m["h"] - self.DOCK - depth)
+                self.shell.screenshot("dock-" + edge)
+
+    def test_a_notch_along_the_top_runs_beside_a_side_dock(self):
+        self.dock("left")
+        s = self.place("top", 0.0)
+        c, m = main_copy(s), s["monitors"][0]
+        self.assertGreaterEqual(c["x"], m["x"] + self.DOCK)
+        self.assertEqual(c["y"], m["y"] + s["panel"])
+
+
 class Drag(ShellCase):
     def tearDown(self):
         self.shell.button(False)
@@ -464,6 +516,43 @@ class Drag(ShellCase):
         sh.until(lambda s: grabs(s) > 0, 2, "the click to pin it")
         self.assertFalse(main_copy(sh.snapshot())["dragging"])
         self.assertEqual(main_copy(sh.snapshot())["edge"], "top")
+
+
+def copy_named(s, prefix):
+    return next((c for c in s["copies"] if c["id"].startswith(prefix)), None)
+
+
+class Guests(ShellCase):
+    """The guest notches of `state`: a standalone module's own (the test
+    module `pinger`, tests/gnome/guest-modules, peeks every 3 s) and the
+    visitor (a peek on a screen where no notch has the module). Unseen while
+    closed; while one shows, the notch it overlaps on its edge hides."""
+
+    config = {"modules": ["timer"], "reserveSpace": True,
+              "notches": [{}, {"id": "far", "modules": ["activities"], "position": {"screen": "Meta-1"}}]}
+    modules = os.path.join(ROOT, "tests", "gnome", "guest-modules")
+
+    def test_a_standalone_module_shows_its_own_notch_only_while_it_peeks(self):
+        sh = self.shell
+        s = sh.until(lambda s: (copy_named(s, "standalone:pinger@") or {}).get("seen")
+                     and copy_named(s, "standalone:pinger@")["mode"] == "peek", 5, "the module's own notch peeking")
+        pinger, main = copy_named(s, "standalone:pinger@"), main_copy(s)
+        self.assertIn("pinger peeks", pinger["texts"])
+        self.assertTrue(main["covered"] and not main["seen"], "the notch under it hides")
+        s = sh.until(lambda s: not copy_named(s, "standalone:pinger@")["seen"], 4, "the peek over")
+        self.assertTrue(main_copy(s)["seen"])
+
+    def test_the_visitor_shows_a_peek_where_no_notch_has_the_module(self):
+        sh = self.shell
+        sh.move(400, 400)
+        self.assertEqual(sh.ipc("push", json.dumps({"id": "guest-test", "title": "Visiting", "progress": 40})), "ok")
+        s = sh.until(lambda s: (copy_named(s, "visitor@") or {}).get("seen")
+                     and "Visiting" in copy_named(s, "visitor@")["texts"], 3, "the visitor showing the peek")
+        visitor = next(c for c in s["copies"] if c["id"].startswith("visitor@") and c["seen"])
+        self.assertEqual(visitor["monitor"], 0, "on the focused screen, where no notch has activities")
+        sh.ipc("clear", "guest-test")
+        sh.until(lambda s: not any(c["seen"] for c in s["copies"] if c["id"].startswith("visitor@")), 6,
+                 "the visitor gone with the peek")
 
 
 class Canvas(ShellCase):

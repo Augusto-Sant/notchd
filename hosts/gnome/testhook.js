@@ -8,6 +8,7 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
+import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -18,6 +19,7 @@ const IFACE = `
     <method name="PointerMove"><arg type="d" direction="in" name="x"/><arg type="d" direction="in" name="y"/></method>
     <method name="PointerClick"/>
     <method name="PointerButton"><arg type="b" direction="in" name="pressed"/></method>
+    <method name="FakeDock"><arg type="s" direction="in" name="edge"/><arg type="u" direction="in" name="size"/></method>
     <method name="Key"><arg type="u" direction="in" name="keyval"/></method>
     <method name="RunAction"><arg type="s" direction="in" name="name"/></method>
     <method name="KeybindingAction"><arg type="u" direction="in" name="keycode"/><arg type="u" direction="in" name="mask"/><arg type="u" direction="out" name="action"/></method>
@@ -45,6 +47,8 @@ export class TestHook {
     }
 
     destroy() {
+        this._dock?.destroy();
+        this._dock = null;
         this._impl.unexport();
         Gio.bus_unown_name(this._nameId);
         this._pointer = null;
@@ -81,6 +85,24 @@ export class TestHook {
         const t = this._now();
         this._pointer.notify_button(t, Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
         this._pointer.notify_button(t + 1000, Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+    }
+
+    // A dock on the primary monitor's `edge`, `size` pixels deep, that
+    // reserves its room as a fixed dock does (a chrome actor affecting the
+    // struts); "" or a size of 0 takes it away.
+    FakeDock(edge, size) {
+        this._dock?.destroy();
+        this._dock = null;
+        const m = Main.layoutManager.primaryMonitor;
+        if (!edge || !size || !m)
+            return;
+        const box = {
+            left: [m.x, m.y, size, m.height], right: [m.x + m.width - size, m.y, size, m.height],
+            bottom: [m.x, m.y + m.height - size, m.width, size], top: [m.x, m.y, m.width, size],
+        }[edge];
+        const [x, y, width, height] = box;
+        this._dock = new St.Widget({name: 'test-dock', x, y, width, height, style: 'background-color: rgba(200,60,60,0.6);'});
+        Main.layoutManager.addChrome(this._dock, {affectsStruts: true});
     }
 
     // The primary button down or up alone: a test holds it to drag.

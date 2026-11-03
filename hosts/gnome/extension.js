@@ -14,6 +14,7 @@ import St from 'gi://St';
 import * as Protocol from './lib/Protocol.js';
 import {DaemonClient, socketPath} from './client.js';
 import {NotchCopy, wireKey} from './notch.js';
+import {edgeInsets} from './insets.js';
 import {Screens} from './screens.js';
 import * as Terminal from './terminal.js';
 import {Theme} from './theme.js';
@@ -67,6 +68,7 @@ export default class NotchdExtension extends Extension {
             store: () => this._client.store,
             terminals: null,
             names: () => this._screens.names ?? [],
+            insets: monitor => this._insetsOf(monitor),
             monitorFor: name => {
                 const i = this._screens.names?.indexOf(name) ?? -1;
                 return i >= 0 ? i : this._screens.focusedIndex();
@@ -106,6 +108,12 @@ export default class NotchdExtension extends Extension {
             }
             this._client.start();
         });
+        // The panel's and a dock's room, read again when the work area
+        // changes (a dock moved, resized, shown or hidden): the notches
+        // move with them.
+        this._insets = new Map();
+        this._workAreasId = global.display.connect('workareas-changed', () => this._insetsChanged());
+        this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._insetsChanged());
         // The navigation key (the schema's `navigate`), as `notchd ipc
         // navigate`: it starts navigation, and leaves it while its grab
         // holds the keyboard (POPUP, the grab's action mode).
@@ -117,7 +125,35 @@ export default class NotchdExtension extends Extension {
             () => this._navigateKey());
     }
 
+    _insetsOf(monitor) {
+        if (!monitor)
+            return {top: 0, bottom: 0, left: 0, right: 0};
+        let insets = this._insets?.get(monitor.index);
+        if (!insets) {
+            insets = edgeInsets(monitor);
+            this._insets?.set(monitor.index, insets);
+        }
+        return insets;
+    }
+
+    _insetsChanged() {
+        const before = JSON.stringify([...this._insets.entries()]);
+        this._insets.clear();
+        Main.layoutManager.monitors.forEach(m => this._insetsOf(m));
+        if (JSON.stringify([...this._insets.entries()]) === before)
+            return;
+        // The reserve hangs past them too.
+        this._lastReserve = '';
+        this._redraw();
+    }
+
     disable() {
+        if (this._workAreasId)
+            global.display.disconnect(this._workAreasId);
+        if (this._monitorsId)
+            Main.layoutManager.disconnect(this._monitorsId);
+        this._workAreasId = this._monitorsId = 0;
+        this._insets = null;
         if (this._startupId)
             Main.layoutManager.disconnect(this._startupId);
         this._startupId = 0;
@@ -177,12 +213,40 @@ export default class NotchdExtension extends Extension {
                 actor.update(notch, copy, highlight);
             }
         });
+        // The guests (docs/architecture.md, `state`): each standalone
+        // module's own notch, where its `<id>.position` says, and the
+        // visitor at the top; a copy per screen, unseen until it peeks.
+        // A guest's actor exists only while it shows something or fades
+        // out: closed and faded, it goes (fewer actors and JS objects; GNOME
+        // 46's JS engine crashed more often with every guest kept).
+        const guest = (key, wireId, notch, copy) => {
+            let actor = this._copies.get(key);
+            const showing = copy.mode === 'peek' || copy.mode === 'expanded';
+            if (!showing && (!actor || !actor.seenOrFading))
+                return;
+            seen.add(key);
+            if (!actor) {
+                actor = new NotchCopy(this._host, wireId, {guest: true});
+                this._copies.set(key, actor);
+            }
+            actor.update(notch, copy, null);
+        };
+        const cfg = store.config?.cfg ?? {};
+        for (const g of state.standalone ?? []) {
+            const pos = cfg[g.id]?.position ?? {};
+            const notch = {id: g.id, edge: pos.edge ?? 'top', offset: pos.offset ?? 0.5, screen: '', draggable: false};
+            for (const copy of g.copies ?? [])
+                guest(`standalone:${g.id}@${copy.screen}`, g.id, notch, copy);
+        }
+        for (const copy of state.visitor ?? [])
+            guest(`visitor@${copy.screen}`, '', {id: '', edge: 'top', offset: 0.5, screen: '', draggable: false}, copy);
         for (const [id, actor] of this._copies) {
             if (!seen.has(id)) {
                 actor.destroy();
                 this._copies.delete(id);
             }
         }
+        this._cover();
         if (key === 'state') {
             this._reserve(state.reserve ?? []);
             this._navigation(!!state.navigation);
@@ -206,6 +270,29 @@ export default class NotchdExtension extends Extension {
             }
         }
         this._settingsOpen = open;
+    }
+
+    // A guest that shows covers the notches of the config it overlaps on
+    // its edge of its monitor (Position.coveredByStandalone): they hide
+    // while it shows, unless they are open themselves.
+    _cover() {
+        const copies = [...this._copies.values()];
+        const shown = copies.filter(c => c.guest && c.open);
+        for (const c of copies) {
+            if (c.guest)
+                continue;
+            const a = c.place;
+            const covered = shown.some(g => {
+                const b = g.place;
+                if (b.monitor !== a.monitor || b.edge !== a.edge)
+                    return false;
+                const vertical = a.edge === 'left' || a.edge === 'right';
+                const [s1, e1] = vertical ? [a.y, a.y + a.h] : [a.x, a.x + a.w];
+                const [s2, e2] = vertical ? [b.y, b.y + b.h] : [b.x, b.x + b.w];
+                return s2 < e1 && s1 < e2;
+            });
+            c.setCovered(covered);
+        }
     }
 
     // While navigating, the keyboard is the daemon's: a modal grab on an
@@ -245,8 +332,8 @@ export default class NotchdExtension extends Extension {
 
     // `state.reserve`: the space windows keep clear of a closed notch. A
     // strut is an invisible chrome actor along the whole of the monitor's
-    // edge (GNOME reads a strut's side from the edges it spans), so on the
-    // top it reaches from the top of the monitor down past the panel.
+    // edge (GNOME reads a strut's side from the edges it spans), so it
+    // reaches from the monitor's edge past the panel or a dock there.
     _reserve(reserve) {
         // Not before the monitors have names: a daemon that is already
         // running sends its reserve at once, when this enable has not yet
@@ -266,12 +353,14 @@ export default class NotchdExtension extends Extension {
             const m = Main.layoutManager.monitors[index];
             if (!m)
                 continue;
-            const panel = index === Main.layoutManager.primaryIndex ? Main.panel.height : 0;
+            // Past the panel or a dock on that edge: the reserve adds to
+            // theirs.
+            const inset = this._insetsOf(m);
             const box = {
-                top: {x: m.x, y: m.y, width: m.width, height: panel + r.depth},
-                bottom: {x: m.x, y: m.y + m.height - r.depth, width: m.width, height: r.depth},
-                left: {x: m.x, y: m.y, width: r.depth, height: m.height},
-                right: {x: m.x + m.width - r.depth, y: m.y, width: r.depth, height: m.height},
+                top: {x: m.x, y: m.y, width: m.width, height: inset.top + r.depth},
+                bottom: {x: m.x, y: m.y + m.height - inset.bottom - r.depth, width: m.width, height: inset.bottom + r.depth},
+                left: {x: m.x, y: m.y, width: inset.left + r.depth, height: m.height},
+                right: {x: m.x + m.width - inset.right - r.depth, y: m.y, width: inset.right + r.depth, height: m.height},
             }[r.edge];
             if (!box)
                 continue;

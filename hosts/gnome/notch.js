@@ -102,11 +102,15 @@ function trace(cr, d) {
 export const NotchCopy = GObject.registerClass(
 class NotchCopy extends St.Widget {
     // `host`: { theme, send(msg), store(), monitorFor(name), names() }.
-    _init(host, notchId) {
+    // `guest`: the visitor or a standalone module's own notch, unseen while
+    // closed (Notch.qml's `guest`).
+    _init(host, notchId, {guest = false} = {}) {
         // Clipped: while the card grows, its content never shows outside it.
-        super._init({name: 'notchd-copy', reactive: true, track_hover: true, can_focus: true, x: 0, y: 0, clip_to_allocation: true});
+        super._init({name: 'notchd-copy', reactive: true, can_focus: true, x: 0, y: 0, clip_to_allocation: true});
         this._host = host;
         this.notchId = notchId;
+        this.guest = guest;
+        this._covered = false;
         this._mode = 'rest';
         // The mode the content on screen belongs to: it trails `_mode` by
         // the fade, and the card's shape follows it.
@@ -130,24 +134,42 @@ class NotchCopy extends St.Widget {
         this._bg = new St.DrawingArea({x: 0, y: 0});
         this._bg.connect('repaint', area => this._paint(area));
         this.add_child(this._bg);
+        this._hits = [0, 1, 2, 3].map(() => new St.Widget({reactive: true, x: 0, y: 0}));
+        this._hits.forEach(hit => this.add_child(hit));
+        // What takes the keyboard and the grabs: a non-reactive card gets no
+        // events of its own.
+        this._keys = new St.Widget({reactive: true, can_focus: true, x: 0, y: 0, width: 1, height: 1});
+        this.add_child(this._keys);
         this._content = new St.Bin({x: 0, y: 0, opacity: 0});
         this.add_child(this._content);
         // The content stays against the edge and centered along it as the
         // card springs, as the QML content does.
         const resized = () => {
             this._bg.set_size(this.width, this.height);
+            this._layoutHits();
             this._placeContent();
         };
         this.connect('notify::width', resized);
         this.connect('notify::height', resized);
 
-        // Not while dragged: the card jumps under the pointer and away from
-        // it, and each enter and leave made the daemon send a new state.
-        this.connect('notify::hover', () => this._hoverChanged());
+        // The pointer and presses reach the card through its hit areas; a
+        // button of a view takes its own (it is no hit area's child), and
+        // the keyboard and the drag's grab go to `_keys`.
+        for (const hit of [...this._hits, this._keys]) {
+            hit.connect('enter-event', () => this._hoverChanged());
+            hit.connect('leave-event', () => this._hoverChanged());
+            hit.connect('button-press-event', (actor, event) => {
+                this._pressed(event);
+                return Clutter.EVENT_STOP;
+            });
+            hit.connect('motion-event', (actor, event) => this._moved(event));
+            hit.connect('button-release-event', (actor, event) => this._released(event));
+        }
+        this._keys.connect('key-press-event', (actor, event) => this._key(event));
+        // The card's own: under its modal grab a press outside it comes
+        // here (the click away), and from GNOME 49 a view's button lets its
+        // press bubble here, which is the button's, not the card's.
         this.connect('button-press-event', (actor, event) => {
-            // A press on a button inside is the button's: from GNOME 49 an
-            // St.Button lets it bubble here, and pinning would take a grab
-            // that cancels the button's click.
             if (this._onButton(event))
                 return Clutter.EVENT_PROPAGATE;
             this._pressed(event);
@@ -155,9 +177,15 @@ class NotchCopy extends St.Widget {
         });
         this.connect('motion-event', (actor, event) => this._moved(event));
         this.connect('button-release-event', (actor, event) => this._released(event));
-        this.connect('key-press-event', (actor, event) => this._key(event));
 
         Main.layoutManager.addTopChrome(this, {trackFullscreen: true});
+        // A guest starts unseen: it shows when it peeks.
+        if (guest) {
+            this._seen = false;
+            this.opacity = 0;
+            this._setReactive(false);
+            this.hide();
+        }
     }
 
     // The pointer is on the notch while it is on the card or on its
@@ -167,12 +195,32 @@ class NotchCopy extends St.Widget {
     _hoverChanged() {
         if (this._dragging)
             return;
-        const on = this.hover || !!this._termHover || this._pointerInHole();
+        const on = this._pointerOnCard() || !!this._termHover;
+        // While on it, looked at again every 100 ms: the pointer may leave
+        // over a view's button, which tells the hit areas nothing.
+        if (on && !this._hoverPoll) {
+            this._hoverPoll = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+                if (this._pointerOnCard() || this._termHover)
+                    return GLib.SOURCE_CONTINUE;
+                this._hoverPoll = 0;
+                this._hoverChanged();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
         if (on === this._sentHover)
             return;
         this._sentHover = on;
         const ev = on ? 'enter' : 'leave';
         this._send(Protocol.pointer(this.notchId, this._pointerScreen(ev), ev));
+    }
+
+    // The pointer on the card (the hole included): within its rectangle,
+    // while it is seen.
+    _pointerOnCard() {
+        if (!this.visible || this.opacity === 0 || this._hits.every(h => !h.reactive))
+            return false;
+        const [px, py] = global.get_pointer();
+        return px >= this.x && px < this.x + this.width && py >= this.y && py < this.y + this.height;
     }
 
     // The pointer in the card's hole is on the notch, whether the
@@ -284,7 +332,7 @@ class NotchCopy extends St.Widget {
             this._hideTerminal();
         this._termRef = actor._surface.ref;
         this._holeRect = rect;
-        this._bg.queue_repaint();
+        this._holeChanged();
         this._host.terminals.show(this._termRef, actor._surface.run, rect, this);
         if (this._termFocus)
             this._host.terminals.focus(this._termRef);
@@ -304,7 +352,7 @@ class NotchCopy extends St.Widget {
         // restart's: the old one goes as the new one comes).
         else if (!this._termRef)
             this._holeRect = null;
-        this._bg.queue_repaint();
+        this._holeChanged();
         this._hoverChanged();
     }
 
@@ -316,19 +364,19 @@ class NotchCopy extends St.Widget {
         const from = this._cover ?? 1;
         if (!animations() || !this.mapped || ms <= 0 || from === target) {
             this._cover = target;
-            this._bg.queue_repaint();
+            this._holeChanged();
             done?.();
             return;
         }
         const timeline = new Clutter.Timeline({actor: this, duration: ms});
         timeline.connect('new-frame', () => {
             this._cover = from + (target - from) * Math.min(1, timeline.get_elapsed_time() / ms);
-            this._bg.queue_repaint();
+            this._holeChanged();
         });
         timeline.connect('completed', () => {
             this._coverMotion = null;
             this._cover = target;
-            this._bg.queue_repaint();
+            this._holeChanged();
             done?.();
         });
         this._coverMotion = timeline;
@@ -378,28 +426,39 @@ class NotchCopy extends St.Widget {
             this._send(Protocol.event(module, 'expanded', line, null));
     }
 
-    // The card is picked everywhere but its hole: there the pointer reaches
-    // the terminal's window below.
-    // Without a hole, as Clutter's own pick: chaining up to it from here
-    // lost the children (no tab took a click).
-    vfunc_pick(context) {
-        const h = this._hole;
-        const W = this.width, H = this.height;
+    // The card takes the pointer everywhere but its hole, where the
+    // terminal's window below gets it: while a hole is open the card itself
+    // is not reactive and four reactive areas around the hole are (one over
+    // the whole card without one), under the content. Hover and presses on them reach the card as
+    // on any child. (A pick of the card's own in JS crashed GNOME 46's JS
+    // engine now and then: it runs at every pointer motion.)
+    _layoutHits() {
+        const W = this.width, H = this.height, h = this._hole;
         const boxes = h ? [[0, 0, W, h.y], [0, h.y + h.h, W, H], [0, h.y, h.x, h.y + h.h], [h.x + h.w, h.y, W, h.y + h.h]]
             : [[0, 0, W, H]];
-        for (const [x1, y1, x2, y2] of boxes) {
-            if (x2 > x1 && y2 > y1)
-                this.pick_box(context, new Clutter.ActorBox({x1, y1, x2, y2}));
-        }
-        for (const child of this.get_children())
-            child.pick(context);
+        this._hits.forEach((hit, i) => {
+            const [x1, y1, x2, y2] = boxes[i] ?? [0, 0, 0, 0];
+            hit.set_position(x1, y1);
+            hit.set_size(Math.max(0, x2 - x1), Math.max(0, y2 - y1));
+            hit.visible = x2 > x1 && y2 > y1;
+        });
     }
 
-    // A destroyed copy says nothing: a fade it had running stops with it
-    // and would lay out and measure again, over the new copy's facts.
-    _send(msg) {
-        if (!this._destroyed)
-            this._host.send(msg);
+    // Whether the card takes the pointer at all (an unseen guest does not).
+    _setReactive(on) {
+        this._hits.forEach(hit => {
+            hit.reactive = on;
+        });
+    }
+
+    // The hole may have moved: drawn again and the hit areas around it.
+    // Reactive, the card is picked over its whole allocation: not while a
+    // hole is open, so the pointer reaches the window there (its hit areas
+    // take the rest).
+    _holeChanged() {
+        this._bg.queue_repaint();
+        this._layoutHits();
+        this.reactive = !this._hole;
     }
 
     // Whether `event` happened on an St.Button inside this card (a tab, a
@@ -412,6 +471,14 @@ class NotchCopy extends St.Widget {
         }
         return false;
     }
+
+    // A destroyed copy says nothing: a fade it had running stops with it
+    // and would lay out and measure again, over the new copy's facts.
+    _send(msg) {
+        if (!this._destroyed)
+            this._host.send(msg);
+    }
+
 
     // A notch fixed on a screen is named by it; the one that follows focus
     // by "", except on enter and press, which name the screen the pointer
@@ -430,11 +497,13 @@ class NotchCopy extends St.Widget {
     // `highlight`: while navigating, what this notch's highlight says
     // ({number, selected, mode, count, screens}), else null.
     update(notch, copy, highlight = null) {
-        this._wireScreen = notch.screen ?? '';
+        // A guest's copies are one per screen, each named by its screen.
+        this._wireScreen = this.guest ? copy.screen ?? '' : notch.screen ?? '';
         this._notch = notch;
         this._copy = copy;
         this._settleDrop(notch);
         this._sync();
+        this._showOrConceal();
         this._keyboard(copy.keyboard ?? 'none', copy.mode);
         const nav = highlight ? {...highlight, tabs: (copy.tabs?.length ?? 0) > 1} : null;
         const navKey = JSON.stringify([nav, this.theme.generation]);
@@ -442,7 +511,7 @@ class NotchCopy extends St.Widget {
             this._navKey = navKey;
             this._nav = nav;
             this._drawNavLabel();
-            this._bg.queue_repaint();
+            this._holeChanged();
         }
     }
 
@@ -473,6 +542,56 @@ class NotchCopy extends St.Widget {
         // lagged behind it.
         if (!this._pending)
             this._layout(!this._dragging);
+    }
+
+    // ---------------------------------------------------------- concealment
+    // Whether the card shows: a guest only while it peeks or is open (and
+    // through its fade out), a notch of the config unless a shown guest
+    // covers it on its edge and it is not open itself (NotchWindow.qml's
+    // `concealed`). Faded in 160 ms, as the QML; unseen, it takes no input.
+    get open() {
+        return this._mode === 'peek' || this._mode === 'expanded';
+    }
+
+    // Seen, or fading out (a guest whose peek just ended).
+    get seenOrFading() {
+        return !!this._seen || this.opacity > 0;
+    }
+
+    // Where the card is going: its monitor, edge and rectangle.
+    get place() {
+        const t = this._target ?? {x: this.x, y: this.y, w: this.width, h: this.height};
+        return {monitor: this._monitorIndex, edge: this._edge, ...t};
+    }
+
+    setCovered(covered) {
+        if (covered === this._covered)
+            return;
+        this._covered = covered;
+        this._showOrConceal();
+    }
+
+    _showOrConceal() {
+        const seen = this.guest ? this.open || this._shown === 'peek' || this._shown === 'expanded'
+            : !this._covered || this.open;
+        if (seen === this._seen)
+            return;
+        this._seen = seen;
+        this.remove_transition('opacity');
+        if (seen) {
+            this.show();
+            this._setReactive(true);
+            this.ease({opacity: 255, duration: animations() ? 160 : 0, mode: Clutter.AnimationMode.LINEAR});
+        } else {
+            this._setReactive(false);
+            this.ease({
+                opacity: 0, duration: animations() && this.mapped ? 160 : 0, mode: Clutter.AnimationMode.LINEAR,
+                onComplete: () => {
+                    if (!this._seen)
+                        this.hide();
+                },
+            });
+        }
     }
 
     // ------------------------------------------------------------------ drag
@@ -534,7 +653,7 @@ class NotchCopy extends St.Widget {
         this._dropped = null;
         // The pointer stays with the card while the button is down, over
         // any monitor.
-        this._dragGrab = global.stage.grab(this);
+        this._dragGrab = global.stage.grab(this._keys);
         this._send(Protocol.drag(this.notchId, this._wireScreen, 'start'));
         const [x, y] = global.get_pointer();
         this._dragTo(x, y);
@@ -618,11 +737,11 @@ class NotchCopy extends St.Widget {
         this._dropTimeout = 0;
     }
 
-    // What GNOME's top panel takes of a monitor: the notch hangs below it
-    // and runs beside it (Position.place's `insets`).
+    // What the top panel and a dock take of a monitor (insets.js): the
+    // notch hangs past them and runs beside them (Position.place's
+    // `insets`).
     _insets(monitor) {
-        const panel = monitor && monitor.index === Main.layoutManager.primaryIndex ? Main.panel.height : 0;
-        return {top: panel, bottom: 0, left: 0, right: 0};
+        return this._host.insets(monitor);
     }
 
     // ------------------------------------------------------------ navigation
@@ -719,6 +838,7 @@ class NotchCopy extends St.Widget {
         old?.destroy();
         this._shown = pending.mode;
         this._shownVertical = pending.vertical;
+        this._showOrConceal();
         this._shownVerticalPeek = pending.mode === 'peek' && pending.parts.some(([, slot]) => slot === 'verticalPeek');
         this._layout(true);
         const shown = this._shown !== 'rest' && !!this._content.child;
@@ -972,7 +1092,7 @@ class NotchCopy extends St.Widget {
         });
         this._moveTo({x: Math.round(monitor.x + spot.x), y: Math.round(monitor.y + spot.y), w, h}, animate);
         this._placeContent();
-        this._bg.queue_repaint();
+        this._holeChanged();
         this._placeNavLabel();
         this._measure();
         this._placeTerminal();
@@ -1030,7 +1150,7 @@ class NotchCopy extends St.Widget {
             }
             // The hole stays over the window as the card moves.
             if (this._holeRect)
-                this._bg.queue_repaint();
+                this._holeChanged();
             const along = outBack(Math.min(1, ms / ALONG_MS));
             const depth = outQuint(Math.min(1, ms / DEPTH_MS));
             this.set_position(Math.round(lerp(from.x, to.x, along)), Math.round(lerp(from.y, to.y, depth)));
@@ -1048,6 +1168,9 @@ class NotchCopy extends St.Widget {
 
     // What this copy measures of itself, for the daemon's reserve.
     _measure() {
+        // A guest reserves nothing.
+        if (this.guest)
+            return;
         const s = v => this.theme.space(v);
         const compact = this._shown === 'compact' ? this._cardDepth : 0;
         const baseline = s(18) + s(CARD.compactPadNear) + s(CARD.compactPadFar);
@@ -1160,6 +1283,8 @@ class NotchCopy extends St.Widget {
             this._unfocusTerminal();
         if (want !== 'none' && open && !this._modal) {
             try {
+                // Over the whole card (its tabs and buttons too); the keys
+                // to `_keys`.
                 this._modal = Main.pushModal(this);
                 // Under the grab a click outside the notch reaches no
                 // window: it is a click away, which closes the notch as
@@ -1171,7 +1296,7 @@ class NotchCopy extends St.Widget {
                     this._send(Protocol.pin(this.notchId, this._wireScreen, false));
                     return Clutter.EVENT_STOP;
                 });
-                this.grab_key_focus();
+                this._keys.grab_key_focus();
                 this._send(Protocol.focus(this.notchId, this._wireScreen, true));
             } catch (e) {
                 console.warn(`notchd: no keyboard grab: ${e.message}`);
@@ -1200,7 +1325,7 @@ class NotchCopy extends St.Widget {
             // The mode drawn, which the geometry below belongs to; `wanted`,
             // the daemon's, leads it by a fade.
             mode: this._shown, wanted: this._mode, screen: this._copy?.screen ?? '', monitor: this._monitorIndex,
-            edge: this._edge, dragging: !!this._dragging,
+            edge: this._edge, dragging: !!this._dragging, seen: !!this._seen, covered: this._covered,
             ...(this._target ?? {x: this.x, y: this.y, w: this.width, h: this.height}),
             card: {along: this._cardAlong ?? 0, depth: this._cardDepth ?? 0}, modal: !!this._modal,
             // The hole on the stage, where the window must be (the card may
@@ -1295,6 +1420,9 @@ class NotchCopy extends St.Widget {
     }
 
     destroy() {
+        if (this._hoverPoll)
+            GLib.source_remove(this._hoverPoll);
+        this._hoverPoll = 0;
         this._cancelHold();
         if (this._dropTimeout)
             GLib.source_remove(this._dropTimeout);
