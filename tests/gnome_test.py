@@ -466,6 +466,80 @@ class Drag(ShellCase):
         self.assertEqual(main_copy(sh.snapshot())["edge"], "top")
 
 
+def terminal_window(s):
+    return next(iter(s.get("terminals") or []), None)
+
+
+class Terminal(ShellCase):
+    """A terminal surface: the helper's window (GTK 4 and VTE) kept in the
+    open notch's hole, with the keyboard, gone with the notch. Skipped where
+    VTE for GTK 4 is missing (the extension then draws a placeholder)."""
+
+    config = {"modules": ["timer", "shell"], "reserveSpace": True,
+              "terminals": {"shell": {"command": "exec sh", "title": "Shell"}}}
+
+    def setUp(self):
+        if self.shell.snapshot().get("terminals") is None:
+            self.skipTest("no VTE for GTK 4 here")
+        super().setUp()
+
+    def tearDown(self):
+        sh = self.shell
+        sh.ipc("close")
+        sh.ipc("set", "position", "")
+        sh.until(lambda s: main_copy(s)["mode"] == "compact" and main_copy(s)["edge"] == "top", 3)
+
+    def open_terminal(self):
+        sh = self.shell
+        self.assertEqual(sh.ipc("terminal", "shell", "toggle"), "ok")
+        return sh.until(lambda s: main_copy(s)["terminal"] and main_copy(s)["terminal"]["hole"]
+                        and terminal_window(s) and terminal_window(s)["focused"], 6,
+                        "the terminal's window in the hole, with the keyboard")
+
+    def assert_in_hole(self, s):
+        c, w = main_copy(s), terminal_window(s)
+        hole = c["terminal"]["hole"]
+        self.assertEqual((w["x"], w["y"], w["w"], w["h"]), (hole["x"], hole["y"], hole["w"], hole["h"]))
+        self.assertFalse(w["hidden"])
+        # Inside the card where it ends up.
+        self.assertGreaterEqual(hole["x"], c["x"])
+        self.assertGreaterEqual(hole["y"], c["y"])
+        self.assertLessEqual(hole["x"] + hole["w"], c["x"] + c["w"])
+        self.assertLessEqual(hole["y"] + hole["h"], c["y"] + c["h"])
+
+    def test_the_window_sits_in_the_hole_with_the_keyboard_and_stays(self):
+        sh = self.shell
+        s = self.open_terminal()
+        self.assert_in_hole(s)
+        # The keyboard is the window's, not a grab's.
+        self.assertEqual(grabs(s), 0)
+        # A view update (the program's title) once took the keyboard away,
+        # and the daemon closed the notch.
+        time.sleep(2)
+        s = sh.snapshot()
+        self.assertEqual(main_copy(s)["mode"], "expanded")
+        self.assertTrue(terminal_window(s)["focused"])
+        sh.screenshot("terminal")
+
+    def test_closing_hides_the_window_and_gives_up_the_keyboard(self):
+        sh = self.shell
+        self.open_terminal()
+        sh.ipc("close")
+        s = sh.until(lambda s: main_copy(s)["mode"] == "compact" and terminal_window(s)["hidden"], 3,
+                     "the window gone with the notch")
+        self.assertFalse(terminal_window(s)["focused"])
+        self.assertIsNone(main_copy(s)["terminal"])
+
+    def test_on_a_side_edge_with_reserve_the_window_still_sits_in_the_hole(self):
+        # GNOME kept a window out of the reserved strip: the window never
+        # reached the hole and stayed unseen.
+        sh = self.shell
+        sh.ipc("set", "position", json.dumps({"edge": "left", "offset": 0.5}))
+        sh.until(lambda s: main_copy(s)["edge"] == "left" and s["workArea"][main_copy(s)["monitor"]]["x"] > 0, 3,
+                 "the notch on the left edge, its strip reserved")
+        self.assert_in_hole(self.open_terminal())
+
+
 class EnableDisable(ShellCase):
     def test_disable_takes_away_everything_enable_added(self):
         sh = self.shell

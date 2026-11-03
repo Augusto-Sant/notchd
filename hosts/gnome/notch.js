@@ -4,6 +4,7 @@
 // facts back: the pointer, a press, the keyboard, its measured depths. It
 // decides nothing.
 
+import Cairo from 'cairo';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
@@ -24,6 +25,10 @@ const ALONG_MS = 460;
 const DEPTH_MS = 380;
 const FADE_OUT_MS = 70;
 const FADE_IN_MS = 180;
+// Into the spring, the card is past its final size in both axes (OutBack
+// overshoots, OutQuint is at 99%): a terminal's window can take its final
+// place without showing outside the card.
+const REVEAL_MS = 250;
 // Held this long, a press picks the card up (NotchCard.qml's holdToDrag);
 // moving farther than DRAG_SLOP first makes it a click.
 const HOLD_MS = 250;
@@ -138,7 +143,7 @@ class NotchCopy extends St.Widget {
 
         // Not while dragged: the card jumps under the pointer and away from
         // it, and each enter and leave made the daemon send a new state.
-        this.connect('notify::hover', () => !this._dragging && this._send(Protocol.pointer(this.notchId, this._pointerScreen(this.hover ? 'enter' : 'leave'), this.hover ? 'enter' : 'leave')));
+        this.connect('notify::hover', () => this._hoverChanged());
         this.connect('button-press-event', (actor, event) => {
             // A press on a button inside is the button's: from GNOME 49 an
             // St.Button lets it bubble here, and pinning would take a grab
@@ -153,6 +158,239 @@ class NotchCopy extends St.Widget {
         this.connect('key-press-event', (actor, event) => this._key(event));
 
         Main.layoutManager.addTopChrome(this, {trackFullscreen: true});
+    }
+
+    // The pointer is on the notch while it is on the card or on its
+    // terminal's window (in the card's hole): one `enter` and one `leave`
+    // for both. Not while dragged: the card jumps under the pointer and
+    // away from it, and each enter and leave made the daemon send a state.
+    _hoverChanged() {
+        if (this._dragging)
+            return;
+        const on = this.hover || !!this._termHover || this._pointerInHole();
+        if (on === this._sentHover)
+            return;
+        this._sentHover = on;
+        const ev = on ? 'enter' : 'leave';
+        this._send(Protocol.pointer(this.notchId, this._pointerScreen(ev), ev));
+    }
+
+    // The pointer in the card's hole is on the notch, whether the
+    // terminal's window is there yet or not: the card no longer sees it,
+    // and leaving there closed the open notch, which opened again under
+    // the pointer, and so on.
+    _pointerInHole() {
+        const r = this._holeRect;
+        if (!r || !this._termRef)
+            return false;
+        const [px, py] = global.get_pointer();
+        return px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h;
+    }
+
+    // ------------------------------------------------------------- terminal
+    // The ref of the terminal surface the copy's open view has, from the
+    // daemon's trees (not the actors, which a content swap takes away for a
+    // moment), or null.
+    _terminalRef(copy, mode) {
+        if (mode !== 'expanded' || !this._host.terminals || !copy)
+            return null;
+        const find = node => {
+            if (!node || typeof node !== 'object')
+                return null;
+            if (node.t === 'surface' && node.kind === 'terminal' && node.visible !== false)
+                return node.ref;
+            for (const child of node.children ?? []) {
+                const ref = find(child);
+                if (ref)
+                    return ref;
+            }
+            return null;
+        };
+        for (const [, , tree] of this._parts(copy, false)) {
+            const ref = find(tree);
+            if (ref)
+                return ref;
+        }
+        return null;
+    }
+
+    // The view's terminal surface, as the open notch shows it: the frame
+    // view.js drew (`_surface`), or null.
+    _terminalActor() {
+        if (this._shown !== 'expanded' || this._pending || !this._host.terminals)
+            return null;
+        return this._viewActors(a => a._surface)[0] ?? null;
+    }
+
+    // The terminal's window over its frame. It goes to where the frame
+    // will be once the card stops, as soon as the card is past that size
+    // (REVEAL_MS into the spring), or a moment after a layout that did not
+    // move the card (the frame is laid out by then); hidden at once when the
+    // notch no longer shows it. The card opens a hole over the window once
+    // the window says it is there (`onPlaced`), never onto the desktop.
+    _placeTerminal() {
+        if (this._termTimer)
+            GLib.source_remove(this._termTimer);
+        this._termTimer = 0;
+        if (!this._terminalActor()) {
+            this._hideTerminal();
+            return;
+        }
+        if (this._motion)
+            return;
+        this._termTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => {
+            this._termTimer = 0;
+            if (!this._motion)
+                this._showTerminalAt(this._target);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Where the frame will be with the card at `to` ({x, y, w, h}): its
+    // offset in the content, the content placed as _placeContent does.
+    _terminalRect(actor, to) {
+        const b = this._contentBox;
+        if (!b || !to)
+            return null;
+        let cx = (to.w - b.w) / 2, cy = (to.h - b.h) / 2;
+        if (this._edge === 'top')
+            cy = b.near;
+        else if (this._edge === 'bottom')
+            cy = to.h - b.near - b.h;
+        else if (this._edge === 'left')
+            cx = b.near;
+        else
+            cx = to.w - b.near - b.w;
+        let fx = 0, fy = 0;
+        for (let a = actor; a && a !== this._content; a = a.get_parent()) {
+            const box = a.get_allocation_box();
+            fx += box.x1;
+            fy += box.y1;
+        }
+        const own = actor.get_allocation_box();
+        return {x: to.x + Math.round(cx) + fx, y: to.y + Math.round(cy) + fy, w: own.x2 - own.x1, h: own.y2 - own.y1};
+    }
+
+    _showTerminalAt(to) {
+        const actor = this._terminalActor();
+        if (!actor || !actor.mapped) {
+            this._hideTerminal();
+            return;
+        }
+        const rect = this._terminalRect(actor, to);
+        if (!rect || rect.w <= 0 || rect.h <= 0)
+            return;
+        if (this._termRef && this._termRef !== actor._surface.ref)
+            this._hideTerminal();
+        this._termRef = actor._surface.ref;
+        this._holeRect = rect;
+        this._bg.queue_repaint();
+        this._host.terminals.show(this._termRef, actor._surface.run, rect, this);
+        if (this._termFocus)
+            this._host.terminals.focus(this._termRef);
+    }
+
+    // The terminal's window is in place, or no longer.
+    // In place, the window appears as content does: the card's background
+    // over it fades away (the window itself stays opaque, or the desktop
+    // would show through it).
+    onPlaced(placed) {
+        if (this._destroyed)
+            return;
+        this._termPlaced = placed;
+        if (placed)
+            this._fadeCover(0, FADE_IN_MS);
+        else
+            this._holeRect = null;
+        this._bg.queue_repaint();
+        this._hoverChanged();
+    }
+
+    // How much of the card's background covers the window in its hole
+    // (0 to 1), eased to `target` over `ms`; `done()` once there.
+    _fadeCover(target, ms, done = null) {
+        this._coverMotion?.stop();
+        this._coverMotion = null;
+        const from = this._cover ?? 1;
+        if (!animations() || !this.mapped || ms <= 0 || from === target) {
+            this._cover = target;
+            this._bg.queue_repaint();
+            done?.();
+            return;
+        }
+        const timeline = new Clutter.Timeline({actor: this, duration: ms});
+        timeline.connect('new-frame', () => {
+            this._cover = from + (target - from) * Math.min(1, timeline.get_elapsed_time() / ms);
+            this._bg.queue_repaint();
+        });
+        timeline.connect('completed', () => {
+            this._coverMotion = null;
+            this._cover = target;
+            this._bg.queue_repaint();
+            done?.();
+        });
+        this._coverMotion = timeline;
+        timeline.start();
+    }
+
+    // The hole, in the card's coordinates: the window's rectangle on the
+    // stage less where the card is now (it follows the window while the
+    // card still springs). Only over a window in place.
+    get _hole() {
+        const r = this._holeRect;
+        if (!r || !this._termPlaced)
+            return null;
+        return {x: r.x - this.x, y: r.y - this.y, w: r.w, h: r.h};
+    }
+
+    // The window fades out with the content (the card's background covers
+    // it, 70 ms), then goes; the hole closes with it (`onPlaced(false)`).
+    // Shown again meanwhile, it stays.
+    _hideTerminal() {
+        const ref = this._termRef;
+        this._termRef = null;
+        this._termHover = false;
+        if (ref && this._termPlaced && !this._destroying) {
+            this._fadeCover(1, FADE_OUT_MS, () => {
+                if (this._termRef !== ref)
+                    this._host.terminals?.hide(ref, this);
+            });
+        } else if (ref) {
+            this._host.terminals?.hide(ref, this);
+        }
+        if (!this._termPlaced)
+            this._holeRect = null;
+        this._hoverChanged();
+    }
+
+    // What the terminal's window says (terminal/helper.js): the pointer on
+    // it, or what the QML surface fires as an action of the module's view.
+    onLine(line) {
+        if (line === 'pointer in' || line === 'pointer out') {
+            this._termHover = line === 'pointer in';
+            this._hoverChanged();
+            return;
+        }
+        const module = this._termRef?.replace(/^term:/, '');
+        if (module && ['typed', 'leave', 'keyboard', 'restart'].includes(line))
+            this._send(Protocol.event(module, 'expanded', line, null));
+    }
+
+    // The card is picked everywhere but its hole: there the pointer reaches
+    // the terminal's window below.
+    // Without a hole, as Clutter's own pick: chaining up to it from here
+    // lost the children (no tab took a click).
+    vfunc_pick(context) {
+        const h = this._hole;
+        const W = this.width, H = this.height;
+        const boxes = h ? [[0, 0, W, h.y], [0, h.y + h.h, W, H], [0, h.y, h.x, h.y + h.h], [h.x + h.w, h.y, W, h.y + h.h]]
+            : [[0, 0, W, H]];
+        for (const [x1, y1, x2, y2] of boxes) {
+            if (x2 > x1 && y2 > y1)
+                this.pick_box(context, new Clutter.ActorBox({x1, y1, x2, y2}));
+        }
+        for (const child of this.get_children())
+            child.pick(context);
     }
 
     // A destroyed copy says nothing: a fade it had running stops with it
@@ -342,8 +580,7 @@ class NotchCopy extends St.Widget {
         this._dragGrab?.dismiss();
         this._dragGrab = null;
         // The hover it kept quiet about while dragged.
-        const ev = this.hover ? 'enter' : 'leave';
-        this._send(Protocol.pointer(this.notchId, this._pointerScreen(ev), ev));
+        this._hoverChanged();
         const drag = this._drag;
         if (!drop || !drag) {
             this._drag = null;
@@ -452,6 +689,10 @@ class NotchCopy extends St.Widget {
     _replace(mode, parts, tabs, vertical) {
         const fading = !!this._pending;
         this._pending = {mode, parts, tabs, vertical};
+        // The terminal fades out with the content it belongs to, not after
+        // it: gone before the card shrinks past its window.
+        if (this._termRef)
+            this._hideTerminal();
         if (fading)
             return;
         if (animations() && this._content.child && this._content.opacity > 0) {
@@ -570,6 +811,7 @@ class NotchCopy extends St.Widget {
         this._partCtx = parts.map(([module, slot]) => ({
             theme: this.theme,
             onAction: (action, value) => this._send(Protocol.event(module, slot, action, value)),
+            terminals: !!this._host.terminals,
         }));
         this._partActors = parts.map(([, slot, tree], i) => (slot === DOT ? this._dot() : render(tree, this._partCtx[i])));
         this._partBox = null;
@@ -731,6 +973,7 @@ class NotchCopy extends St.Widget {
         this._bg.queue_repaint();
         this._placeNavLabel();
         this._measure();
+        this._placeTerminal();
     }
 
     // Against the edge past its near padding, centered along it, on whole
@@ -767,10 +1010,25 @@ class NotchCopy extends St.Widget {
             return;
         }
         const from = {x: this.x, y: this.y, w: this.width, h: this.height};
+        // Already there: nothing to spring (a timeline of 460 ms standing
+        // still, after a layout that changed nothing).
+        if (same(from)) {
+            this._placeTerminal();
+            return;
+        }
         const lerp = (a, b, t) => a + (b - a) * t;
         const timeline = new Clutter.Timeline({actor: this, duration: ALONG_MS});
+        let revealed = false;
         timeline.connect('new-frame', () => {
             const ms = timeline.get_elapsed_time();
+            if (!revealed && ms >= REVEAL_MS) {
+                revealed = true;
+                if (this._terminalActor())
+                    this._showTerminalAt(to);
+            }
+            // The hole stays over the window as the card moves.
+            if (this._holeRect)
+                this._bg.queue_repaint();
             const along = outBack(Math.min(1, ms / ALONG_MS));
             const depth = outQuint(Math.min(1, ms / DEPTH_MS));
             this.set_position(Math.round(lerp(from.x, to.x, along)), Math.round(lerp(from.y, to.y, depth)));
@@ -780,6 +1038,7 @@ class NotchCopy extends St.Widget {
             this.set_position(to.x, to.y);
             this.set_size(to.w, to.h);
             this._motion = null;
+            this._placeTerminal();
         });
         this._motion = {to, timeline};
         timeline.start();
@@ -834,6 +1093,32 @@ class NotchCopy extends St.Widget {
         trace(cr, paths.fill);
         cr.setSourceRGBA(c.background.r, c.background.g, c.background.b, 1);
         cr.fill();
+        // The terminal's window shows through a hole, its frame's corners
+        // rounded (the window's square corners stay under the card).
+        const hole = this._hole;
+        if (hole) {
+            cr.save();
+            cr.identityMatrix();
+            const r = Math.min(this.theme.radius, hole.w / 2, hole.h / 2);
+            const {x, y, w: hw, h: hh} = hole;
+            cr.newPath();
+            cr.arc(x + hw - r, y + r, r, -Math.PI / 2, 0);
+            cr.arc(x + hw - r, y + hh - r, r, 0, Math.PI / 2);
+            cr.arc(x + r, y + hh - r, r, Math.PI / 2, Math.PI);
+            cr.arc(x + r, y + r, r, Math.PI, 3 * Math.PI / 2);
+            cr.closePath();
+            cr.setOperator(Cairo.Operator.CLEAR);
+            cr.fillPreserve();
+            const cover = this._cover ?? 0;
+            if (cover > 0) {
+                cr.setOperator(Cairo.Operator.OVER);
+                cr.setSourceRGBA(c.background.r, c.background.g, c.background.b, cover);
+                cr.fill();
+            } else {
+                cr.newPath();
+            }
+            cr.restore();
+        }
         trace(cr, paths.stroke);
         const stroke = this._nav?.selected ? c.accent : this._nav ? c.muted : c.line;
         cr.setSourceRGBA(stroke.r, stroke.g, stroke.b, stroke.a);
@@ -848,6 +1133,29 @@ class NotchCopy extends St.Widget {
     // notch: closing drops it.
     _keyboard(want, mode) {
         const open = mode !== 'rest' && mode !== 'compact';
+        // With a terminal, its window takes the keyboard instead of a grab
+        // (under a grab no window has it). Focus going to any other window
+        // is the click away.
+        const terminal = this._terminalRef(this._copy, mode);
+        if (want !== 'none' && open && terminal) {
+            if (this._modal)
+                this._release();
+            if (!this._termFocus) {
+                this._termFocus = true;
+                this._focusWatch = global.display.connect('notify::focus-window', () => {
+                    const win = global.display.focus_window;
+                    if (!win || this._host.terminals?.owns(win))
+                        return;
+                    this._unfocusTerminal();
+                    this._send(Protocol.pin(this.notchId, this._wireScreen, false));
+                });
+                this._host.terminals.focus(terminal);
+                this._send(Protocol.focus(this.notchId, this._wireScreen, true));
+            }
+            return;
+        }
+        if (this._termFocus)
+            this._unfocusTerminal();
         if (want !== 'none' && open && !this._modal) {
             try {
                 this._modal = Main.pushModal(this);
@@ -872,6 +1180,17 @@ class NotchCopy extends St.Widget {
         }
     }
 
+    _unfocusTerminal() {
+        if (!this._termFocus)
+            return;
+        this._termFocus = false;
+        if (this._focusWatch)
+            global.display.disconnect(this._focusWatch);
+        this._focusWatch = 0;
+        this._host.terminals?.unfocus();
+        this._send(Protocol.focus(this.notchId, this._wireScreen, false));
+    }
+
     // For the test hook: what this copy shows and where, the card's target
     // size (not the eased one).
     describe() {
@@ -882,6 +1201,9 @@ class NotchCopy extends St.Widget {
             edge: this._edge, dragging: !!this._dragging,
             ...(this._target ?? {x: this.x, y: this.y, w: this.width, h: this.height}),
             card: {along: this._cardAlong ?? 0, depth: this._cardDepth ?? 0}, modal: !!this._modal,
+            // The hole on the stage, where the window must be (the card may
+            // still be springing around it).
+            terminal: this._termRef ? {ref: this._termRef, hole: this._hole ? this._holeRect : null, focus: !!this._termFocus} : null,
             hasContent: !!this._content.child, shown: this._copy?.shown ?? [],
             navLabel: this._navLabel ? this._navLabel.get_children().flatMap(c => (c instanceof St.Label ? [c.text] : c.get_children().map(l => l.text))) : null,
             // The view's progress bars and pictures (a test presses a bar
@@ -981,7 +1303,17 @@ class NotchCopy extends St.Widget {
         this._motion = null;
         this._navLabel?.destroy();
         this._navLabel = null;
-        // Its last word: the keyboard it held is let go.
+        // Its terminal's window goes at once: no fade outlives the copy.
+        this._destroying = true;
+        this._coverMotion?.stop();
+        this._coverMotion = null;
+        if (this._termTimer)
+            GLib.source_remove(this._termTimer);
+        this._termTimer = 0;
+        // Its last word: the keyboard it held is let go, and its terminal's
+        // window hidden.
+        this._unfocusTerminal();
+        this._hideTerminal();
         this._release();
         this._destroyed = true;
         Main.layoutManager.removeChrome(this);

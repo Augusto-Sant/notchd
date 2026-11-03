@@ -12,9 +12,10 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import * as Protocol from './lib/Protocol.js';
-import {DaemonClient} from './client.js';
+import {DaemonClient, socketPath} from './client.js';
 import {NotchCopy, wireKey} from './notch.js';
 import {Screens} from './screens.js';
+import * as Terminal from './terminal.js';
 import {Theme} from './theme.js';
 import {PRIMITIVES} from './view.js';
 
@@ -34,13 +35,18 @@ export default class NotchdExtension extends Extension {
         }
         this._copies = new Map();
         this._struts = [];
-        this._theme = new Theme(() => this._redraw());
+        this._theme = new Theme(() => {
+            this._terminals?.recolor();
+            this._redraw();
+        });
         this._screens = new Screens(msg => this._client?.send(msg), () => this._redraw());
         const version = this.metadata['version-name'] ?? '0';
         this._client = new DaemonClient({
+            // A terminal surface where the helper can run (VTE for GTK 4).
             hello: () => Protocol.hello('gnome-shell', version, 'default',
-                {primitives: PRIMITIVES, surfaces: [], webview: false, canvas: false}),
-            onConnected: () => {
+                {primitives: PRIMITIVES, surfaces: this._terminals ? ['terminal'] : [], webview: false, canvas: false}),
+            onConnected: welcome => {
+                this._exe = welcome?.exe ?? '';
                 this._screens.resend();
                 for (const copy of this._copies.values())
                     copy.resendMeasure();
@@ -59,6 +65,7 @@ export default class NotchdExtension extends Extension {
             theme: this._theme,
             send: msg => this._client.send(msg),
             store: () => this._client.store,
+            terminals: null,
             names: () => this._screens.names ?? [],
             monitorFor: name => {
                 const i = this._screens.names?.indexOf(name) ?? -1;
@@ -77,11 +84,27 @@ export default class NotchdExtension extends Extension {
                     copies: [...(this._copies?.entries() ?? [])].map(([id, c]) => ({id, ...c.describe()})),
                     struts: (this._struts ?? []).map(a => ({x: a.x, y: a.y, w: a.width, h: a.height})),
                     navigating: !!this._navActor,
+                    terminals: this._terminals?.describe() ?? null,
                     navigateAction: this._navigateAction ?? 0,
                 }));
             }).catch(e => console.warn(`notchd: no test hooks: ${e.message}`));
         }
-        this._client.start();
+        // The client starts once it is known whether terminals can be
+        // drawn, which the hello says.
+        Terminal.probe(ok => {
+            if (!this._client)
+                return;
+            if (ok) {
+                this._terminals = new Terminal.Terminals({
+                    theme: this._theme, helper: `${this.path}/terminal/helper.js`,
+                    exe: () => this._exe || GLib.find_program_in_path('notchd') || '', socket: () => socketPath(),
+                });
+                this._host.terminals = this._terminals;
+            } else {
+                console.log('notchd: no VTE for GTK 4, terminals show a placeholder');
+            }
+            this._client.start();
+        });
         // The navigation key (the schema's `navigate`), as `notchd ipc
         // navigate`: it starts navigation, and leaves it while its grab
         // holds the keyboard (POPUP, the grab's action mode).
@@ -106,6 +129,8 @@ export default class NotchdExtension extends Extension {
         for (const copy of this._copies?.values() ?? [])
             copy.destroy();
         this._copies = null;
+        this._terminals?.destroy();
+        this._terminals = null;
         this._clearStruts();
         this._endNavigation();
         this._screens?.destroy();

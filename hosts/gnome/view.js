@@ -1,7 +1,8 @@
 // A module's view tree (docs/architecture.md, "Primitive tree (v1)") drawn
-// with St. Every v1 primitive but canvas and surface is drawn; those are a
-// visible placeholder, never a blank (the hello's caps say which ones this
-// UI has, so the daemon knows too).
+// with St. Every v1 primitive but canvas is drawn (a `surface` is a frame
+// a terminal window shows through); what is not is a visible placeholder,
+// never a blank (the hello's caps say which ones this UI has, so the daemon
+// knows too).
 //
 // A new `view` updates the actors it drew last time where it can, as the
 // QML's Repeaters keep their items: a node equal to the last is kept as is,
@@ -733,14 +734,43 @@ function list(node, ctx, depth, actor) {
     return actor;
 }
 
+// The free surface: a rectangle something else draws (docs/architecture.md,
+// "Free surface"). A `terminal` is a window of terminal.js's that the notch
+// keeps over this frame (NotchCopy leaves a hole in the card for it); the
+// actor is the frame only, and says which surface it is (`_surface`). Where
+// the terminal cannot be drawn (no VTE for GTK 4), and for any other kind,
+// a frame saying what is missing.
+function surface(node, ctx) {
+    const theme = ctx.theme;
+    const h = Number(node.h) > 0 ? Number(node.h) : 120;
+    const frame = new St.Widget({
+        reactive: false, layout_manager: new Clutter.BinLayout(),
+        style: `border: 1px solid ${theme.css('line')}; border-radius: ${theme.radius}px; min-width: ${Number(node.w) > 0 ? Number(node.w) : 240}px; height: ${h}px;`,
+    });
+    if (node.kind === 'terminal' && ctx.terminals) {
+        frame._surface = {ref: node.ref, run: typeof node.id === 'string' ? node.id : ''};
+        return frame;
+    }
+    frame.style += ` background-color: ${theme.css('surface')};`;
+    const why = node.kind === 'terminal'
+        ? 'the terminal needs VTE for GTK 4 (Ubuntu: gir1.2-vte-3.91, Fedora: vte291-gtk4)'
+        : `a ${node.kind} surface is not drawn here`;
+    frame.add_child(new St.Label({
+        text: why, style: `color: ${theme.css('muted')}; font-size: ${theme.fonts.caption}px; padding: 12px;`,
+        x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER,
+    }));
+    return frame;
+}
+
 const BUILD = {
     row: rowColumn, column: rowColumn, stack, text, icon, spacer, progress,
-    button, chip, image, meter, equalizer, list,
+    button, chip, image, meter, equalizer, list, surface,
 };
 // The primitives that update an actor in place (the others draw again).
 const UPDATES = new Set(['row', 'column', 'stack', 'text', 'progress', 'meter', 'equalizer', 'list']);
 
-// `ctx`: { theme, onAction(action, value), onAccent }. `prev`: the actor
+// `ctx`: { theme, onAction(action, value), onAccent, terminals (whether a
+// terminal surface can be drawn) }. `prev`: the actor
 // drawn at this place last time, or null; the result may be it.
 export function render(node, ctx, depth = 0, prev = null) {
     if (!node)
