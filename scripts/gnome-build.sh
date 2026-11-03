@@ -16,7 +16,8 @@ rm -rf -- "$dest"
 mkdir -p -- "$dest/lib"
 cp -r -- "$root/hosts/gnome/." "$dest/"
 
-shared=(core/client/Protocol.js core/client/prims/Tree.js core/Outline.js core/Position.js)
+shared=(core/client/Protocol.js core/client/prims/Tree.js core/Outline.js core/Position.js
+        core/Config.js core/settings/Settings.js)
 for src in "${shared[@]}"; do
   name=$(basename "$src")
   names=$(grep -oE '^(function|var) [A-Za-z_$][A-Za-z0-9_$]*' "$root/$src" | awk '{print $2}' | sort -u | paste -sd, -)

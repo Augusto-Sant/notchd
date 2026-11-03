@@ -2,6 +2,8 @@
 
 `core/settings/SettingsWindow.qml`. An ordinary toplevel window with a fixed size, so tiling compositors float it, and it takes keyboard input, which the notch overlay never does. Every change goes through `NotchService.setConfigValue`: it applies at once and is sent to the daemon (`set`), which writes the config file atomically and sends the result back; sets to one key within 120 ms are one write, so a slider drag is not a write per step.
 
+On GNOME the same schema is drawn by the extension's preferences (`hosts/gnome/prefs.js`, libadwaita): one Adwaita control per field type, the edits sent as here; [architecture.md](architecture.md#gnome-ui-planned-decided-2026-11-02), "Settings (phase 4)", has the mapping.
+
 ## Fields
 
 The window is generated from `NotchService.settingsSchema`: the daemon's `schema` message ([architecture.md](architecture.md#settings)) and the host's own fields.

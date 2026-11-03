@@ -126,5 +126,8 @@ env -u DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE -u DBUS_SESSION_BUS_ADDRESS \
       # it finishes starting, and a minimal system may have no loader for it.
       gsettings set org.gnome.desktop.background picture-options none
     fi
-    exec gnome-shell --wayland --no-x11 "$@"
+    # What D-Bus starts (the preferences of the extension) draws on this
+    # session: GNOME 46 does not tell the bus its Wayland display itself.
+    dbus-update-activation-environment WAYLAND_DISPLAY=wayland-notchd
+    exec gnome-shell --wayland --no-x11 --wayland-display wayland-notchd "$@"
   ' "$uuid" "${mode[@]}" "${extra[@]}"
