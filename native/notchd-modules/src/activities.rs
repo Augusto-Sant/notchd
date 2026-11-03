@@ -3,16 +3,17 @@
 //! the fields of a push are in docs/ipc.md.
 
 use crate::module::{CoreModule, Ctx, Effect, Facts};
-use crate::tree::{column, glyph, node, row, text, with};
+use crate::tree::{Ic, column, icon, node, row, text, with};
 use notchd_proto::{Node, Slot};
 use serde_json::{Value, json};
 
-const DEFAULT_ICON: u32 = 0xF02FC;
+const DEFAULT_ICON: Ic = ("notification", 0xF02FC);
 
 #[derive(Clone, Debug, PartialEq)]
 struct Item {
     id: String,
-    icon: String,
+    /// A glyph the pusher gave; none draws the default named icon.
+    icon: Option<String>,
     title: String,
     subtitle: String,
     /// 0..=100, or -1 for no bar.
@@ -48,7 +49,7 @@ impl Activities {
         };
         let item = Item {
             id: str_of("id", format!("activity-{now}")),
-            icon: str_of("icon", glyph(DEFAULT_ICON)),
+            icon: Some(str_of("icon", String::new())).filter(|s| !s.is_empty()),
             title: str_of("title", String::new()),
             subtitle: str_of("subtitle", String::new()),
             progress: if progress.is_finite() && progress >= 0.0 {
@@ -103,9 +104,13 @@ fn percent(item: &Item) -> Option<Value> {
     })
 }
 
-/// A glyph in the size a text size names, as the modules draw theirs.
+/// The item's mark in the size a text size names, as the modules draw theirs:
+/// the glyph it was pushed with, else the default named icon.
 fn mark(item: &Item, size: &str) -> Value {
-    text(&item.icon, "accent", size)
+    match &item.icon {
+        Some(g) => json!({"t": "icon", "glyph": g, "tone": "accent", "size": size}),
+        None => icon(DEFAULT_ICON, "accent", json!(size)),
+    }
 }
 
 fn bar(item: &Item) -> Option<Value> {
@@ -245,10 +250,7 @@ mod tests {
         );
         assert!(m.facts(0).active);
         assert_eq!(m.take_effects(), vec![Effect::Peek(3000)]);
-        assert_eq!(
-            texts(&m.view(Slot::Compact, 0).unwrap()),
-            ["󰋼", "Deploy", "40%"]
-        );
+        assert_eq!(texts(&m.view(Slot::Compact, 0).unwrap()), ["Deploy", "40%"]);
     }
 
     #[test]

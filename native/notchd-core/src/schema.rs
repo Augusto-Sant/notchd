@@ -338,6 +338,7 @@ pub fn build(i: &Inputs) -> Schema {
 
     Schema {
         rev: 0,
+        modules: Some(i.catalog.to_vec()),
         pages: pages
             .iter()
             .map(|p| Page {

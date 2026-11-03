@@ -209,7 +209,7 @@ pub type Sink = Box<dyn Fn(ModEvent) + Send + 'static>;
 pub fn error_row(text: &str, log_path: &Path) -> Node {
     let row = serde_json::json!({
         "t": "row", "gap": 6, "align": "center", "children": [
-            {"t": "icon", "glyph": "\u{f071}", "tone": "danger"},
+            {"t": "icon", "glyph": "\u{f071}", "name": "dialog-warning", "tone": "danger"},
             {"t": "text", "text": format!("{text}  {}", log_path.display()),
              "tone": "danger", "elide": "end", "fill": true},
             {"t": "button", "label": "Restart", "action": "restart", "variant": "outline"}

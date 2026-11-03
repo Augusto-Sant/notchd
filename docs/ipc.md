@@ -64,7 +64,14 @@ o.bind("SUPER + N", "Navigate notches", "omarchy-shell eryk.notchd navigate")   
 bind = SUPER, N, exec, qs -p <checkout> ipc call notchd navigate   # standalone, hyprland.conf
 ```
 
-The daemon decides it all (`native/notchd-core/src/navigate.rs`, driven by the `key` messages the navigation window sends); the QML only draws the highlight.
+On GNOME the extension binds the key itself: Super+Alt+N (Super+N is GNOME's "focus the active notification"). Another key:
+
+```sh
+gsettings --schemadir ~/.local/share/gnome-shell/extensions/notchd@eryk-vieira.github.io/schemas \
+  set org.gnome.shell.extensions.notchd navigate "['<Super>period']"
+```
+
+The daemon decides it all (`native/notchd-core/src/navigate.rs`, driven by the `key` messages the navigation window sends); the QML and the GNOME extension only draw the highlight.
 
 ## Activities
 

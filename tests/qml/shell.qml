@@ -1140,7 +1140,8 @@ ShellRoot {
       root.check(JSON.stringify(lists) === JSON.stringify(["notch", "agent", "terminal", "standalone"]),
                  "the Modules page does not list agents and standalone modules apart: " + JSON.stringify(lists))
       root.check(svc.moduleCatalog.some(function(m) { return m.moduleId === "claude" && m.agent && !m.standalone }), "claude is no agent")
-      root.check(svc.moduleSetting("codex", "command") === "codex", "codex's command default: " + svc.moduleSetting("codex", "command"))
+      root.check(svc.reportedCatalog.every(function(m) { return m.moduleId === "osd" }), "the host reported more than its own modules: " + JSON.stringify(svc.reportedCatalog.map(function(m) { return m.moduleId })))
+      root.check(svc.moduleSetting("codex", "command") === "codex","codex's command default: " + svc.moduleSetting("codex", "command"))
       root.check(svc.agentCommand("media", "toggle").indexOf("no agent media") === 0, "media took an agent command")
       svc.setConfigValue("osd.enabled", undefined)
       yield root.settle(svc)
@@ -1301,14 +1302,14 @@ ShellRoot {
       root.check(!!m && m.active && notch.compactModule === null, "idle timer is in the closed notch")
       yield root.ask(timed, "timer", ["2s Tea"], function(a) { root.check(a === "ok", "start refused: " + a) })
       yield root.settle(timed)
-      var clock = root.texts(m.tree("compact"))[1]
+      var clock = root.texts(m.tree("compact"))[0]
       root.check(notch.compactModule === m && !!m.compact, "running timer not in the closed notch")
       root.check(clock === "0:02" || clock === "0:01", "clock: " + clock)
       timed.dismissPeek(null)
       yield root.wait(2600)
       yield root.settle(timed)
       root.check(timed.peeking(m), "no peek at the end")
-      root.check(notch.compactModule === m && root.texts(m.tree("compact"))[1] === "Time's up", "done text: " + JSON.stringify(root.texts(m.tree("compact"))))
+      root.check(notch.compactModule === m && root.texts(m.tree("compact"))[0] === "Time's up", "done text: " + JSON.stringify(root.texts(m.tree("compact"))))
       timed.dismissPeek(null)
       yield root.ask(timed, "timer", ["stop"], function(a) { root.check(a === "ok", "stop refused: " + a) })
       yield root.settle(timed)

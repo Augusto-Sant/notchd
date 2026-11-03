@@ -10,7 +10,7 @@
 //! pausing, so a short pause does not make it jump back to rest.
 
 use crate::module::{CoreModule, Effect, Facts, Shown};
-use crate::tree::{Settings, column, glyph, icon, node, row, text, with};
+use crate::tree::{Ic, Settings, column, icon, icon_button, node, row, text, with};
 use notchd_proto::provider::{MediaData, Player};
 use notchd_proto::{EventValue, Node, Slot};
 use notchd_providers::media::MediaCommand;
@@ -46,7 +46,7 @@ pub struct Media {
 impl Media {
     pub fn new() -> Media {
         let mut m = Media {
-            settings: Settings::new("media", include_str!("../../../core/modules/media.json")),
+            settings: Settings::new("media", include_str!("../modules/media.json")),
             players: Vec::new(),
             read_at: 0,
             key: String::new(),
@@ -125,7 +125,7 @@ impl Media {
     fn cover(p: &Player, size: f64, radius: &str) -> Value {
         json!({
             "t": "image", "src": p.art_url, "size": size, "radius": radius, "fit": "crop",
-            "fallback": icon(&glyph(0xF075A), "muted", Some(size * 0.55)),
+            "fallback": icon(("audio-x-generic", 0xF075A), "muted", json!(size * 0.55)),
         })
     }
 
@@ -256,10 +256,8 @@ impl Media {
                 ],
             ));
         }
-        let button = |g: u32, action: &str, enabled: bool, big: bool| {
-            let mut b = json!({
-                "t": "button", "glyph": glyph(g), "action": action, "enabled": enabled,
-            });
+        let button = |g: Ic, action: &str, enabled: bool, big: bool| {
+            let mut b = with(icon_button(g, action), "enabled", json!(enabled));
             if big {
                 b = with(b, "big", json!(true));
             }
@@ -270,14 +268,23 @@ impl Media {
             26.0,
             vec![
                 spacer.clone(),
-                button(0xF04AE, "previous", p.can_prev, false),
                 button(
-                    if p.playing { 0xF03E4 } else { 0xF040A },
+                    ("media-skip-backward", 0xF04AE),
+                    "previous",
+                    p.can_prev,
+                    false,
+                ),
+                button(
+                    if p.playing {
+                        ("media-playback-pause", 0xF03E4)
+                    } else {
+                        ("media-playback-start", 0xF040A)
+                    },
                     "toggle",
                     true,
                     true,
                 ),
-                button(0xF04AD, "next", p.can_next, false),
+                button(("media-skip-forward", 0xF04AD), "next", p.can_next, false),
                 spacer,
             ],
         ));

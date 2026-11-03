@@ -16,6 +16,7 @@ Working on notchd itself. For using it, see the [README](README.md); for the rul
 | Omarchy 4 | | the Omarchy host, `make validate`, `make restart` |
 | `qmltermwidget` (optional) | `qmltermwidget` | the Linux UI's terminal view for `claude`, `codex` and your terminals (`make deps`); without it their QML tests only check the message that asks for it |
 | `curl` | `curl` | the daemon's plan-usage requests (tests use a fake network) |
+| GNOME Shell (optional) | `gnome-shell`, `mutter-devkit`, `python-gobject`; `podman` for GNOME 46 | the GNOME extension (`hosts/gnome/`): `make gnome-dev`, `make gnome-test`, and the `-46` ones. Not needed for `make check`; your session stays what it is |
 | The voice modules' parts (optional) | none to develop: Settings › Components installs them (table below). Tests use fakes (a fake bridge, a fake LocalAI and `voxtype`, fake `pacman` and a local download server), so `make check` needs none | Voice, Codex Live |
 
 ## Optional components
@@ -71,11 +72,13 @@ core/                 the Linux UI: no desktop-specific code
   Terminal.js         the key that leaves a terminal
   terminal/           TerminalSurface.qml (the frame and the attach) and TerminalView.qml: a terminal
                       (QMLTermWidget, optional package; `notchd attach` feeds it); lint skips them
-  modules/            the JSON file of each built-in module (title, settings, defaults, agent or live
-                      kind): the daemon's modules have no QML; claude.svg
+  modules/            claude.svg, the mark the UI bundles (each built-in module's JSON file is in
+                      native/notchd-modules/modules/: the daemon's modules have no QML)
   components/         components.json (the registry), install.py (the installer: downloads, LocalAI
                       models, pacman; stdlib only) and localai.py (where LocalAI lives, how to reach it)
   live/               codex-live.py and local-live.py, the voice bridges the daemon runs as sidecars
+                      (embedded in the binary and written out on first use; `NOTCHD_CORE_DIR=core` runs
+                      a checkout's files instead)
   DepthReport.qml     what a notch card measures of itself, sent to the daemon (`measure`)
   KeepShown.qml       shows a window again after its monitor goes away and comes back
   *Compositor.qml     compositor adapters (Hyprland, generic)
@@ -144,6 +147,18 @@ qs -p . ipc call notchd settings
 ```
 
 `make dev` builds the daemon and runs it as its own `dev` instance (`NOTCHD_INSTANCE`, the dev config), never the `default` one a real shell uses; a dev daemon of an earlier build is stopped first, since the daemon outlives the shell. It hot-reloads on every QML change, core included (a Rust change needs `make dev` again). Next to the Omarchy host it draws a second notch, on IPC target `notchd`. The daemon's own commands: `native/target/release/notchd ipc <method>`, `notchd attach term:<id>`; with `NOTCHD_INSTANCE=dev NOTCHD_CONFIG=build/dev-config.json` they reach the dev instance.
+
+The GNOME extension (`hosts/gnome/`, work in progress: docs/architecture.md, "GNOME UI") runs in a GNOME session inside a window of your desktop, whatever it is:
+
+```sh
+make gnome-dev                # gnome-shell --devkit, its own daemon, config, D-Bus and runtime dir
+make gnome-test               # the extension in a headless GNOME Shell, two monitors, the real daemon
+make gnome-zip                # build/gnome-ext/: the folder and the zip for extensions.gnome.org
+make gnome-dev-46             # GNOME 46 (Ubuntu 24.04) from a podman image, in an X11 window (Xwayland)
+make gnome-test-46            # the headless tests on GNOME 46, in that image
+```
+
+`make gnome-dev` prints the session's socket: `NOTCHD_SOCKET=<it> native/target/release/notchd ipc push '{...}'` drives its daemon. The dev sessions force animations on and show a demo user module, `tests/gnome/modules/primitives`, with the primitives the built-in modules only draw with a player or a microphone (image, equalizer, meter, list); its logs stay in the session's scratch dir. Extensions do not hot-reload: close the window and run it again. `scripts/gnome-build.sh` assembles the extension, copying the UI-side `core/` files into `lib/` as ES modules.
 
 ## The gate
 

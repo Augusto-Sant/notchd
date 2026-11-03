@@ -221,6 +221,13 @@ pub struct Schema {
     pub rev: u64,
     pub pages: Vec<Page>,
     pub fields: Vec<Field>,
+    /// The modules the settings pages are made of, built-in, host's and
+    /// user's alike: `{ moduleId, title, settings, standalone, agent, live,
+    /// terminal }` each (the shape of a `catalog` entry). It is how a UI that
+    /// does not ship the built-ins' JSON files learns their titles, kinds and
+    /// setting defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modules: Option<Vec<Value>>,
 }
 
 /// One module slot's tree; `null` when the module has no view for the slot.
@@ -473,9 +480,11 @@ pub struct SettingsOpen {
     pub page: Option<String>,
 }
 
-/// The modules the UI itself loads (the built-ins and the host's, a terminal
-/// of the config): `{ moduleId, title, settings, standalone, agent, live,
-/// terminal }` each, free-form like a module's settings fields. The daemon
+/// The modules of the host that the daemon cannot know (the Omarchy `osd`,
+/// a terminal of the config): `{ moduleId, title, settings, standalone, agent,
+/// live, terminal }` each, free-form like a module's settings fields. The
+/// built-in modules are the daemon's own (their JSON files are embedded), so a
+/// UI does not send them; one that does wins on the same id. The daemon
 /// builds the settings pages that depend on them (which lists the Modules
 /// page has, what a notch's module list says). It replaces the last list; a
 /// user module's own entry (from its `module.json`) is not in it.
@@ -488,8 +497,9 @@ pub struct Catalog {
     /// when absent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_modules: Option<Vec<String>>,
-    /// The folder of the UI's `core/` (its sidecars, `live/` and
-    /// `components/`, which the daemon runs): a path on the daemon's machine.
+    /// Deprecated, still accepted within proto 1: a folder with the sidecars
+    /// (`live/`, `components/`) for the daemon to run instead of its own,
+    /// which it ships embedded. A UI omits it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_dir: Option<String>,
 }

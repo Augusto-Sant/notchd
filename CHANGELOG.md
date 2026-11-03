@@ -4,6 +4,19 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-11-03
+
+### Added
+
+- Icons in a module's view can have a `name` (`media-playback-start`, `window-close`...) next to the Nerd Font `glyph`, so a UI without Nerd Fonts can draw its own symbol; `glyph` stays as the fallback, and an `icon`'s `size` can be a text size. The built-in modules send both; nothing changes on screen. See "Named icons" in `docs/architecture.md`.
+- `scripts/install.sh` installs the daemon on Ubuntu, Fedora and other distributions: it downloads the release `native/releases.json` pins, verifies its SHA-256, puts `notchd` in `~/.local/bin` and runs it as a systemd user service; running it again upgrades, `--uninstall` removes it and keeps `~/.config/notchd`.
+- A GNOME Shell extension (`hosts/gnome/`, GNOME 46 and later) draws the notch on Ubuntu's and Fedora's default desktop, from the same daemon: every edge and drag, the view primitives, guests, room for the top panel and a dock, a settings window (the extension's preferences) and terminals in the notch (with VTE for GTK 4). `scripts/install.sh --extension` installs and enables it, with a starter config when there is none; `--binary` installs a build of your own before the first release. See "GNOME UI" in `docs/architecture.md`.
+
+### Changed
+
+- The Voice disc moves smoothly with the voice: each level eases over 140 ms instead of 90, so the disc no longer stops between the levels that come about ten times a second.
+- The daemon now carries its own built-in modules' settings (titles, fields, defaults) and the Python files it runs for voice and the optional components, so a host (the Omarchy plugin, and any later UI) no longer sends them or tells the daemon where its `core/` folder is: the release is the one `notchd` binary, which writes those files under `~/.local/share/notchd/sidecars/` the first time it needs them. Nothing changes on screen. `coreDir` in the `catalog` message still works but is deprecated; `NOTCHD_CORE_DIR` points the daemon at a checkout's files for development.
+
 ## [0.4.0] — 2026-11-02
 
 ### Added

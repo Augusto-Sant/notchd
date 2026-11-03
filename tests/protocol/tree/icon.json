@@ -1,10 +1,14 @@
 {
  "message": "icon",
  "valid": [
-  {"t":"icon","glyph":"󰎆","tone":"danger","size":16}
+  {"t":"icon","glyph":"󰎆","tone":"danger","size":16},
+  {"t":"icon","glyph":"󰐊","name":"media-playback-start","tone":"accent","size":"body"},
+  {"t":"icon","name":"media-playback-pause"},
+  {"t":"icon","glyph":"x","name":"a-name-no-ui-knows"}
  ],
  "invalid": [
-  {"why":"glyph missing","json":{"t":"icon","tone":"accent"}},
-  {"why":"size is negative-free but a string","json":{"t":"icon","glyph":"x","size":"big"}}
+  {"why":"neither glyph nor name","json":{"t":"icon","tone":"accent"}},
+  {"why":"size is neither a number nor a text size","json":{"t":"icon","glyph":"x","size":"big"}},
+  {"why":"name is a number","json":{"t":"icon","name":3}}
  ]
 }

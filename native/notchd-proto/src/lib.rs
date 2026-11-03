@@ -14,6 +14,7 @@
 
 pub mod canvas;
 pub mod common;
+pub mod icons;
 pub mod module;
 pub mod num;
 pub mod provider;

@@ -1425,9 +1425,10 @@ mod tests {
     #[test]
     fn the_registry_names_modules_that_exist_and_no_two_components_share_a_file() {
         let catalog = catalog();
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/modules");
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../notchd-modules/modules");
         let modules: Vec<String> = std::fs::read_dir(dir)
-            .expect("core/modules")
+            .expect("native/notchd-modules/modules")
             .filter_map(|e| {
                 e.ok()?
                     .file_name()

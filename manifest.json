@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "eryk.notchd",
   "name": "notchd",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "eryk",
   "license": "MIT",
   "description": "notchd for Omarchy: a dynamic notch under the clock with media, volume/brightness OSD, and pluggable modules",

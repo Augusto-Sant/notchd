@@ -8,7 +8,7 @@
 //! `core/modules/timer.qml`; the rules are `notchd-core::countdown`.
 
 use crate::module::{CoreModule, Ctx, Effect, Facts};
-use crate::tree::{Settings, column, glyph, node, row, text, with};
+use crate::tree::{Ic, Settings, column, glyph, icon, icon_button, node, row, text, with};
 use notchd_core::countdown::{self as cd, Command, Kind, Phase, PomodoroSettings, State, Status};
 use notchd_proto::{EventValue, Node, Slot};
 use serde_json::{Value, json};
@@ -17,17 +17,17 @@ use serde_json::{Value, json};
 /// phase stays until you start it or stop it.
 const DONE_FOR_MS: u64 = 60_000;
 
-const TIMER: u32 = 0xF051B; // nf-md-timer_outline
-const BELL: u32 = 0xF009E; // nf-md-bell_ring
-const BRAIN: u32 = 0xF09D1; // nf-md-brain
-const COFFEE: u32 = 0xF0176; // nf-md-coffee
-const PAUSE: u32 = 0xF03E4;
-const PLAY: u32 = 0xF040A;
-const PLUS: u32 = 0xF0415;
-const SKIP: u32 = 0xF04AD;
-const RESTART: u32 = 0xF0709;
-const CLOSE: u32 = 0xF0156;
-const STOP: u32 = 0xF04DB;
+const TIMER: Ic = ("alarm", 0xF051B); // nf-md-timer_outline
+const BELL: Ic = ("notification", 0xF009E); // nf-md-bell_ring
+const BRAIN: Ic = ("focus", 0xF09D1); // nf-md-brain
+const COFFEE: Ic = ("coffee", 0xF0176); // nf-md-coffee
+const PAUSE: Ic = ("media-playback-pause", 0xF03E4);
+const PLAY: Ic = ("media-playback-start", 0xF040A);
+const PLUS: Ic = ("list-add", 0xF0415);
+const SKIP: Ic = ("media-skip-forward", 0xF04AD);
+const RESTART: Ic = ("view-refresh", 0xF0709);
+const CLOSE: Ic = ("window-close", 0xF0156);
+const STOP: Ic = ("media-playback-stop", 0xF04DB);
 
 pub struct Timer {
     settings: Settings,
@@ -40,7 +40,7 @@ pub struct Timer {
 impl Timer {
     pub fn new() -> Timer {
         Timer {
-            settings: Settings::new("timer", include_str!("../../../core/modules/timer.json")),
+            settings: Settings::new("timer", include_str!("../modules/timer.json")),
             countdown: State::idle(),
             done_at: None,
             effects: Vec::new(),
@@ -73,8 +73,8 @@ impl Timer {
         cd::format(self.remaining(now))
     }
 
-    fn state_glyph(&self) -> String {
-        glyph(if self.status() == Status::Done {
+    fn state_ic(&self) -> Ic {
+        if self.status() == Status::Done {
             BELL
         } else if self.countdown.kind == Some(Kind::Pomodoro) {
             if self.countdown.phase == Some(Phase::Focus) {
@@ -84,7 +84,7 @@ impl Timer {
             }
         } else {
             TIMER
-        })
+        }
     }
 
     /// What the closed notch says once the time is up.
@@ -161,7 +161,7 @@ impl Timer {
         row(
             8.0,
             vec![
-                text(&self.state_glyph(), self.tone(), "body"),
+                icon(self.state_ic(), self.tone(), json!("body")),
                 with(
                     text(
                         &if self.status() == Status::Done {
@@ -182,7 +182,7 @@ impl Timer {
     /// Side edge: the icon over the minutes left (seconds in the last one).
     fn vertical_compact(&self, now: u64) -> Value {
         let left = self.remaining(now);
-        let mut parts = vec![text(&self.state_glyph(), self.tone(), "body")];
+        let mut parts = vec![icon(self.state_ic(), self.tone(), json!("body"))];
         if self.status() != Status::Done {
             let t = if left >= 60_000.0 {
                 format!("{}", (left / 60_000.0).ceil())
@@ -201,7 +201,7 @@ impl Timer {
             row(
                 12.0,
                 vec![
-                    text(&self.state_glyph(), "accent", "heading"),
+                    icon(self.state_ic(), "accent", json!("heading")),
                     with(
                         column(
                             0.0,
@@ -236,8 +236,8 @@ impl Timer {
         )
     }
 
-    fn button(&self, code: u32, action: &str, big: bool) -> Value {
-        let mut b = json!({"t": "button", "glyph": glyph(code), "action": action});
+    fn button(&self, ic: Ic, action: &str, big: bool) -> Value {
+        let mut b = icon_button(ic, action);
         if big {
             b["big"] = json!(true);
         }
@@ -253,7 +253,7 @@ impl Timer {
             });
             let mut presets: Vec<Value> = chips.to_vec();
             presets.push(
-                json!({"t": "button", "glyph": glyph(BRAIN), "label": "Pomodoro",
+                json!({"t": "button", "glyph": glyph(BRAIN.1), "name": BRAIN.0, "label": "Pomodoro",
                 "variant": "outline", "action": "pomodoro", "fill": true}),
             );
             return column(
@@ -264,7 +264,7 @@ impl Timer {
                         row(
                             10.0,
                             vec![
-                                text(&glyph(TIMER), "accent", "body"),
+                                icon(TIMER, "accent", json!("body")),
                                 with(text("Timer", "foreground", "body"), "fill", json!(true)),
                             ],
                         ),
@@ -285,7 +285,7 @@ impl Timer {
             }
         );
         let mut controls = vec![
-            text(&self.state_glyph(), self.tone(), "heading"),
+            icon(self.state_ic(), self.tone(), json!("heading")),
             with(
                 column(
                     0.0,
@@ -364,7 +364,7 @@ impl CoreModule for Timer {
             // Idle, the expanded notch offers the quick starts, and the
             // closed notch shows the icon (the notch's idleIcons).
             active: true,
-            icon: glyph(TIMER),
+            icon: glyph(TIMER.1),
             // Its end must show even while the notch is open.
             urgent_peek: true,
             ..Facts::default()
@@ -538,18 +538,18 @@ mod tests {
         assert_eq!(m.take_effects(), vec![Effect::Peek(2500)]);
         assert!(texts(&m.view(Slot::Compact, T0 + 1000).unwrap()).contains(&"2:59".to_string()));
         assert_eq!(
-            texts(&m.view(Slot::VerticalCompact, T0 + 1000).unwrap())[1],
+            texts(&m.view(Slot::VerticalCompact, T0 + 1000).unwrap())[0],
             "3"
         );
         assert_eq!(
             texts(
                 &m.view(Slot::VerticalCompact, T0 + 2 * MIN + 10_000)
                     .unwrap()
-            )[1],
+            )[0],
             "50s"
         );
         let peek = texts(&m.view(Slot::Peek, T0 + 1000).unwrap());
-        assert_eq!(&peek[1..], ["Tea", "2:59 left"]);
+        assert_eq!(peek, ["Tea", "2:59 left"]);
         // Open already: no confirmation.
         let ctx = Ctx {
             expanded: true,
@@ -579,7 +579,7 @@ mod tests {
             }
         );
         assert_eq!(
-            texts(&m.view(Slot::Compact, T0 + MIN + 5).unwrap())[1],
+            texts(&m.view(Slot::Compact, T0 + MIN + 5).unwrap())[0],
             "Time's up"
         );
         assert_eq!(m.next_due(T0 + MIN + 5), Some(T0 + 2 * MIN + 5));
@@ -630,7 +630,7 @@ mod tests {
         );
         say(&mut m, "pomodoro", T0);
         assert_eq!(m.countdown.duration, 50.0 * 60_000.0);
-        assert_eq!(m.state_glyph(), glyph(BRAIN));
+        assert_eq!(m.state_ic(), BRAIN);
         m.tick(T0 + 50 * MIN + 5);
         assert_eq!(m.status(), Status::Done);
         assert_eq!(m.done_text(), "Next: Short break");
@@ -646,7 +646,7 @@ mod tests {
             T0 + 51 * MIN,
         );
         assert_eq!(m.status(), Status::Running);
-        assert_eq!(m.state_glyph(), glyph(COFFEE));
+        assert_eq!(m.state_ic(), COFFEE);
     }
 
     #[test]

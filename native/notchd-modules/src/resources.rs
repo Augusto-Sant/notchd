@@ -8,7 +8,7 @@
 //! `notchd-core::resources`.
 
 use crate::module::{CoreModule, Effect, Facts};
-use crate::tree::{Settings, column, glyph, node, row, text, with};
+use crate::tree::{Ic, Settings, column, icon, node, row, text, with};
 use notchd_core::resources::{Pressure, PressureRule, Usage, format_usage, next_pressure};
 use notchd_proto::{Node, Slot};
 use notchd_providers::resources::Sample;
@@ -52,12 +52,12 @@ enum Res {
 }
 
 impl Res {
-    fn glyph(self) -> String {
-        glyph(match self {
-            Res::Cpu => 0xF0EE0,
-            Res::Memory => 0xF035B,
-            Res::Disk => 0xF02CA,
-        })
+    fn ic(self) -> Ic {
+        match self {
+            Res::Cpu => ("cpu", 0xF0EE0),
+            Res::Memory => ("memory", 0xF035B),
+            Res::Disk => ("drive-harddisk", 0xF02CA),
+        }
     }
     fn label(self) -> &'static str {
         match self {
@@ -83,10 +83,7 @@ pub struct Resources {
 impl Resources {
     pub fn new() -> Resources {
         Resources {
-            settings: Settings::new(
-                "resources",
-                include_str!("../../../core/modules/resources.json"),
-            ),
+            settings: Settings::new("resources", include_str!("../modules/resources.json")),
             cpu: None,
             cores: 0,
             memory: None,
@@ -176,7 +173,7 @@ impl Resources {
         let head = row(
             10.0,
             vec![
-                with(text(&r.glyph(), tone, "body"), "width", json!(18)),
+                with(icon(r.ic(), tone, json!("body")), "width", json!(18)),
                 text(r.label(), "foreground", "body"),
                 with(
                     text(&self.detail(r), "muted", "caption"),
@@ -236,7 +233,7 @@ impl CoreModule for Resources {
                             row(
                                 6.0,
                                 vec![
-                                    text(&r.glyph(), self.tone(*r, "accent"), "body"),
+                                    icon(r.ic(), self.tone(*r, "accent"), json!("body")),
                                     text(
                                         &Self::percent(self.fraction(*r)),
                                         "foreground",
@@ -263,7 +260,7 @@ impl CoreModule for Resources {
                                     column(
                                         2.0,
                                         vec![
-                                            text(&r.glyph(), self.tone(*r, "accent"), "body"),
+                                            icon(r.ic(), self.tone(*r, "accent"), json!("body")),
                                             text(
                                                 &self.fraction(*r).map_or("–".into(), |f| {
                                                     format!("{}", (f * 100.0).round())
@@ -410,15 +407,12 @@ mod tests {
         m.feed("resources", &sample(Some(0.31), 0.5, Some(0.4)), 0);
         assert_eq!(
             texts(&m.view(Slot::Compact, 0).unwrap()),
-            ["\u{f0ee0}", "31%", "\u{f035b}", "50%", "\u{f02ca}", "40%"]
+            ["31%", "50%", "40%"]
         );
         with_short_setting(&mut m);
         assert!(m.view(Slot::Compact, 0).is_none() && m.view(Slot::VerticalCompact, 0).is_none());
         m.feed("resources", &sample(Some(0.31), 0.95, Some(0.4)), 0);
-        assert_eq!(
-            texts(&m.view(Slot::Compact, 0).unwrap()),
-            ["\u{f035b}", "95%"]
-        );
+        assert_eq!(texts(&m.view(Slot::Compact, 0).unwrap()), ["95%"]);
         assert!(m.view(Slot::Expanded, 0).is_some());
     }
 
@@ -475,7 +469,7 @@ mod tests {
         let mut m = Resources::new();
         m.feed("resources", &sample(Some(0.5), 0.25, Some(0.5)), 0);
         let t = texts(&m.view(Slot::VerticalCompact, 0).unwrap());
-        assert_eq!(t, ["\u{f0ee0}", "50", "\u{f035b}", "25", "\u{f02ca}", "50"]);
+        assert_eq!(t, ["50", "25", "50"]);
     }
 
     #[test]

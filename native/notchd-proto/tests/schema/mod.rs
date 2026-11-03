@@ -1,6 +1,6 @@
 //! A small JSON Schema checker: the subset `view.schema.json` uses (`$ref` into
 #![allow(dead_code)]
-//! `$defs`, `type`, `enum`, `const`, `oneOf`, `required`, `properties`,
+//! `$defs`, `type`, `enum`, `const`, `oneOf`, `anyOf`, `required`, `properties`,
 //! `items`, `minItems`, `minLength`, `minimum`, `maximum`, `exclusiveMinimum`).
 //! Enough to hold the fixtures to the schema without a heavy dependency.
 
@@ -54,6 +54,11 @@ pub fn validate(root: &Value, schema: &Value, v: &Value) -> Result<(), String> {
         if matching != 1 {
             return Err(format!("{matching} of oneOf match for {v}"));
         }
+    }
+    if let Some(options) = schema.get("anyOf").and_then(Value::as_array)
+        && !options.iter().any(|o| validate(root, o, v).is_ok())
+    {
+        return Err(format!("none of anyOf match for {v}"));
     }
     if let (Some(n), Some(min)) = (v.as_f64(), schema.get("minimum").and_then(Value::as_f64))
         && n < min

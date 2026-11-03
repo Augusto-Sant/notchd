@@ -1,0 +1,5 @@
+{
+  "title": "Pinger",
+  "command": ["python3", "run.py"],
+  "standalone": true
+}

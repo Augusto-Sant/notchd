@@ -18,7 +18,7 @@
 
 use crate::module::{CoreModule, Ctx, Effect, Facts, PtyCmd, PtyStart};
 use crate::plan::Plan;
-use crate::tree::{column, node, row, text, with};
+use crate::tree::{column, icon_button, node, row, text, with};
 use notchd_core::agent::{self, Action, AgentTitle, PeekState};
 use notchd_core::js;
 use notchd_core::terminal::shell_args;
@@ -414,7 +414,7 @@ impl TermModule {
     fn logo(&self, size: f64) -> Value {
         match self.kind.logo {
             Some(file) => json!({"t": "image", "src": format!("asset:{file}"), "size": size,
-                "fit": "contain", "fallback": {"t": "icon", "glyph": ">_", "tone": "muted"}}),
+                "fit": "contain", "fallback": {"t": "icon", "glyph": ">_", "name": "utilities-terminal", "tone": "muted"}}),
             None => json!({"t": "canvas", "w": size, "h": size, "cmds": [
                 {"c": "rect", "x": 0, "y": 0, "w": size, "h": size, "r": (size / 4.0).round(),
                  "fill": "foreground"},
@@ -588,11 +588,13 @@ impl TermModule {
             header.push(self.dot());
         }
         if self.running && !self.working() {
-            header.push(json!({"t": "button", "glyph": crate::tree::glyph(0xF0709),
-                "action": "restart", "tooltip": "Start a new session"}));
+            header.push(with(
+                icon_button(("view-refresh", 0xF0709), "restart"),
+                "tooltip",
+                json!("Start a new session"),
+            ));
         }
-        header
-            .push(json!({"t": "button", "glyph": crate::tree::glyph(0xF0156), "action": "close"}));
+        header.push(icon_button(("window-close", 0xF0156), "close"));
         let mut parts = vec![row(10.0, header)];
         if self.plan.shows() {
             parts.push(self.usage_bars(now));

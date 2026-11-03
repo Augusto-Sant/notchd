@@ -8,6 +8,9 @@
 #   make visual       offscreen renders.
 #   make check        all of it, the cheap layers first: before every commit.
 #   make times        what each layer and test cost in its last run.
+#   make gnome-test   the GNOME Shell extension in a headless GNOME Shell (needs
+#                     gnome-shell; not in check). gnome-test-46: the same on
+#                     GNOME 46 (Ubuntu 24.04) in a podman container.
 
 QMLLINT ?= $(firstword $(wildcard /usr/lib/qt6/bin/qmllint /usr/lib64/qt6/bin/qmllint) \
 	$(shell command -v qmllint6 2>/dev/null) $(shell command -v qmllint 2>/dev/null))
@@ -31,7 +34,7 @@ DEV_INSTANCE ?= dev
 # Each layer records what it cost in build/times/ (scripts/timed.py).
 TIMED = scripts/timed.py
 
-.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate daemon dev restart deps clean
+.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate daemon dev restart deps clean gnome-dev gnome-dev-46 gnome-test gnome-test-46 gnome-image-46 gnome-zip
 
 # The cheap layers first, one after another: a broken rule fails in seconds,
 # before anything costly starts. Then the costly ones at once.
@@ -139,6 +142,38 @@ dev: daemon
 	@mkdir -p build
 	@NOTCHD_INSTANCE="$(DEV_INSTANCE)" NOTCHD_CONFIG="$(DEV_CONFIG)" "$(DAEMON_BIN)" ipc shutdown >/dev/null 2>&1 || true
 	NOTCHD_INSTANCE="$(DEV_INSTANCE)" NOTCHD_CONFIG="$(DEV_CONFIG)" NOTCHD_BIN="$(DAEMON_BIN)" quickshell -p .
+
+# The GNOME Shell extension (hosts/gnome/) in a GNOME session in a window of
+# this desktop (gnome-shell --devkit), with its own daemon, config, D-Bus and
+# runtime dir. Extensions do not hot-reload: close the window and run it again.
+gnome-dev: daemon
+	scripts/gnome-dev.sh
+
+# The extension in a headless GNOME Shell, driven through its test hooks.
+gnome-test: daemon
+	python3 tests/gnome_test.py
+
+# GNOME 46, the oldest supported (Ubuntu 24.04 LTS), from a podman image
+# (tests/containers/gnome-46.Containerfile). The daemon built here runs
+# there (its glibc floor is 24.04's). gnome-dev-46 shows the session in an
+# X11 window through Xwayland (DISPLAY): GNOME 46 has no devkit.
+GNOME46_IMAGE = notchd-gnome-46
+GNOME46_RUN = podman run --rm --tmpfs /tmp -v "$(CURDIR)":/src $(GNOME46_IMAGE) bash -c 'dbus-daemon --system --fork &&
+gnome-image-46:
+	podman build -t $(GNOME46_IMAGE) -f tests/containers/gnome-46.Containerfile tests/containers
+
+gnome-test-46: daemon gnome-image-46
+	$(GNOME46_RUN) python3 tests/gnome_test.py'
+
+gnome-dev-46: daemon gnome-image-46
+	podman run --rm --ipc=host --tmpfs /tmp -v "$(CURDIR)":/src -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY="$(DISPLAY)" \
+	  $(GNOME46_IMAGE) bash -c 'dbus-daemon --system --fork && scripts/gnome-dev.sh --nested'
+
+# The extension as one folder and the zip extensions.gnome.org takes, with
+# the UI-side core/ files copied in as ES modules (build/gnome-ext/).
+gnome-zip:
+	@dir=$$(scripts/gnome-build.sh build/gnome-ext) && rm -f "$$dir/testhook.js" && \
+	  (cd "$$dir" && rm -f ../notchd-gnome.zip && zip -qr ../notchd-gnome.zip .) && echo "build/gnome-ext/notchd-gnome.zip"
 
 # The Omarchy shell does not hot-reload plugin QML. Builds the daemon, stops
 # the running one (it outlives the shell, so it would keep the old build) and

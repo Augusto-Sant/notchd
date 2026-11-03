@@ -1,5 +1,6 @@
 import QtQuick
 import "../.."
+import "Tree.js" as Tree
 
 // The modules' `IconButton` (a 28 px round hover fill around a heading-size
 // glyph, dimmed when disabled; `big`: 36 px around a larger glyph) and, with a `label` or `variant: "outline"`,
@@ -30,10 +31,10 @@ PrimBase {
     anchors.centerIn: parent
     spacing: Theme.space(6)
     Text {
-      visible: typeof prim.node.glyph === "string" && prim.node.glyph !== ""
+      visible: Tree.glyphOf(prim.node) !== ""
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
-      text: prim.node.glyph === undefined ? "" : String(prim.node.glyph)
+      text: Tree.glyphOf(prim.node)
       color: prim.tone(prim.node.tone, prim.hasLabel ? "accent" : "foreground")
       font.family: Theme.font.family
       font.pixelSize: prim.hasLabel ? Theme.font.bodySmall : prim.big ? Theme.font.heading * 1.25 : Theme.font.heading
@@ -43,7 +44,7 @@ PrimBase {
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: prim.hasLabel ? prim.node.label : ""
-      color: prim.node.glyph !== undefined ? Theme.foreground : prim.tone(prim.node.tone, "foreground")
+      color: Tree.glyphOf(prim.node) !== "" ? Theme.foreground : prim.tone(prim.node.tone, "foreground")
       font.family: Theme.font.family
       font.pixelSize: Theme.font.bodySmall
     }

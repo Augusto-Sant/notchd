@@ -44,7 +44,9 @@ function check(node, depth) {
   } else if (t === "text") {
     if (!isString(node.text)) return "text: `text` must be a string"
   } else if (t === "icon") {
-    if (!isString(node.glyph)) return "icon: `glyph` must be a string"
+    if (!absent(node.glyph) && !isString(node.glyph)) return "icon: `glyph` must be a string"
+    if (!absent(node.name) && !isString(node.name)) return "icon: `name` must be a string"
+    if (!isString(node.glyph) && !isString(node.name)) return "icon: needs a `glyph` or a `name`"
   } else if (t === "image") {
     if (!isString(node.src)) return "image: `src` must be a string"
   } else if (t === "progress") {
@@ -55,7 +57,7 @@ function check(node, depth) {
   } else if (t === "equalizer") {
     if (typeof node.active !== "boolean") return "equalizer: `active` must be a boolean"
   } else if (t === "button") {
-    if (!isString(node.glyph) && !isString(node.label)) return "button: needs a `glyph` or a `label`"
+    if (!isString(node.glyph) && !isString(node.name) && !isString(node.label)) return "button: needs a `glyph`, a `name` or a `label`"
   } else if (t === "chip") {
     if (!isString(node.label)) return "chip: `label` must be a string"
   } else if (t === "canvas") {
@@ -65,6 +67,43 @@ function check(node, depth) {
     if (!isString(node.kind) || !isString(node.ref) || node.ref === "") return "surface: needs a `kind` and a `ref`"
   }
   return ""
+}
+
+// The Nerd Font glyph of each named icon (`notchd-proto`'s icons::NAMES, the
+// names the official modules send): a code point, or the text a name was drawn
+// with before. A UI draws its own symbol for a name; this is the Nerd Font one.
+var NAMED_GLYPHS = {
+  "media-playback-start": 0xF040A,
+  "media-playback-pause": 0xF03E4,
+  "media-playback-stop": 0xF04DB,
+  "media-skip-forward": 0xF04AD,
+  "media-skip-backward": 0xF04AE,
+  "audio-x-generic": 0xF075A,
+  "audio-input-microphone": 0xF036C,
+  "microphone-disabled": 0xF036D,
+  "list-add": 0xF0415,
+  "view-refresh": 0xF0709,
+  "window-close": 0xF0156,
+  "alarm": 0xF051B,
+  "notification": 0xF009E,
+  "dialog-warning": 0xF071,
+  "utilities-terminal": ">_",
+  "drive-harddisk": 0xF02CA,
+  "cpu": 0xF0EE0,
+  "memory": 0xF035B,
+  "focus": 0xF09D1,
+  "coffee": 0xF0176
+}
+
+// What a node with a `glyph` and/or a `name` draws: the name's glyph when the
+// table knows it (an unknown name is no error), else the `glyph`, else nothing.
+function glyphOf(node) {
+  var name = node.name
+  if (typeof name === "string" && NAMED_GLYPHS.hasOwnProperty(name)) {
+    var g = NAMED_GLYPHS[name]
+    return typeof g === "number" ? String.fromCodePoint(g) : g
+  }
+  return typeof node.glyph === "string" ? node.glyph : ""
 }
 
 // The `surfaceHost` of the nearest ancestor that has one (the ViewTree a

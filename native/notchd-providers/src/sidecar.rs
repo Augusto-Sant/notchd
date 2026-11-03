@@ -160,7 +160,11 @@ mod tests {
 
     #[test]
     fn terminate_and_kill_end_it_and_what_it_started() {
-        let (s, rx) = run("sleep 300 & wait");
+        // The TERM goes to the process alone, which ends what it started. A
+        // plain `sleep 300 & wait` passed only when the TERM came before the
+        // shell started the sleep: after, the sleep kept stdout open (CI, #6).
+        let (s, rx) = run("trap 'kill $!; exit' TERM; sleep 300 & wait");
+        std::thread::sleep(Duration::from_millis(300));
         s.terminate();
         assert!(matches!(next(&rx), Event::Exit(_)));
         // A process that ignores SIGTERM goes with its group's SIGKILL.
