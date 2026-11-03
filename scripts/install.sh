@@ -2,8 +2,8 @@
 # Installs the notchd daemon on a Linux distribution that is not Omarchy
 # (Ubuntu, Fedora, ...): the pinned release, verified, plus a systemd user unit.
 #
-#   install.sh [--version V] [--prefix DIR] [--releases FILE|URL] [--no-service]
-#              [--extension] [--uninstall]
+#   install.sh [--version V] [--prefix DIR] [--releases FILE|URL] [--binary FILE]
+#              [--no-service] [--extension] [--extension-zip FILE] [--uninstall]
 #
 # Needs sh, curl or wget, tar, sha256sum, and python3 (to read releases.json;
 # Ubuntu and Fedora ship it). The checksums are the ones pinned in
@@ -14,9 +14,20 @@
 #   --prefix DIR    where `notchd` goes, DIR/bin/notchd; default ~/.local
 #   --releases X    a releases.json file or URL (tests, mirrors)
 #   --no-service    install the binary only: no unit, no systemctl
-#   --extension     (later) install the GNOME Shell extension; not available yet
-#   --uninstall     stop and remove the unit and the binary this script installed.
-#                   ~/.config/notchd (your config) and the state are never touched.
+#   --binary FILE   install this notchd instead of a pinned release (a build of
+#                   your own, before the first release); no download, no checksum
+#   --extension     also install the GNOME Shell extension (GNOME 46 and later),
+#                   built from this checkout (scripts/gnome-build.sh), into
+#                   ~/.local/share/gnome-shell/extensions, and enable it; it
+#                   loads at your next login. With no config yet it writes a
+#                   starter one (~/.config/notchd/config.json: reserveSpace on),
+#                   and says what to install for terminals in the notch (VTE
+#                   for GTK 4) when it is missing
+#   --extension-zip FILE  the extension from this zip (make gnome-zip) instead
+#                   of the checkout; implies --extension
+#   --uninstall     stop and remove the unit, the binary and the extension this
+#                   script installed. ~/.config/notchd (your config) and the
+#                   state are never touched.
 #
 # Run again to upgrade: the binary is replaced atomically and the daemon is
 # restarted only when the binary or the unit changed. Only `notchd` is taken from
@@ -36,7 +47,10 @@ version=
 releases=
 service=1
 extension=0
+extension_zip=
+binary=
 uninstall=0
+uuid=notchd@eryk-vieira.github.io
 default_releases=https://raw.githubusercontent.com/eryk-vieira/notchd/main/native/releases.json
 
 while [ $# -gt 0 ]; do
@@ -46,6 +60,8 @@ while [ $# -gt 0 ]; do
     --releases) [ $# -ge 2 ] || die "--releases needs a value"; releases=$2; shift 2 ;;
     --no-service) service=0; shift ;;
     --extension) extension=1; shift ;;
+    --extension-zip) [ $# -ge 2 ] || die "--extension-zip needs a value"; extension=1; extension_zip=$2; shift 2 ;;
+    --binary) [ $# -ge 2 ] || die "--binary needs a value"; binary=$2; shift 2 ;;
     --uninstall) uninstall=1; shift ;;
     -h|--help) sed -n '2,/^set -eu/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
@@ -58,6 +74,27 @@ unit_dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 unit=$unit_dir/notchd.service
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+ext_dir=${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/$uuid
+here=$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || true)
+
+# org.gnome.shell's enabled-extensions with the extension added (add) or
+# taken out (remove), for when gnome-extensions cannot (no running shell).
+enabled_list() {
+  python3 -I - "$1" "$uuid" "$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null || echo '[]')" <<'PY'
+import ast, sys
+op, uuid, current = sys.argv[1:4]
+current = current.strip()
+if current.startswith("@as"):
+    current = current[3:].strip()
+try:
+    names = list(ast.literal_eval(current))
+except (ValueError, SyntaxError):
+    names = []
+names = [n for n in names if n != uuid] + ([uuid] if op == "add" else [])
+print("[" + ", ".join("'%s'" % n for n in names) + "]")
+PY
+}
 
 if [ "$uninstall" = 1 ]; then
   if [ -f "$unit" ]; then
@@ -76,22 +113,31 @@ if [ "$uninstall" = 1 ]; then
     rm -f "$bin"
     say "removed $bin"
   fi
-  # GNOME extension: removed here once it exists.
+  if [ -d "$ext_dir" ]; then
+    if have gnome-extensions && gnome-extensions disable "$uuid" >/dev/null 2>&1; then :
+    elif have gsettings; then gsettings set org.gnome.shell enabled-extensions "$(enabled_list remove)" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$ext_dir"
+    say "removed $ext_dir"
+  fi
   say "kept your config (~/.config/notchd)"
   exit 0
 fi
 
-if [ "$extension" = 1 ]; then
-  die "the GNOME Shell extension does not exist yet; --extension is reserved for it"
-fi
-
 for tool in tar sha256sum python3; do have "$tool" || die "$tool is required"; done
+if [ "$extension" = 1 ] && [ -z "$extension_zip" ] && ! [ -x "$here/gnome-build.sh" ]; then
+  die "--extension needs a checkout of notchd (scripts/gnome-build.sh) or --extension-zip FILE"
+fi
+if [ -n "$extension_zip" ] && ! [ -f "$extension_zip" ]; then
+  die "no such file: $extension_zip"
+fi
 if have curl; then
   fetch() { curl -fsSL --retry 2 -o "$2" "$1"; }
 elif have wget; then
   fetch() { wget -q -O "$2" "$1"; }
 else
-  die "curl or wget is required"
+  # Only a download needs one (--binary needs none).
+  fetch() { die "curl or wget is required"; }
 fi
 
 case $(uname -s) in Linux) ;; *) die "this installs on Linux only" ;; esac
@@ -106,14 +152,20 @@ target=${NOTCHD_INSTALL_TARGET:-$target}
 work=$(mktemp -d "${TMPDIR:-/tmp}/notchd-install.XXXXXX")
 trap 'rm -rf "$work"' EXIT INT TERM
 
-if [ -z "$releases" ]; then
-  here=$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || true)
+if [ -n "$binary" ]; then
+  [ -f "$binary" ] || die "no such file: $binary"
+  version=$("$binary" --version 2>/dev/null | awk '{print $NF}') || version=
+  [ -n "$version" ] || die "$binary does not run as notchd (--version)"
+  url=
+  sha=
+elif [ -z "$releases" ]; then
   if [ -n "$here" ] && [ -f "$here/../native/releases.json" ]; then
     releases=$here/../native/releases.json
   else
     releases=$default_releases
   fi
 fi
+if [ -z "$binary" ]; then
 case $releases in
   http://*|https://*|file://*)
     fetch "$releases" "$work/releases.json" || die "cannot download $releases"
@@ -147,6 +199,7 @@ set -- $entry
 version=$1
 url=$2
 sha=$3
+fi
 
 installed=
 if [ -x "$bin" ]; then
@@ -154,17 +207,21 @@ if [ -x "$bin" ]; then
 fi
 
 changed=0
-if [ "$installed" = "$version" ]; then
+if [ -z "$binary" ] && [ "$installed" = "$version" ]; then
   say "notchd $version is already installed in $bin_dir"
 else
-  say "downloading notchd $version ($target)"
-  fetch "$url" "$work/archive.tar.gz" || die "cannot download $url"
-  got=$(sha256sum "$work/archive.tar.gz" | awk '{print $1}')
-  [ "$got" = "$sha" ] || die "checksum mismatch for $url (got $got, pinned $sha): nothing installed"
-  mkdir "$work/x"
-  tar -xzf "$work/archive.tar.gz" -C "$work/x" || die "cannot unpack the archive"
-  found=$(find "$work/x" -type f -name notchd | head -n 1)
-  [ -n "$found" ] || die "the archive holds no notchd"
+  if [ -n "$binary" ]; then
+    found=$binary
+  else
+    say "downloading notchd $version ($target)"
+    fetch "$url" "$work/archive.tar.gz" || die "cannot download $url"
+    got=$(sha256sum "$work/archive.tar.gz" | awk '{print $1}')
+    [ "$got" = "$sha" ] || die "checksum mismatch for $url (got $got, pinned $sha): nothing installed"
+    mkdir "$work/x"
+    tar -xzf "$work/archive.tar.gz" -C "$work/x" || die "cannot unpack the archive"
+    found=$(find "$work/x" -type f -name notchd | head -n 1)
+    [ -n "$found" ] || die "the archive holds no notchd"
+  fi
   mkdir -p "$bin_dir"
   cp "$found" "$bin_dir/.notchd.$$"
   chmod 755 "$bin_dir/.notchd.$$"
@@ -218,7 +275,45 @@ UNIT
   fi
 fi
 
-# GNOME Shell extension: installed here once it exists (--extension).
+if [ "$extension" = 1 ]; then
+  # The extension's folder: from the zip, else built from this checkout.
+  mkdir "$work/ext"
+  if [ -n "$extension_zip" ]; then
+    python3 -I -m zipfile -e "$extension_zip" "$work/ext" || die "cannot unpack $extension_zip"
+    src=$work/ext
+  else
+    src=$("$here/gnome-build.sh" "$work/ext") || die "cannot build the extension (scripts/gnome-build.sh)"
+    rm -f "$src/testhook.js"
+  fi
+  [ -f "$src/metadata.json" ] || die "the extension has no metadata.json"
+  mkdir -p "$(dirname -- "$ext_dir")"
+  rm -rf "$ext_dir.new"
+  cp -r "$src" "$ext_dir.new"
+  rm -rf "$ext_dir"
+  mv "$ext_dir.new" "$ext_dir"
+  say "installed the GNOME Shell extension in $ext_dir"
+  if have gnome-extensions && gnome-extensions enable "$uuid" >/dev/null 2>&1; then
+    say "enabled it"
+  elif have gsettings && gsettings set org.gnome.shell enabled-extensions "$(enabled_list add)" >/dev/null 2>&1; then
+    say "enabled it"
+  else
+    say "enable it with: gnome-extensions enable $uuid"
+  fi
+  say "log out and back in to load it (GNOME loads a new extension at login)"
+  # Terminals in the notch draw with VTE for GTK 4.
+  if ! python3 -I -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Vte', '3.91')" >/dev/null 2>&1; then
+    say "for terminals in the notch, install VTE for GTK 4:"
+    say "  Ubuntu/Debian: sudo apt install gir1.2-vte-3.91    Fedora: sudo dnf install vte291-gtk4"
+  fi
+  # A starter config, only when there is none: the notch keeps windows clear
+  # of itself.
+  config=${XDG_CONFIG_HOME:-$HOME/.config}/notchd/config.json
+  if [ ! -e "$config" ]; then
+    mkdir -p "$(dirname -- "$config")"
+    printf '{\n  "reserveSpace": true\n}\n' > "$config"
+    say "wrote a starter config: $config"
+  fi
+fi
 
 case ":$PATH:" in *":$bin_dir:"*) ;; *) say "note: $bin_dir is not on your PATH" ;; esac
 say "done"

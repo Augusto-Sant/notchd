@@ -8,6 +8,7 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 - Icons in a module's view can have a `name` (`media-playback-start`, `window-close`...) next to the Nerd Font `glyph`, so a UI without Nerd Fonts can draw its own symbol; `glyph` stays as the fallback, and an `icon`'s `size` can be a text size. The built-in modules send both; nothing changes on screen. See "Named icons" in `docs/architecture.md`.
 - `scripts/install.sh` installs the daemon on Ubuntu, Fedora and other distributions: it downloads the release `native/releases.json` pins, verifies its SHA-256, puts `notchd` in `~/.local/bin` and runs it as a systemd user service; running it again upgrades, `--uninstall` removes it and keeps `~/.config/notchd`.
+- A GNOME Shell extension (`hosts/gnome/`, GNOME 46 and later) draws the notch on Ubuntu's and Fedora's default desktop, from the same daemon: every edge and drag, the view primitives, guests, room for the top panel and a dock, a settings window (the extension's preferences) and terminals in the notch (with VTE for GTK 4). `scripts/install.sh --extension` installs and enables it, with a starter config when there is none; `--binary` installs a build of your own before the first release. See "GNOME UI" in `docs/architecture.md`.
 
 ### Changed
 

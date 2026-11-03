@@ -20,6 +20,7 @@ import tarfile
 import tempfile
 import threading
 import unittest
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -228,10 +229,84 @@ class Install(unittest.TestCase):
         code, out = self.run_install("--uninstall")  # twice is fine
         self.assertEqual(code, 0, out)
 
-    def test_the_extension_flag_is_reserved(self):
+    # ------------------------------------------------------------ extension
+    UUID = "notchd@eryk-vieira.github.io"
+
+    @property
+    def ext(self):
+        return os.path.join(self.home, ".local", "share", "gnome-shell", "extensions", self.UUID)
+
+    @property
+    def config(self):
+        return os.path.join(self.home, ".config", "notchd", "config.json")
+
+    def stub_gnome_extensions(self):
+        self.ext_log = os.path.join(self.dir, "gnome-extensions.log")
+        stub = os.path.join(self.stubs, "gnome-extensions")
+        with open(stub, "w") as f:
+            f.write("#!/bin/sh\necho \"$@\" >> \"%s\"\n" % self.ext_log)
+        os.chmod(stub, 0o755)
+
+    def ext_calls(self):
+        with open(self.ext_log) as f:
+            return f.read().splitlines()
+
+    def test_the_extension_installs_from_the_checkout_enabled_with_a_starter_config(self):
+        self.stub_gnome_extensions()
         code, out = self.run_install("--extension")
-        self.assertNotEqual(code, 0)
-        self.assertIn("does not exist yet", out)
+        self.assertEqual(code, 0, out)
+        for name in ("metadata.json", "extension.js", "terminal/helper.js", "lib/Protocol.js", "schemas/gschemas.compiled"):
+            self.assertTrue(os.path.exists(os.path.join(self.ext, name)), name)
+        self.assertFalse(os.path.exists(os.path.join(self.ext, "testhook.js")), "test hooks never ship")
+        self.assertIn("enable " + self.UUID, self.ext_calls())
+        with open(self.config) as f:
+            self.assertEqual(json.load(f), {"reserveSpace": True})
+        self.assertIn("log out and back in", out)
+
+    def test_an_existing_config_is_never_touched(self):
+        self.stub_gnome_extensions()
+        os.makedirs(os.path.dirname(self.config))
+        with open(self.config, "w") as f:
+            f.write('{"modules": ["timer"]}')
+        code, out = self.run_install("--extension")
+        self.assertEqual(code, 0, out)
+        with open(self.config) as f:
+            self.assertEqual(f.read(), '{"modules": ["timer"]}')
+
+    def test_the_extension_from_a_zip_replaces_the_one_installed(self):
+        self.stub_gnome_extensions()
+        os.makedirs(self.ext)
+        with open(os.path.join(self.ext, "stale.js"), "w") as f:
+            f.write("old")
+        archive = os.path.join(self.dir, "ext.zip")
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("metadata.json", json.dumps({"uuid": self.UUID}))
+            z.writestr("extension.js", "// zipped")
+        code, out = self.run_install("--extension-zip", archive)
+        self.assertEqual(code, 0, out)
+        with open(os.path.join(self.ext, "extension.js")) as f:
+            self.assertEqual(f.read(), "// zipped")
+        self.assertFalse(os.path.exists(os.path.join(self.ext, "stale.js")))
+
+    def test_uninstall_removes_the_extension_too(self):
+        self.stub_gnome_extensions()
+        self.run_install("--extension")
+        code, out = self.run_install("--uninstall")
+        self.assertEqual(code, 0, out)
+        self.assertFalse(os.path.exists(self.ext))
+        self.assertIn("disable " + self.UUID, self.ext_calls())
+        self.assertTrue(os.path.exists(self.config), "the config stays")
+
+    def test_a_binary_of_ones_own_installs_with_no_release(self):
+        own = os.path.join(self.dir, "own-notchd")
+        with open(own, "w") as f:
+            f.write("#!/bin/sh\ncase \"$1\" in --version) echo 'notchd 9.9.9';; esac\n")
+        os.chmod(own, 0o755)
+        with open(self.releases, "w") as f:
+            f.write("{}")  # nothing pinned
+        code, out = self.run_install("--binary", own)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.version_of(self.bin), "9.9.9")
 
 
 if __name__ == "__main__":
