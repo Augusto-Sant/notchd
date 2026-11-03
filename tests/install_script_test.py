@@ -30,7 +30,7 @@ TARGET = "x86_64-unknown-linux-gnu"
 
 
 def tarball(version, extra=None):
-    script = "#!/bin/sh\ncase \"$1\" in --version) echo 'notchd %s';; ipc) echo \"$@\" >> \"$FAKE_LOG\";; esac\n" % version
+    script = "#!/bin/sh\ncase \"$1\" in --version) echo 'notchd %s';; ipc|daemon) echo \"$@\" >> \"$FAKE_LOG\";; esac\n" % version
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         files = {"notchd": script.encode(), "LICENSE": b"MIT\n"}
@@ -69,7 +69,11 @@ class Install(unittest.TestCase):
         os.makedirs(self.stubs)
         stub = os.path.join(self.stubs, "systemctl")
         with open(stub, "w") as f:
-            f.write("#!/bin/sh\necho \"$@\" >> \"%s\"\n" % self.log)
+            # NO_USER_MANAGER: the command exists but no user manager answers
+            # (a container, a session without systemd).
+            f.write("#!/bin/sh\n"
+                    "[ \"$2\" = show-environment ] && { [ -z \"$NO_USER_MANAGER\" ]; exit; }\n"
+                    "echo \"$@\" >> \"%s\"\n" % self.log)
         os.chmod(stub, 0o755)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.files = {}
@@ -92,7 +96,7 @@ class Install(unittest.TestCase):
         with open(self.releases, "w") as f:
             json.dump(self.pins, f)
 
-    def run_install(self, *args):
+    def run_install(self, *args, **extra_env):
         env = {
             "PATH": self.stubs + ":" + os.environ["PATH"],
             "HOME": self.home,
@@ -101,6 +105,7 @@ class Install(unittest.TestCase):
             "FAKE_LOG": self.fake_log,
             "NOTCHD_INSTALL_TARGET": TARGET,
         }
+        env.update(extra_env)
         cmd = [TIMEOUT, "-k", "2", "60", "sh", INSTALL, "--releases", self.releases] + list(args)
         p = subprocess.run(cmd, capture_output=True, text=True, env=env)
         return p.returncode, p.stdout + p.stderr
@@ -213,6 +218,18 @@ class Install(unittest.TestCase):
         self.assertTrue(os.path.exists(self.bin))
         self.assertFalse(os.path.exists(self.unit))
         self.assertEqual(self.systemctl(), [])
+
+    def test_without_a_user_manager_it_starts_the_daemon_itself(self):
+        # A container with systemctl but no systemd: the install used to end
+        # in "could not start notchd.service" and no daemon.
+        code, out = self.run_install(NO_USER_MANAGER="1")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(os.path.exists(self.unit), "the unit is there for a later session")
+        self.assertEqual(self.systemctl(), [])
+        with open(self.fake_log) as f:
+            self.assertIn("daemon --ensure", f.read().splitlines())
+        self.assertIn("started the daemon", out)
+        self.assertNotIn("could not start", out)
 
     def test_uninstall_removes_what_it_installed_and_keeps_the_config(self):
         self.run_install()

@@ -257,7 +257,9 @@ UNIT
     unit_changed=1
     say "installed $unit"
   fi
-  if have systemctl; then
+  # A user manager answers show-environment; a container or a session
+  # without systemd has the command but nothing behind it.
+  if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
     if [ "$unit_changed" = 1 ]; then
       systemctl --user daemon-reload || say "systemctl --user daemon-reload failed"
     fi
@@ -271,7 +273,17 @@ UNIT
     fi
     systemctl --user start notchd.service || say "could not start notchd.service: see journalctl --user -u notchd"
   else
-    say "no systemctl: run '$bin daemon --ensure' to start the daemon"
+    # No user manager: start the daemon detached, as a host would; it does
+    # not come back at login, so say how to start it again.
+    if [ "$changed" = 1 ]; then
+      "$bin" ipc shutdown >/dev/null 2>&1 || true
+      sleep 1
+    fi
+    if "$bin" daemon --ensure >/dev/null 2>&1; then
+      say "no systemd user session: started the daemon with '$bin daemon --ensure' (run it again after a reboot)"
+    else
+      say "no systemd user session, and the daemon did not start: run '$bin daemon --ensure'"
+    fi
   fi
 fi
 

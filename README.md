@@ -14,7 +14,7 @@ notchd runs inside a *host*: the desktop-specific wiring around the generic UI c
 
 - **Omarchy**: the repository is an Omarchy shell plugin (`eryk.notchd`), with volume/brightness OSD and a button in the bar for the notches and the settings. See [hosts/omarchy](hosts/omarchy/README.md).
 - **Any other Wayland compositor with layer-shell**: the repository is also a standalone Quickshell config (`qs -p <checkout>`). See [docs/standalone.md](docs/standalone.md).
-- **GNOME** (Ubuntu's and Fedora's default desktop, GNOME 46 and later): a GNOME Shell extension, another UI for the same daemon (`hosts/gnome/`), in progress on its branch; `scripts/install.sh --extension` installs it. On Ubuntu, Fedora and other distributions the daemon itself installs with `scripts/install.sh` (a verified release and a systemd user service, see [docs/hosts.md](docs/hosts.md#installing-the-daemon-on-other-distributions)). The optional voice components install with `pacman` and the AUR, so they are Arch-only for now.
+- **GNOME** (Ubuntu's and Fedora's default desktop, GNOME 46 and later): a GNOME Shell extension, another UI for the same daemon (`hosts/gnome/`). From a checkout, `sh scripts/install.sh --extension` installs the daemon (a verified release and a systemd user service) and the extension, then log out and back in; for terminals in the notch, VTE for GTK 4 (`sudo apt install gir1.2-vte-3.91` on Ubuntu, `vte291-gtk4` on Fedora). On other distributions the daemon alone installs with `scripts/install.sh` (see [docs/hosts.md](docs/hosts.md#installing-the-daemon-on-other-distributions)). The optional voice components install with `pacman` and the AUR, so they are Arch-only for now.
 
 ## States
 
