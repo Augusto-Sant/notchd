@@ -67,6 +67,9 @@ export class TestHook {
             chrome: (Main.layoutManager._trackedActors ?? []).filter(a => a.actor.name?.startsWith('notchd-')).length,
             // The windows' titles (the preferences window is "notchd").
             windows: global.get_window_actors().map(a => a.meta_window.get_title() ?? ''),
+            // The windows one can see (shown, not transparent).
+            visibleWindows: global.get_window_actors().filter(a => a.visible && a.opacity > 0)
+                .map(a => a.meta_window.get_title() ?? ''),
             ...this._snapshot()});
     }
 

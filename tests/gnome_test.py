@@ -530,6 +530,29 @@ class Terminal(ShellCase):
         self.assertFalse(terminal_window(s)["focused"])
         self.assertIsNone(main_copy(s)["terminal"])
 
+    def test_restarts_never_open_the_hole_onto_the_desktop_nor_leave_a_window_about(self):
+        # A restart replaced the window: the hole stayed open over nothing,
+        # and a helper still starting mapped its window loose on the screen.
+        sh = self.shell
+        self.open_terminal()
+        bad = []
+        for _ in range(3):
+            self.assertEqual(sh.ipc("terminal", "shell", "new"), "ok")
+            end = time.time() + 1.0
+            while time.time() < end:
+                s = sh.snapshot()
+                seen = [t for t in s["visibleWindows"] if t.startswith("notchd term:")]
+                term = main_copy(s)["terminal"]
+                if len(seen) > 1 or (term and term["hole"] and not seen):
+                    bad.append((round(time.time() - end + 1, 2), seen, term))
+                time.sleep(0.05)
+        self.assertEqual(bad, [])
+        s = self.shell.until(lambda s: main_copy(s)["terminal"] and main_copy(s)["terminal"]["hole"], 6,
+                             "the new run's window in the hole")
+        self.assert_in_hole(s)
+        time.sleep(1.5)  # past the old helpers' end
+        self.assertEqual([t for t in sh.snapshot()["visibleWindows"] if t.startswith("notchd term:")], ["notchd term:shell"])
+
     def test_on_a_side_edge_with_reserve_the_window_still_sits_in_the_hole(self):
         # GNOME kept a window out of the reserved strip: the window never
         # reached the hole and stayed unseen.

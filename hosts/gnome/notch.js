@@ -300,7 +300,9 @@ class NotchCopy extends St.Widget {
         this._termPlaced = placed;
         if (placed)
             this._fadeCover(0, FADE_IN_MS);
-        else
+        // Gone: the hole goes too, unless a window is on its way to it (a
+        // restart's: the old one goes as the new one comes).
+        else if (!this._termRef)
             this._holeRect = null;
         this._bg.queue_repaint();
         this._hoverChanged();

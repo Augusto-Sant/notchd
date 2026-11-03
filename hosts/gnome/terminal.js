@@ -67,7 +67,14 @@ class TerminalWindow {
         // Taken over once it is shown: moving or restacking a Wayland window
         // before its first frame took the shell down on GNOME 46.
         this._created = global.display.connect('window-created', (d, win) => {
-            if (this.window || this._pendingWin || !this._client.owns_window(win))
+            if (!this._client.owns_window(win))
+                return;
+            // A helper being let go of may still map its window: never seen.
+            if (this._dying) {
+                win.get_compositor_private()?.hide();
+                return;
+            }
+            if (this.window || this._pendingWin)
                 return;
             // Not seen until it is where it belongs: GTK shows it first at its
             // own size, in the middle of the screen.
@@ -270,28 +277,42 @@ class TerminalWindow {
         }
     }
 
+    // Gone at once: its window hidden now (and any it maps until its
+    // process ends: a helper still starting maps one after this), the
+    // process told to end and made to after a second.
     destroy() {
+        this._dying = true;
         this._cancel.cancel();
-        global.display.disconnect(this._created);
-        if (this._pendingWin)
+        if (this._pendingWin) {
             this._pendingWin.disconnect(this._pendingId);
+            this._pendingWin.get_compositor_private()?.hide();
+        }
         this._pendingWin = null;
         if (this.window) {
             this.window.disconnect(this._unmanaged);
             for (const id of this._moved ?? [])
                 this.window.disconnect(id);
+            if (this.window.has_focus())
+                this._giveBackFocus();
+            this.window.get_compositor_private()?.hide();
         }
+        this._setPlaced(false);
         this.send('quit');
         try {
             this._stdin.close(null);
         } catch {
             // Closed already.
         }
-        // A helper that does not quit on its own goes anyway.
         const proc = this._proc;
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+        const created = this._created;
+        proc.send_signal(15);
+        const kill = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
             proc.force_exit();
             return GLib.SOURCE_REMOVE;
+        });
+        proc.wait_async(null, () => {
+            GLib.source_remove(kill);
+            global.display.disconnect(created);
         });
         this.window = null;
     }
@@ -327,8 +348,11 @@ export class Terminals {
     // ({ onLine(line) }): a new run starts a new window.
     show(ref, run, rect, owner) {
         let entry = this._windows.get(ref);
+        // A new run (restart) is a new window; the old one goes now, and
+        // its owner's hole closes until the new one is in place.
         if (entry && entry.run !== run) {
             entry.window.destroy();
+            this._windows.delete(ref);
             entry = null;
         }
         if (!entry) {
