@@ -100,6 +100,8 @@ export default class NotchdExtension extends Extension {
             if (ok) {
                 this._terminals = new Terminal.Terminals({
                     theme: this._theme, helper: `${this.path}/terminal/helper.js`,
+                    // The grid renderer's view (`renderer: ghostty`): GTK 4 alone.
+                    grid: `${this.path}/terminal/grid.js`,
                     exe: () => this._exe || GLib.find_program_in_path('notchd') || '', socket: () => socketPath(),
                 });
                 this._host.terminals = this._terminals;

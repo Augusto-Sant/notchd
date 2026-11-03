@@ -916,7 +916,8 @@ function surface(node, ctx) {
         style: `border: 1px solid ${theme.css('line')}; border-radius: ${theme.radius}px; min-width: ${Number(node.w) > 0 ? Number(node.w) : 240}px; height: ${h}px;`,
     });
     if (node.kind === 'terminal' && ctx.terminals) {
-        frame._surface = {ref: node.ref, run: typeof node.id === 'string' ? node.id : ''};
+        frame._surface = {ref: node.ref, run: typeof node.id === 'string' ? node.id : '',
+            renderer: node.renderer === 'ghostty' ? 'ghostty' : 'widget'};
         return frame;
     }
     frame.style += ` background-color: ${theme.css('surface')};`;

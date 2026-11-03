@@ -670,6 +670,17 @@ class Terminal(ShellCase):
         self.assert_in_hole(self.open_terminal())
 
 
+class GridTerminal(Terminal):
+    """The same, drawn by the grid renderer (`renderer: ghostty`): the
+    window is grid.js's (GTK 4, no VTE), kept in the hole the same way. A
+    daemon built without the ghostty feature answers its attach with an
+    error, which the window shows; where it sits is the same."""
+
+    config = {"modules": ["timer", "shell"], "reserveSpace": True,
+              "terminals": {"shell": {"command": "exec sh", "title": "Shell"}},
+              "shell": {"renderer": "ghostty"}}
+
+
 class EnableDisable(ShellCase):
     def test_disable_takes_away_everything_enable_added(self):
         sh = self.shell

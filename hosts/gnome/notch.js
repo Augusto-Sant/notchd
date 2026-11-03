@@ -333,7 +333,7 @@ class NotchCopy extends St.Widget {
         this._termRef = actor._surface.ref;
         this._holeRect = rect;
         this._holeChanged();
-        this._host.terminals.show(this._termRef, actor._surface.run, rect, this);
+        this._host.terminals.show(this._termRef, actor._surface.run, rect, this, actor._surface.renderer);
         if (this._termFocus)
             this._host.terminals.focus(this._termRef);
     }

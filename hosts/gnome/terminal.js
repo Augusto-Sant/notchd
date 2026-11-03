@@ -337,20 +337,24 @@ export class Terminals {
         });
     }
 
-    _argv(ref) {
+    // The helper for the renderer: VTE (helper.js), or the grid's (grid.js,
+    // `renderer: ghostty`).
+    _argv(ref, renderer) {
         const theme = this._host.theme;
         const color = name => theme.css(name).replace(/\s+/g, '');
-        return [GLib.find_program_in_path('gjs') ?? 'gjs', '-m', this._host.helper,
+        const helper = renderer === 'ghostty' && this._host.grid ? this._host.grid : this._host.helper;
+        return [GLib.find_program_in_path('gjs') ?? 'gjs', '-m', helper,
             this._host.exe(), this._host.socket(), ref, color('background'), color('foreground'), ''];
     }
 
     // The window of `ref` for the run `run` over `rect`, for `owner`
-    // ({ onLine(line) }): a new run starts a new window.
-    show(ref, run, rect, owner) {
+    // ({ onLine(line) }), drawn by `renderer`'s helper: a new run or another
+    // renderer starts a new window.
+    show(ref, run, rect, owner, renderer = 'widget') {
         let entry = this._windows.get(ref);
         // A new run (restart) is a new window; the old one goes now, and
         // its owner's hole closes until the new one is in place.
-        if (entry && entry.run !== run) {
+        if (entry && (entry.run !== run || entry.renderer !== renderer)) {
             entry.window.destroy();
             this._windows.delete(ref);
             entry = null;
@@ -358,10 +362,10 @@ export class Terminals {
         if (!entry) {
             if (!this._host.exe())
                 return;
-            entry = {run, owner};
+            entry = {run, owner, renderer};
             // `placed` false comes from a window let go of: its last owner
             // hears it, to close its hole.
-            entry.window = new TerminalWindow(this._argv(ref), line => entry.owner?.onLine(line),
+            entry.window = new TerminalWindow(this._argv(ref, renderer), line => entry.owner?.onLine(line),
                 placed => (entry.owner ?? entry.lastOwner)?.onPlaced(placed));
             this._windows.set(ref, entry);
         }
