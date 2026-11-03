@@ -724,7 +724,6 @@ fn grid_view(
     std::io::BufReader::new(s)
 }
 
-#[cfg(feature = "ghostty")]
 fn grid_send(view: &std::io::BufReader<std::os::unix::net::UnixStream>, line: &str) {
     use std::io::Write;
     let mut s = view.get_ref();
@@ -752,7 +751,6 @@ fn grid_until(
     all
 }
 
-#[cfg(feature = "ghostty")]
 #[test]
 fn a_grid_view_gets_the_screen_as_styled_rows_and_its_keys_follow_the_kitty_protocol() {
     let r = rig(
@@ -821,22 +819,4 @@ fn a_grid_view_gets_the_screen_as_styled_rows_and_its_keys_follow_the_kitty_prot
     );
     let got = grid_until(&mut view, |l| l.contains("pasted-here"));
     assert!(got.contains("pasted-here"), "{got}");
-}
-
-#[cfg(not(feature = "ghostty"))]
-#[test]
-fn a_grid_view_is_refused_by_a_daemon_built_without_the_renderer() {
-    let r = rig(
-        "nogrid",
-        |_| json!({"modules": ["mine"], "terminals": {"mine": {"command": "exec cat"}}}),
-        true,
-    );
-    let mut ui = r.ui();
-    assert!(
-        ui.wait_for(WAIT, view_has("mine", Slot::Compact, "mine"))
-            .is_some()
-    );
-    let mut view = grid_view(&r.socket(), "term:mine", 40, 10);
-    let got = grid_until(&mut view, |l| l.contains(r#""t":"err""#));
-    assert!(got.contains("without the grid renderer"), "{got}");
 }

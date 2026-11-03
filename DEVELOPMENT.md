@@ -133,11 +133,7 @@ make restart                 # make deps, then omarchy restart shell
 
 The shell does not hot-reload plugin QML: run `make restart` after changing it. It runs `make deps` first, which installs the optional packages the modules use (`qmltermwidget`, for the terminal view) with pacman when they are missing; sudo asks for your password only then. It also builds the daemon (`make daemon`, a release build) and compares it with `$XDG_DATA_HOME/notchd/bin/notchd`: unchanged, the running daemon stays (its terminal and agent sessions with it); changed, it stops the daemon, installs the new build and the shell starts it. Config changes apply live. How the plugin gets enabled, and the stock OSD it replaces, are in [hosts/omarchy](hosts/omarchy/README.md).
 
-The experimental grid renderer (a terminal with `"renderer": "ghostty"`, [architecture.md](docs/architecture.md#the-grid-renderer-renderer-ghostty-experimental)) needs a daemon built with the `ghostty` feature, which builds Ghostty's libghostty-vt from source with zig 0.15.2 (on `PATH`; Arch's `zig` is newer than Ghostty accepts):
-
-```sh
-make restart DAEMON_FEATURES=ghostty
-```
+Building the daemon builds Ghostty's libghostty-vt (its terminal emulator) from source, which needs zig 0.15.2 (Arch's `zig` is newer than Ghostty accepts) and git: every `make` target that runs cargo puts `scripts/fetch-zig.sh`'s zig first on `PATH` (downloaded once into `build/zig`, its SHA-256 checked). Running cargo by hand: `PATH="$(scripts/fetch-zig.sh):$PATH" cargo ...`.
 
 The shell's log:
 

@@ -5,7 +5,6 @@ pub mod attach;
 pub mod corehost;
 pub mod daemon;
 pub mod ensure;
-#[cfg(feature = "ghostty")]
 pub mod grid;
 pub mod hub;
 pub mod instance;

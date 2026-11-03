@@ -3,7 +3,7 @@
 # copy of the files git sees (tracked, and new ones not ignored), not on the
 # checkout itself. The build folders are ignored and never ship (the plugin
 # downloads the daemon), but they can hold symlinks the validator rejects: a
-# daemon built with the ghostty feature keeps Ghostty's source and its
+# daemon build keeps Ghostty's source and its
 # libghostty-vt.so links under native/target/. The copy keeps symlinks as
 # symlinks, so one added to the plugin still fails.
 set -euo pipefail

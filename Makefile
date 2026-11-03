@@ -31,6 +31,13 @@ DAEMON_BIN = $(CURDIR)/native/target/release/notchd
 # `make dev` runs its own daemon instance, never the user's `default` one.
 DEV_INSTANCE ?= dev
 
+# Every cargo run builds Ghostty's libghostty-vt (the terminal emulator),
+# which wants zig 0.15.2: scripts/fetch-zig.sh puts it in build/zig (once,
+# checksum checked) and cargo finds it first on PATH. Evaluated only by a
+# recipe that runs cargo.
+ZIG_PATH = $(shell scripts/fetch-zig.sh)
+CARGO = env PATH="$(ZIG_PATH):$$PATH" cargo
+
 # Each layer records what it cost in build/times/ (scripts/timed.py).
 TIMED = scripts/timed.py
 
@@ -51,14 +58,14 @@ test:
 	  --test-reporter=./scripts/node-times.mjs --test-reporter-destination=build/times/node.tsv \
 	  tests/*.test.mjs
 	@$(TIMED) py-unit scripts/pytests.py unit
-	@$(TIMED) rust cargo test --manifest-path native/Cargo.toml --quiet
+	@$(TIMED) rust $(CARGO) test --manifest-path native/Cargo.toml --quiet
 
 # The Rust workspace (native/): format, clippy with warnings as errors, every
 # crate's tests. Cheap, so it sits with the first layers of `make check`.
 rust:
-	@$(TIMED) rust-fmt cargo fmt --all --check --manifest-path native/Cargo.toml
-	@$(TIMED) rust-clippy cargo clippy --workspace --all-targets --manifest-path native/Cargo.toml --quiet -- -D warnings
-	@$(TIMED) rust-test cargo test --workspace --manifest-path native/Cargo.toml --quiet
+	@$(TIMED) rust-fmt $(CARGO) fmt --all --check --manifest-path native/Cargo.toml
+	@$(TIMED) rust-clippy $(CARGO) clippy --workspace --all-targets --manifest-path native/Cargo.toml --quiet -- -D warnings
+	@$(TIMED) rust-test $(CARGO) test --workspace --manifest-path native/Cargo.toml --quiet
 
 # Integration layer: the live bridges and the components' installer run as
 # processes against fakes (a fake LocalAI, pacman, downloads from a local
@@ -132,11 +139,8 @@ validate:
 	@$(TIMED) validate scripts/validate-plugin.sh
 
 # The daemon, release build: what the hosts start with the shell.
-# DAEMON_FEATURES=ghostty adds the experimental grid renderer (zig 0.15.2 on
-# PATH; DEVELOPMENT.md, "Omarchy host").
-DAEMON_FEATURES ?=
 daemon:
-	cargo build --release -p notchd-daemon --manifest-path native/Cargo.toml $(if $(DAEMON_FEATURES),--features $(DAEMON_FEATURES))
+	$(CARGO) build --release -p notchd-daemon --manifest-path native/Cargo.toml
 
 # The standalone host (shell.qml) against a scratch config and its own daemon
 # instance (DEV_INSTANCE, the dev config): the user's `default` daemon and

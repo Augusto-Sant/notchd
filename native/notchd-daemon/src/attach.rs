@@ -52,18 +52,7 @@ fn data_lines(rf: &str, bytes: &[u8], out: &mut impl Write) -> std::io::Result<(
 /// The daemon's end: serves one view until it or the program is done.
 pub fn serve(hub: &Arc<Hub>, stream: UnixStream, mut reader: impl BufRead, req: &Attach) {
     if req.render.as_deref() == Some("grid") {
-        #[cfg(feature = "ghostty")]
         return crate::grid::serve(hub, stream, reader, req);
-        #[cfg(not(feature = "ghostty"))]
-        {
-            let mut out = stream;
-            let _ = out.write_all(&line(&err(
-                None,
-                "surface",
-                "this notchd was built without the grid renderer (the ghostty feature)",
-            )));
-            return;
-        }
     }
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let Ok(mut out) = stream.try_clone() else {

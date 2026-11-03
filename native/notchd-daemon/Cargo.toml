@@ -13,15 +13,14 @@ notchd-providers = { path = "../notchd-providers" }
 serde.workspace = true
 serde_json.workspace = true
 libc = "0.2.191"
-# Experimental: the grid view of a terminal (src/grid.rs). Builds Ghostty's
-# libghostty-vt from source, which needs zig 0.15.2 on PATH.
-libghostty-vt = { version = "0.2.2", optional = true }
+# The terminal emulator (src/grid.rs): Ghostty's libghostty-vt, built from
+# source at a pinned commit, which needs zig 0.15.2 on PATH
+# (scripts/fetch-zig.sh; `make` puts it there).
+libghostty-vt = "0.2.2"
 # The kitty images: PNGs the programs send decoded, and what the view draws
-# encoded (the grid view; the ghostty feature).
-png = { version = "0.18.1", optional = true }
+# encoded.
+png = "0.18.1"
 
-[features]
-ghostty = ["dep:libghostty-vt", "dep:png"]
 
 [lib]
 name = "notchd_daemon"

@@ -39,6 +39,10 @@ jobs:
           crate=$(sed -n 's/^version = "\(.*\)"/\1/p' native/notchd-daemon/Cargo.toml | head -1)
           [ "$version" = "$manifest" ] && [ "$version" = "$crate" ] \
             || { echo "tag $version, manifest $manifest, crate $crate differ"; exit 1; }
+      # Ghostty's libghostty-vt (the terminal emulator) builds with zig 0.15.2,
+      # pinned and checked by the script.
+      - name: zig
+        run: echo "$(scripts/fetch-zig.sh)" >> "$GITHUB_PATH"
       - run: cargo test --workspace --release --manifest-path native/Cargo.toml
       - run: cargo build --release --locked -p notchd-daemon --manifest-path native/Cargo.toml
       - name: Package
