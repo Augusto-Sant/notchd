@@ -413,7 +413,7 @@ class NotchCopy extends St.Widget {
         this._hoverChanged();
     }
 
-    // What the terminal's window says (terminal/helper.js): the pointer on
+    // What the terminal's window says (terminal/grid.js): the pointer on
     // it, or what the QML surface fires as an action of the module's view.
     onLine(line) {
         if (line === 'pointer in' || line === 'pointer out') {

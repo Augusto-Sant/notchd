@@ -1,20 +1,10 @@
 //! The terminal's rules (ported from `core/Terminal.js`, which keeps only the
-//! widget's side; tests: `tests/vectors/rules/terminal.json`, plus a few marked "(added)").
+//! view's side; tests: `tests/vectors/rules/terminal.json`, plus a few marked "(added)").
 //!
-//! The terminal a module shows in its expanded view (`core/terminal/
-//! TerminalView.qml`, used by `modules/codex.qml`): whether the widget is
-//! installed, the command line it runs, its colors.
-//!
-//! Probably UI-side: [`PROBE`] (QML source for `Qt.createQmlObject`) and
-//! [`SCHEME`] (a qmltermwidget color scheme name) are presentation for the QML
-//! widget; they are ported so the strings live in one place.
+//! The terminal a module shows in its expanded view: the command line it
+//! runs and the key that leaves it.
 
 use crate::js;
-
-/// QML that imports only `QMLTermWidget`, from the optional `qmltermwidget`
-/// package; `Qt.createQmlObject` throws on it quietly when it is missing
-/// (`PROBE`). Probably UI-side.
-pub const PROBE: &str = "import QtQuick\nimport QMLTermWidget\nItem {}\n";
 
 /// The shell prelude that moves to notchd's own folder for agents (`OWN_DIR`):
 /// `notchd` in the documents folder (`xdg-user-dir`, which says the home when
@@ -25,11 +15,6 @@ pub const OWN_DIR: &str = concat!(
     "if [ -z \"$d\" ] || [ \"$d\" = \"$HOME\" ]; then d=\"$HOME/Documents\"; fi; ",
     "d=\"$d/notchd\"; mkdir -p -- \"$d\" && cd -- \"$d\"; "
 );
-
-/// The built-in qmltermwidget color scheme behind the ANSI colors (`SCHEME`):
-/// Tango, whose bright black is a dark gray (Breeze's is orange, and Codex
-/// paints your messages with it). Probably UI-side.
-pub const SCHEME: &str = "Tango";
 
 /// Qt's `Qt.Key_Escape`.
 pub const KEY_ESCAPE: u32 = 0x0100_0000;
@@ -186,18 +171,6 @@ mod tests {
             run_sh(&argv, None, &[("TERM", "xterm")]).trim(),
             "xterm-256color"
         );
-    }
-
-    // SCHEME: Tango, whose bright black is gray
-    #[test]
-    fn scheme_tango_whose_bright_black_is_gray() {
-        assert_eq!(SCHEME, "Tango");
-    }
-
-    // PROBE imports only the widget
-    #[test]
-    fn probe_imports_only_the_widget() {
-        assert!(PROBE.contains("import QMLTermWidget"));
     }
 
     // isLeaveKey: Ctrl+Escape alone; plain Escape is the agent's

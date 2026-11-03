@@ -195,8 +195,8 @@ pub struct Welcome {
     pub config: String,
     /// The theme token set the UI maps to its own source.
     pub tokens: Vec<String>,
-    /// The daemon's own binary, for a UI that draws a terminal with a widget
-    /// that only runs programs (`notchd attach`, see the free surface).
+    /// The daemon's own binary (`notchd attach`, a session in a terminal of
+    /// your own; see the free surface).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exe: Option<String>,
 }

@@ -2,10 +2,20 @@
  "message": "surface",
  "valid": [
   {"t":"surface","ref":"term:claude","ev":"input","b64":"bHMK"},
-  {"t":"surface","ref":"term:claude","ev":"resize","cols":100,"rows":30}
+  {"t":"surface","ref":"term:claude","ev":"resize","cols":100,"rows":30},
+  {"t":"surface","ref":"term:claude","ev":"resize","cols":100,"rows":30,"cw":9,"ch":18},
+  {"t":"surface","ref":"term:claude","ev":"key","key":"Enter","mods":1},
+  {"t":"surface","ref":"term:claude","ev":"key","key":"KeyA","text":"a"},
+  {"t":"surface","ref":"term:claude","ev":"wheel","rows":-3},
+  {"t":"surface","ref":"term:claude","ev":"wheel","rows":3,"x":10.5,"y":4.25},
+  {"t":"surface","ref":"term:claude","ev":"mouse","action":"press","button":"left","x":3.5,"y":2.0,"mods":4},
+  {"t":"surface","ref":"term:claude","ev":"mouse","action":"motion","x":4.0,"y":2.0},
+  {"t":"surface","ref":"term:claude","ev":"paste","text":"ls -la\n"}
  ],
  "invalid": [
   {"why":"resize without rows","json":{"t":"surface","ref":"term:claude","ev":"resize","cols":100}},
+  {"why":"mouse without x","json":{"t":"surface","ref":"term:claude","ev":"mouse","action":"press","y":1.0}},
+  {"why":"key without key","json":{"t":"surface","ref":"term:claude","ev":"key","mods":1}},
   {"why":"input without b64","json":{"t":"surface","ref":"term:claude","ev":"input"}}
  ]
 }

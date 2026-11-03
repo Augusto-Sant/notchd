@@ -210,7 +210,7 @@ ShellRoot {
       { name: "a module sets the width of its expanded view", run: root.expandedWidthFromModule },
       { name: "a notch in the list dropped on the top edge stays there", run: root.dropOnTopStays },
       { name: "corners: a side notch's place never feeds back into the insets it takes", run: root.cornersNoLoop },
-      { name: "codex: without qmltermwidget, the notch says what to install", run: root.codexMissing },
+      { name: "codex: on a UI that draws no terminal, ask says so and the notch still opens", run: root.codexMissing },
       { name: "codex: runs in the notch, keeps running closed, and its title says when it works", run: root.codexRuns },
       { name: "claude: runs in the notch, keeps running closed, and its title says when it works", run: root.claudeRuns },
       { name: "claude: ask over IPC opens the notch and types the question in; new starts another", run: root.claudeAsk },
@@ -222,7 +222,7 @@ ShellRoot {
       { name: "settings: Add terminal makes one and opens its page; its trash can takes it out of the config", run: root.addAndRemoveTerminal },
       { name: "settings: a required text field refuses to be emptied", run: root.requiredTextField },
       { name: "renaming or removing a terminal keeps the modules ready, and warns of nothing", run: root.terminalRenameStaysReady },
-      { name: "terminal: the band behind your messages (ANSI 8) is gray, not orange", run: root.messageBandGray },
+      { name: "terminal: a connection that drops is made again, and the program goes on", run: root.terminalReconnects },
       { name: "a window its monitor took away comes back with the monitor", run: root.keepShownReopens },
       { name: "an open notch taller than its screen fits it and scrolls", run: root.tallNotchScrolls },
       { name: "with tabs the open notch shows one module, and opening for a module picks its tab", run: root.tabsShowOne },
@@ -272,7 +272,7 @@ ShellRoot {
   }
   function daemonsReady() {
     var services = [service, multi, standaloneSvc, resourced, timed, played, typer, dropSvc, codexSvc, claudeSvc, codexMissingSvc,
-                    ownTermSvc, liveSvc, localLiveSvc, componentSvc, tallSvc, tabsSvc, idleSvc]
+                    ownTermSvc, reconnectSvc, liveSvc, localLiveSvc, componentSvc, tallSvc, tabsSvc, idleSvc]
     return services.every(function(s) { return s.daemonReady })
   }
 
@@ -1808,9 +1808,8 @@ ShellRoot {
   // The claude and codex modules (native/notchd-modules/src/term.rs, in the
   // daemon) against fake terminal UIs (tests/qml/fixtures/bin) that set the
   // terminal's title as Claude Code and Codex do. The program runs in the
-  // daemon; the terminal view (core/terminal/TerminalSurface.qml) attaches to
-  // it with `notchd attach`. The view needs the qmltermwidget package; where
-  // it isn't installed, the cases that need it note so in the log and pass.
+  // daemon, which emulates its terminal; the terminal view
+  // (core/terminal/GhosttySurface.qml) draws the screen it sends.
   TestService {
     id: codexSvc
     ipcTarget: "notchd-qmltest-codex"
@@ -1865,12 +1864,13 @@ ShellRoot {
   // The terminal is not there: the case only notes it.
   function noTerminal(svc) {
     if (svc.terminalAvailable) return false
-    console.log("NOTE " + root.current + ": qmltermwidget is not installed; the terminal was not tested")
+    console.log("NOTE " + root.current + ": this UI draws no terminal; the terminal was not tested")
     root.done()
     return true
   }
 
-  // The terminal view inside an item (TerminalView's objectName), or null.
+  // The terminal view inside an item (the item named "terminal", which has
+  // the keyboard: GhosttySurface's), or null.
   function terminalIn(item) {
     if (!item) return null
     if (item.objectName === "terminal") return item
@@ -1908,8 +1908,8 @@ ShellRoot {
       // The daemon knows its UI can't draw one: the question is not typed.
       var answer = ""
       yield root.ask(svc, "codex", ["ask hello"], function(a) { answer = a })
-      root.check(answer === "the terminal needs the qmltermwidget package", "ask without a terminal answered: " + answer)
-      // The notch still opens on it, and says what to install in the terminal's place.
+      root.check(answer === "no UI connected draws a terminal", "ask without a terminal answered: " + answer)
+      // The notch still opens on it, and says so in the terminal's place.
       svc.open()
       yield root.settle(svc)
       root.check(svc.notches[0].copies[0].mode === "expanded", "the notch did not open on it")
@@ -2187,7 +2187,7 @@ ShellRoot {
       root.check(ownTermSvc.agentCommand("mine", "toggle").indexOf("no agent mine") === 0, "a terminal took an agent command")
       root.check(ownTermSvc.terminalCommand("nope", "toggle") === "no terminal nope; terminals: mine", "an unknown terminal did not say so")
       if (!ownTermSvc.terminalAvailable) {
-        console.log("NOTE " + root.current + ": qmltermwidget is not installed; the terminal was not run")
+        console.log("NOTE " + root.current + ": this UI draws no terminal; the terminal was not run")
         return
       }
       root.check(ownTermSvc.terminalCommand("mine", "toggle") === "ok", "toggle failed")
@@ -2205,6 +2205,51 @@ ShellRoot {
       root.check(ownTermSvc.terminalCommand("mine", "toggle") === "ok", "toggle failed")
       yield root.settle(ownTermSvc)
       root.check(!copy.pinned, "toggle did not close it")
+    })
+  }
+
+  // Bug: a terminal view took a connection that dropped (a slow daemon, a
+  // theme change) for the program's end, and the next Enter restarted it:
+  // a loaded test run restarted the codex agent so. Only the daemon's
+  // `surface-close` is an end; a dropped connection is made again.
+  TestService {
+    id: reconnectSvc
+    ipcTarget: "notchd-qmltest-reconnect"
+    configPath: root.dir + "/reconnect.json"
+    compositor: workspace4
+    defaultModules: []
+  }
+  NotchCard { id: reconnectCard; notch: reconnectSvc.notches.length > 0 ? reconnectSvc.notches[0].copies[0] : null }
+  function terminalReconnects() {
+    var pidFile = root.dir + "/reconnect-pid"
+    reconnectSvc.replaceConfig({ terminals: { rdrop: { command: "echo $$ > " + pidFile + "; exec cat" } }, modules: ["rdrop"] })
+    root.go(function*() {
+      yield root.waitFor(function() { return !!reconnectSvc.moduleById("rdrop") && reconnectSvc.isTerminal("rdrop") }, 4000)
+      root.check(reconnectSvc.terminalCommand("rdrop", "toggle") === "ok", "toggle failed")
+      var card = reconnectCard
+      yield root.waitFor(function() { var t = root.terminalIn(card); return !!t && t.connected }, 5000)
+      var term = root.terminalIn(card)
+      if (!root.check(!!term && term.connected, "the terminal did not connect")) return
+      // The program starts with the view: its pid, once it wrote it.
+      var pid = ""
+      for (var i = 0; i < 30 && pid === ""; i++) {
+        yield root.runAndWait(["cat", pidFile])
+        pid = shellCmd.out.trim()
+        if (pid === "") yield root.wait(100)
+      }
+      root.check(pid !== "", "the program did not start")
+      term.dropConnection()
+      yield root.wait(100)
+      root.check(!term.exited, "a dropped connection was taken for the program's end")
+      yield root.waitFor(function() { return term.connected }, 3000)
+      root.check(term.connected, "the connection was not made again")
+      root.check(!term.exited, "reconnected, it says the program ended")
+      yield root.wait(300)
+      yield root.runAndWait(["cat", pidFile])
+      root.check(shellCmd.out.trim() === pid, "the program was restarted: " + pid + " -> " + shellCmd.out.trim())
+      root.check(reconnectSvc.terminalCommand("rdrop", "toggle") === "ok", "toggle failed")
+      yield root.settle(reconnectSvc)
+      reconnectSvc.replaceConfig({})
     })
   }
 
@@ -2241,6 +2286,9 @@ ShellRoot {
     var start = { modules: ["activities"] }
     ownTermSvc.replaceConfig(start)
     catalog.svc = ownTermSvc
+    // The daemon's answer first: until then its list still has an earlier
+    // case's terminal (the same service), and the list showed two.
+    root.until(function() { return catalog.modules.length === 0 }, function() {
     var add = null
     for (var i = 0; i < catalog.children.length; i++)
       if (catalog.children[i].text === "Add terminal") add = catalog.children[i]
@@ -2257,6 +2305,7 @@ ShellRoot {
     ownTermSvc.settingsPage = "general"
     catalog.svc = null
     root.done()
+    }, 4000)
   }
   ModuleCatalog {
     id: catalog
@@ -2631,53 +2680,6 @@ ShellRoot {
       codexSvc.close()
       codexSvc.replaceConfig({})
       yield root.settle(codexSvc)
-    })
-  }
-
-  // Bug: the messages you sent to Codex sat on an orange band. Codex can't
-  // ask this terminal for its background (no OSC 11 answer), so it paints
-  // them with ANSI 8, Breeze's orange. A terminal paints a band in ANSI 8;
-  // the grab's pixel must be a gray.
-  Item { id: bandHolder; parent: codexWin.contentItem; y: 500; width: 300; height: 60 }
-  Canvas {
-    id: bandCanvas
-    parent: codexWin.contentItem
-    width: 1; height: 1
-    property var done: null
-    onImageLoaded: requestPaint()
-    onPaint: {
-      if (!bandCanvas.done) return
-      var ctx = getContext("2d")
-      ctx.drawImage(bandCanvas.done.url, -40, -8)
-      var px = ctx.getImageData(0, 0, 1, 1).data
-      var cb = bandCanvas.done.cb
-      bandCanvas.done = null
-      cb([px[0], px[1], px[2]])
-    }
-  }
-  function messageBandGray() {
-    if (root.noTerminal(codexSvc)) return
-    var c = Qt.createComponent(Qt.resolvedUrl("core/terminal/TerminalView.qml"))
-    var t = c.createObject(bandHolder, { program: "/bin/sh", width: 300, height: 60,
-      programArguments: ["-c", "printf '\\033[48;5;8m%30s\\033[0m\\n' ''; sleep 5"] })
-    var file = root.dir + "/band.png"
-    var rgb = null
-    root.steps([
-      [700, function() {
-        bandHolder.grabToImage(function(result) {
-          result.saveToFile(file)
-          bandCanvas.done = { url: "file://" + file, cb: function(px) { rgb = px } }
-          bandCanvas.loadImage("file://" + file)
-        })
-      }],
-      [500, function() {}]
-    ], function() {
-      if (root.check(rgb !== null, "could not read the band's color")) {
-        var spread = Math.max(rgb[0], rgb[1], rgb[2]) - Math.min(rgb[0], rgb[1], rgb[2])
-        root.check(spread < 16, "the band is not gray: rgb " + rgb.join(","))
-      }
-      t.destroy()
-      root.done()
     })
   }
 

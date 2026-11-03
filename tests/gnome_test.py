@@ -578,16 +578,16 @@ def terminal_window(s):
 
 
 class Terminal(ShellCase):
-    """A terminal surface: the helper's window (GTK 4 and VTE) kept in the
-    open notch's hole, with the keyboard, gone with the notch. Skipped where
-    VTE for GTK 4 is missing (the extension then draws a placeholder)."""
+    """A terminal surface: its window (grid.js, GTK 4) kept in the open
+    notch's hole, with the keyboard, gone with the notch. Skipped where gjs
+    with GTK 4 is missing (the extension then draws a placeholder)."""
 
     config = {"modules": ["timer", "shell"], "reserveSpace": True,
               "terminals": {"shell": {"command": "exec sh", "title": "Shell"}}}
 
     def setUp(self):
         if self.shell.snapshot().get("terminals") is None:
-            self.skipTest("no VTE for GTK 4 here")
+            self.skipTest("no gjs with GTK 4 here")
         super().setUp()
 
     def tearDown(self):

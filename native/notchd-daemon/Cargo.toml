@@ -1,6 +1,6 @@
 [package]
 name = "notchd-daemon"
-version = "0.5.0"
+version = "0.6.0"
 edition.workspace = true
 license.workspace = true
 description = "The notchd daemon and CLI."
@@ -13,6 +13,14 @@ notchd-providers = { path = "../notchd-providers" }
 serde.workspace = true
 serde_json.workspace = true
 libc = "0.2.191"
+# The terminal emulator (src/grid.rs): Ghostty's libghostty-vt, built from
+# source at a pinned commit, which needs zig 0.15.2 on PATH
+# (scripts/fetch-zig.sh; `make` puts it there).
+libghostty-vt = "0.2.2"
+# The kitty images: PNGs the programs send decoded, and what the view draws
+# encoded.
+png = "0.18.1"
+
 
 [lib]
 name = "notchd_daemon"

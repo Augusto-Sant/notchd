@@ -4,6 +4,13 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-03
+
+### Changed
+
+- Terminals in the notch (`claude`, `codex` and your own) are notchd's own now: the daemon emulates them with Ghostty's libghostty-vt and the UI draws the screen, so the `qmltermwidget` package (Omarchy) and VTE for GTK 4 (GNOME) are no longer needed. What it brings: the kitty keyboard protocol (Shift+Enter and the like reach Claude Code and Codex), the mouse for programs that ask for it, kitty images, your theme's ANSI colors (Omarchy reads them from the theme's `ghostty.conf`), selection with the mouse (Shift over a program that has the mouse), Ctrl+Shift+C and Ctrl+Shift+V, a program's OSC 52 copies, dead keys and input methods. Heavy output is drawn 2 to 2.6 times as fast at under half the CPU; full-screen redraws cost about twice as much for now. A dropped connection to the daemon is made again instead of ending the view. `make restart` no longer installs anything. See "Terminals" in `docs/architecture.md`.
+- Building the daemon needs zig 0.15.2 and git (for Ghostty's source): `make` downloads that zig into `build/zig`, its checksum checked (`scripts/fetch-zig.sh`).
+
 ### Fixed
 
 - `scripts/install.sh` starts the daemon itself (`notchd daemon --ensure`) where `systemctl` is installed but no systemd user manager runs (a container, a session without systemd), instead of ending with "could not start notchd.service" and no daemon.

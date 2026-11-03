@@ -12,6 +12,8 @@ import QtQuick
 //   fontCaption, fontBodySmall, fontBody,
 //   fontHeading, fontDisplay               pixel sizes
 //   spacingScale                           multiplier behind space()
+//   terminalPalette                        the theme's 16 ANSI colors
+//                                          ("#rrggbb", color 0 first)
 QtObject {
   id: theme
 
@@ -28,6 +30,8 @@ QtObject {
   readonly property color accent: pick("accent", theme.foreground)
   readonly property color danger: pick("danger", "#e06c75")
   readonly property color success: pick("success", "#98c379")
+  // The terminal's ANSI colors: [] leaves them to the terminal.
+  readonly property var terminalPalette: pick("terminalPalette", [])
 
   // Derived tones. Use these instead of ad-hoc alphas, so every surface
   // (notch, modules, settings) shades the same way on any theme.

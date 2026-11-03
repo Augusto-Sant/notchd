@@ -1,18 +1,18 @@
 //! A surface connection (docs/architecture.md, "Free surface"): a view of a
 //! terminal that lives in the daemon, on a socket of its own so a flood of
 //! output never delays a `view` update on the UI's. The first line is
-//! `{"t":"attach","ref":"term:claude","cols":..,"rows":..}`; then the daemon
-//! sends the output so far and what follows (`surface` messages, `ev: data`
-//! with base64 bytes, `title`), and `surface-close` when the program ends or
-//! is replaced; the view sends `input` and `resize`.
+//! `{"t":"attach","ref":"term:claude","cols":..,"rows":..}`. With `render:
+//! grid` (what the UIs ask for) the daemon emulates the terminal and sends
+//! the screen (`grid.rs`). Without it, the program's bytes: the output so
+//! far and what follows (`surface` messages, `ev: data` with base64 bytes,
+//! `title`), `surface-close` when the program ends or is replaced; the view
+//! sends `input` and `resize`, and emulates the terminal itself.
 //!
-//! Both ends are here. [`serve`] is the daemon's. [`Client`] is the view's,
-//! and `notchd attach <ref>` ([`run`]) is that client as a program on a
-//! terminal: how the Linux UI draws a terminal with a widget that can only
-//! run a program (`qmltermwidget` has no way to be fed bytes): the widget
-//! runs `notchd attach`, whose standard output is what the program printed
-//! and whose standard input goes to it. A UI that draws a terminal itself
-//! (macOS, Windows) speaks the same lines with [`Client`]'s counterpart.
+//! Both ends of the bytes are here. [`serve`] is the daemon's. [`Client`] is
+//! the view's, and `notchd attach <ref>` ([`run`]) is that client as a
+//! program on the terminal you run it in: a session of the daemon's (an
+//! agent's, say) in a terminal of your own, its output to standard output,
+//! what you type to the program.
 
 use crate::hub::Hub;
 use crate::ptyhost::Out;
@@ -51,6 +51,9 @@ fn data_lines(rf: &str, bytes: &[u8], out: &mut impl Write) -> std::io::Result<(
 
 /// The daemon's end: serves one view until it or the program is done.
 pub fn serve(hub: &Arc<Hub>, stream: UnixStream, mut reader: impl BufRead, req: &Attach) {
+    if req.render.as_deref() == Some("grid") {
+        return crate::grid::serve(hub, stream, reader, req);
+    }
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let Ok(mut out) = stream.try_clone() else {
         return;
@@ -138,7 +141,7 @@ pub fn serve(hub: &Arc<Hub>, stream: UnixStream, mut reader: impl BufRead, req: 
                     session.input(&bytes);
                 }
             }
-            SurfaceEv::Resize { cols, rows } => {
+            SurfaceEv::Resize { cols, rows, .. } => {
                 session.resize(cols.clamp(1, 1000) as u16, rows.clamp(1, 1000) as u16);
             }
             _ => {}
@@ -179,6 +182,12 @@ impl Client {
             r#ref: rf.to_string(),
             cols: Some(cols),
             rows: Some(rows),
+            render: None,
+            fg: None,
+            bg: None,
+            palette: None,
+            cw: None,
+            ch: None,
         }))?;
         Ok(c)
     }
@@ -207,7 +216,12 @@ impl Client {
     pub fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
         self.send(&ToDaemon::Surface(SurfaceMsg {
             r#ref: self.rf.clone(),
-            ev: SurfaceEv::Resize { cols, rows },
+            ev: SurfaceEv::Resize {
+                cols,
+                rows,
+                cw: None,
+                ch: None,
+            },
         }))
     }
 
@@ -288,7 +302,12 @@ impl Sender {
     }
 
     pub fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
-        self.send(SurfaceEv::Resize { cols, rows })
+        self.send(SurfaceEv::Resize {
+            cols,
+            rows,
+            cw: None,
+            ch: None,
+        })
     }
 }
 

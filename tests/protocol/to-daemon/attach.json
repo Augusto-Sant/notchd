@@ -2,7 +2,9 @@
  "message": "attach",
  "valid": [
   {"t":"attach","ref":"term:claude"},
-  {"t":"attach","ref":"term:claude","cols":100,"rows":30}
+  {"t":"attach","ref":"term:claude","cols":100,"rows":30},
+  {"t":"attach","ref":"term:claude","cols":100,"rows":30,"render":"grid","fg":"#cdd6f4","bg":"#1e1e2e","cw":9,"ch":18},
+  {"t":"attach","ref":"term:claude","render":"grid","palette":["#282828","#ea6962","#a9b665","#d8a657","#7daea3","#d3869b","#89b482","#d4be98","#665c54"]}
  ],
  "invalid": [
   {"why":"ref missing","json":{"t":"attach"}}

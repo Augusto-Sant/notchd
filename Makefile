@@ -18,9 +18,7 @@ QMLLINT ?= $(firstword $(wildcard /usr/lib/qt6/bin/qmllint /usr/lib64/qt6/bin/qm
 # The Omarchy host imports qs.Commons/qs.Ui, which only exist inside the
 # Omarchy shell, so lint skips it; `make restart` and the shell log cover it.
 LINT_FILES = shell.qml core/*.qml core/settings/*.qml core/settings/previews/*.qml \
-	$(wildcard core/client/*.qml core/client/prims/*.qml)
-# Not core/terminal/: it imports QMLTermWidget, whose package ships no type
-# information for qmllint. The QML tests load it where it is installed.
+	$(wildcard core/client/*.qml core/client/prims/*.qml core/terminal/*.qml)
 
 # Dev config for `make dev`, so it never touches ~/.config/notchd.
 DEV_CONFIG ?= $(CURDIR)/build/dev-config.json
@@ -31,10 +29,17 @@ DAEMON_BIN = $(CURDIR)/native/target/release/notchd
 # `make dev` runs its own daemon instance, never the user's `default` one.
 DEV_INSTANCE ?= dev
 
+# Every cargo run builds Ghostty's libghostty-vt (the terminal emulator),
+# which wants zig 0.15.2: scripts/fetch-zig.sh puts it in build/zig (once,
+# checksum checked) and cargo finds it first on PATH. Evaluated only by a
+# recipe that runs cargo.
+ZIG_PATH = $(shell scripts/fetch-zig.sh)
+CARGO = env PATH="$(ZIG_PATH):$$PATH" cargo
+
 # Each layer records what it cost in build/times/ (scripts/timed.py).
 TIMED = scripts/timed.py
 
-.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate daemon dev restart deps clean gnome-dev gnome-dev-46 gnome-test gnome-test-46 gnome-image-46 gnome-zip
+.PHONY: check test rust integration qmltest visual times hero icons bench lint lint-run validate daemon dev restart clean gnome-dev gnome-dev-46 gnome-test gnome-test-46 gnome-image-46 gnome-zip
 
 # The cheap layers first, one after another: a broken rule fails in seconds,
 # before anything costly starts. Then the costly ones at once.
@@ -51,14 +56,14 @@ test:
 	  --test-reporter=./scripts/node-times.mjs --test-reporter-destination=build/times/node.tsv \
 	  tests/*.test.mjs
 	@$(TIMED) py-unit scripts/pytests.py unit
-	@$(TIMED) rust cargo test --manifest-path native/Cargo.toml --quiet
+	@$(TIMED) rust $(CARGO) test --manifest-path native/Cargo.toml --quiet
 
 # The Rust workspace (native/): format, clippy with warnings as errors, every
 # crate's tests. Cheap, so it sits with the first layers of `make check`.
 rust:
-	@$(TIMED) rust-fmt cargo fmt --all --check --manifest-path native/Cargo.toml
-	@$(TIMED) rust-clippy cargo clippy --workspace --all-targets --manifest-path native/Cargo.toml --quiet -- -D warnings
-	@$(TIMED) rust-test cargo test --workspace --manifest-path native/Cargo.toml --quiet
+	@$(TIMED) rust-fmt $(CARGO) fmt --all --check --manifest-path native/Cargo.toml
+	@$(TIMED) rust-clippy $(CARGO) clippy --workspace --all-targets --manifest-path native/Cargo.toml --quiet -- -D warnings
+	@$(TIMED) rust-test $(CARGO) test --workspace --manifest-path native/Cargo.toml --quiet
 
 # Integration layer: the live bridges and the components' installer run as
 # processes against fakes (a fake LocalAI, pacman, downloads from a local
@@ -126,13 +131,14 @@ lint-run:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' core/components/install.py \
 	  && echo "install.py: parses"
 
-# The repo root is the Omarchy plugin.
+# The repo root is the Omarchy plugin, validated as committed (a copy of the
+# files git sees: the build folders are not the plugin's).
 validate:
-	@$(TIMED) validate omarchy plugin validate .
+	@$(TIMED) validate scripts/validate-plugin.sh
 
 # The daemon, release build: what the hosts start with the shell.
 daemon:
-	cargo build --release -p notchd-daemon --manifest-path native/Cargo.toml
+	$(CARGO) build --release -p notchd-daemon --manifest-path native/Cargo.toml
 
 # The standalone host (shell.qml) against a scratch config and its own daemon
 # instance (DEV_INSTANCE, the dev config): the user's `default` daemon and
@@ -178,11 +184,10 @@ gnome-zip:
 # The Omarchy shell does not hot-reload plugin QML. Builds the daemon, stops
 # the running one (it outlives the shell, so it would keep the old build) and
 # copies the build to $XDG_DATA_HOME/notchd/bin/notchd, where the plugin looks
-# when NOTCHD_BIN does not reach the shell. Installs the optional packages
-# first (deps).
+# when NOTCHD_BIN does not reach the shell.
 # The daemon is replaced only when the build differs from the installed one:
 # an unchanged daemon keeps running, with its terminal and agent sessions.
-restart: deps daemon
+restart: daemon
 	@installed="$${XDG_DATA_HOME:-$$HOME/.local/share}/notchd/bin/notchd"; \
 	if cmp -s "$(DAEMON_BIN)" "$$installed"; then \
 	  echo "notchd unchanged: the daemon and its sessions stay"; \
@@ -193,21 +198,7 @@ restart: deps daemon
 	fi
 	NOTCHD_BIN="$(DAEMON_BIN)" omarchy restart shell
 
-# Optional packages the modules use: qmltermwidget, the codex module's
-# terminal. Installed with pacman only when missing (sudo asks then); without
-# pacman, says what to install.
-OPTIONAL_PACKAGES = qmltermwidget
-deps:
-	@for pkg in $(OPTIONAL_PACKAGES); do \
-	  if ! command -v pacman >/dev/null 2>&1; then \
-	    echo "notchd: install $$pkg with your package manager for the codex module" >&2; \
-	  elif ! pacman -Q "$$pkg" >/dev/null 2>&1; then \
-	    echo "notchd: installing $$pkg (the codex module's terminal)"; \
-	    sudo pacman -S --needed --noconfirm "$$pkg"; \
-	  fi; \
-	done
-
-# Nothing else is installed from here. What the voice modules need beyond the
+# Nothing is installed from here. What the voice modules need beyond the
 # app (LocalAI and its voices, Voxtype, system packages) is installed, removed
 # and configured from notchd's settings, Components page (core/components/).
 

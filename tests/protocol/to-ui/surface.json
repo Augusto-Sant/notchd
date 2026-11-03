@@ -2,10 +2,15 @@
  "message": "surface",
  "valid": [
   {"t":"surface","ref":"term:claude","ev":"data","b64":"G1s="},
-  {"t":"surface","ref":"term:claude","ev":"title","text":"⠋ Fix tests | notchd"}
+  {"t":"surface","ref":"term:claude","ev":"title","text":"⠋ Fix tests | notchd"},
+  {"t":"surface","ref":"term:claude","ev":"grid","cols":80,"rows":24,"full":false,"fg":"#ffffff","bg":"#000000","mouse":true,"images":[{"id":1,"x":2,"y":-1,"xo":0,"yo":4,"w":90,"h":54,"sx":0,"sy":0,"sw":300,"sh":180,"z":0}],"cursor":{"x":3,"y":1,"style":"block"},"lines":[{"y":1,"runs":[{"x":0,"w":2,"text":"ok","fg":"#00ff00","a":1},{"x":2,"w":6,"text":" plain"}]},{"y":2,"runs":[],"sel":[0,5]}]},
+  {"t":"surface","ref":"term:claude","ev":"copy","text":"selected text"},
+  {"t":"surface","ref":"term:claude","ev":"clipboard"},
+  {"t":"surface","ref":"term:claude","ev":"image","id":1,"png":"iVBORw0KGgo="}
  ],
  "invalid": [
   {"why":"unknown ev","json":{"t":"surface","ref":"term:claude","ev":"scroll","b64":""}},
+  {"why":"grid without lines","json":{"t":"surface","ref":"term:claude","ev":"grid","cols":80,"rows":24,"full":true,"fg":"#ffffff","bg":"#000000"}},
   {"why":"data without b64","json":{"t":"surface","ref":"term:claude","ev":"data"}},
   {"why":"ref missing","json":{"t":"surface","ev":"data","b64":""}}
  ]

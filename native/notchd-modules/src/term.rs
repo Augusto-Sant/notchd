@@ -359,7 +359,7 @@ impl TermModule {
     /// (it is drawing its UI by then), and a moment later.
     fn ask(&mut self, ctx: &Ctx, text: &str, now: u64) -> String {
         if !ctx.terminal_ui {
-            return "the terminal needs the qmltermwidget package".into();
+            return "no UI connected draws a terminal".into();
         }
         self.effects.push(Effect::Notch(ModuleOp::Open));
         if text.is_empty() {
@@ -1121,7 +1121,7 @@ mod tests {
         let none = Ctx::default();
         assert_eq!(
             m.command(&none, "claude", &["ask hi".into()], 0).unwrap(),
-            "the terminal needs the qmltermwidget package"
+            "no UI connected draws a terminal"
         );
         assert_eq!(
             m.command(

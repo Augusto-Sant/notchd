@@ -5,6 +5,7 @@ pub mod attach;
 pub mod corehost;
 pub mod daemon;
 pub mod ensure;
+pub mod grid;
 pub mod hub;
 pub mod instance;
 pub mod ipc;

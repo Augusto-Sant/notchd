@@ -143,13 +143,7 @@ for ((i = 0; i < n; i++)); do
   fi
   # The offscreen backend's lack of window masks is expected (the pointer
   # tests use a window).
-  # qmltermwidget warns "Process <pid> did not die with SIGHUP" when a view is
-  # closed after its `notchd attach` already ended by itself (the program
-  # ended or was replaced, so the daemon closed the connection) but the
-  # widget has not yet handled the exit: a loaded machine hits it. Traced:
-  # the process had logged its own close and left before any signal; one
-  # that ignores SIGHUP is tested in native/notchd-daemon/tests/terminals.rs.
-  problems=$(grep -E '^\s*(WARN|ERROR)' "$log" | grep -vE 'window masks|did not die with SIGHUP' || true)
+  problems=$(grep -E '^\s*(WARN|ERROR)' "$log" | grep -vE 'window masks' || true)
   # The client's cases drop and refuse the connection on purpose: Quickshell
   # warns of each socket error, and the client of the junk line it is sent.
   if [[ -f $(dirname -- "$log")/daemon.log || -d $(dirname -- "$log")/sock ]]; then

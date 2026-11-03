@@ -4,7 +4,6 @@ import Quickshell.Io
 import "settings"
 import "client"
 import "Config.js" as Config
-import "Terminal.js" as Terminal
 import "settings/Settings.js" as Settings
 
 // The notches' source of truth: config, modules, the notches (Notch, one per
@@ -187,25 +186,18 @@ Item {
   // offscreen: scripts/isolated.sh sets NOTCHD_OFFLINE, which the daemon
   // reads, so tests and renders never read a real login).
   function isAgent(id) { return !!svc.moduleInfo[id] && !!svc.moduleInfo[id].agent }
-  // The terminal view needs the optional qmltermwidget package. The daemon
-  // is told (`hello`'s `surfaces`), so a command that needs one says so.
-  property bool terminalAvailable: svc.probeTerminal()
-  function probeTerminal() {
-    try {
-      Qt.createQmlObject(Terminal.PROBE, svc, "terminal-probe").destroy()
-      return true
-    } catch (e) {
-      return false
-    }
-  }
+  // This UI draws terminals (core/terminal/GhosttySurface.qml, nothing to
+  // install). The daemon is told (`hello`'s `surfaces`), so a command that
+  // needs a terminal knows; a test turns it off to see what happens without.
+  property bool terminalAvailable: true
   Binding {
     target: svc.client
     property: "caps"
     value: ({ primitives: [], surfaces: svc.terminalAvailable ? ["terminal"] : [], webview: false, canvas: false })
   }
   // An agent's IPC command: the daemon's module answers it (`notchd ipc
-  // agent <id> <command>` has its answers: the usage, `the terminal needs
-  // the qmltermwidget package`...). The host's target cannot wait for it, so
+  // agent <id> <command>` has its answers: the usage, `no UI connected
+  // draws a terminal`...). The host's target cannot wait for it, so
   // this sends the command and answers "ok", unless it already knows better.
   function agentCommand(id, command) {
     if (!svc.isAgent(id)) {

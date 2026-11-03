@@ -1,6 +1,6 @@
 // The terminal surfaces of the GNOME UI (docs/architecture.md, "Free
 // surface", "GNOME UI"): a window per terminal, from the helper in
-// terminal/helper.js (GTK 4 and VTE running `notchd attach <ref>`), which
+// terminal/grid.js (GTK 4, drawing the screen the daemon emulates), which
 // the extension keeps over the notch: above, on every workspace, out of the
 // window list, and where the view's `surface` node is. The notch leaves a
 // hole there, so the window shows through it and takes the pointer.
@@ -16,8 +16,9 @@ import Meta from 'gi://Meta';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-// Whether this system can run the helper: gjs, GTK 4 and VTE for GTK 4
-// (Ubuntu: gir1.2-vte-3.91; Fedora: vte291-gtk4). `done(bool)`.
+// Whether this system can run the helper: gjs and GTK 4 with Pango and
+// GdkPixbuf (a GNOME desktop has them; the extension's preferences need
+// GTK 4 too). `done(bool)`.
 export function probe(done) {
     const gjs = GLib.find_program_in_path('gjs');
     if (!gjs) {
@@ -26,7 +27,7 @@ export function probe(done) {
     }
     try {
         const proc = Gio.Subprocess.new([gjs, '-c',
-            "imports.gi.versions.Gtk = '4.0'; imports.gi.versions.Vte = '3.91'; imports.gi.Gtk; imports.gi.Vte;"],
+            "imports.gi.versions.Gtk = '4.0'; imports.gi.Gtk; imports.gi.PangoCairo; imports.gi.GdkPixbuf;"],
         Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
         proc.wait_check_async(null, (p, res) => {
             let ok = false;
