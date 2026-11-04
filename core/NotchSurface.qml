@@ -48,58 +48,21 @@ Item {
       barHeight: root.barHeight
       barHidden: root.barHidden
       layerNamespace: root.layerNamespace
-      readonly property var packed: root.packOf(modelData)
+      readonly property var packed: layout.packOf(modelData)
       packShift: packed ? packed.shift : 0
-      covered: (!!packed && packed.covered) || root.coveredByStandalone(modelData)
-      joinStart: root.windowAt(packed ? packed.joinStart : -1)
-      joinEnd: root.windowAt(packed ? packed.joinEnd : -1)
-      rowDepth: root.rowDepthOf(modelData)
-      cornerInset: root.cornerOf(modelData, root.cornerInsets)
-      cornerSpan: root.cornerOf(modelData, root.cornerSpans)
+      covered: (!!packed && packed.covered) || layout.coveredByStandalone(modelData)
+      joinStart: layout.windowAt(packed ? packed.joinStart : -1)
+      joinEnd: layout.windowAt(packed ? packed.joinEnd : -1)
+      rowDepth: layout.rowDepthOf(modelData)
+      cornerInset: layout.cornerInsetOf(modelData)
+      cornerSpan: layout.cornerSpanOf(modelData)
     }
   }
 
-  // ---------------------------------------------------------- side by side
-  // Notches closer than this join flush into one shape: two shoulders,
-  // which flare past the card, and a little air would not fit between them.
-  readonly property real packGap: 2 * Theme.space(10) + Theme.space(8)
-  readonly property var packing: Position.pack(root.windows.map(function(w) { return w.packItem }), root.packGap)
-  // A joined row as deep as its deepest notch closed; an open one, deeper,
-  // steps down to its neighbors and keeps the row as it was.
-  readonly property var rowDepths: Position.rowDepths(root.packing,
-    root.windows.map(function(w) { return w.closedDepth }))
-  function rowDepthOf(copy) {
-    var list = root.windows
-    for (var i = 0; i < list.length; i++) if (list[i].copy === copy) return root.rowDepths[i] || 0
-    return 0
-  }
-  // Corners (Position.corners), in two halves so no window's place feeds
-  // back into itself: where side notches start, from the top and bottom
-  // ones flush in the corners; and where those meet the side notches, from
-  // the side ones.
-  readonly property var cornerInsets: Position.corners(root.windows.map(function(w) { return Position.cornerInput(w, false) }))
-  readonly property var cornerSpans: Position.corners(root.windows.map(function(w) { return Position.cornerInput(w, true) }))
-  function cornerOf(copy, list) {
-    var ws = root.windows
-    for (var i = 0; i < ws.length; i++) if (ws[i].copy === copy) return list[i] || { start: 0, end: 0 }
-    return { start: 0, end: 0 }
-  }
-  function windowAt(index) {
-    return index >= 0 && index < root.windows.length ? root.windows[index] : null
-  }
-  function packOf(copy) {
-    var list = root.windows
-    for (var i = 0; i < list.length; i++) if (list[i].copy === copy) return root.packing[i] || null
-    return null
-  }
-
-  // A standalone module's card (the OSD) keeps its own place and draws over
-  // the notches it overlaps, which hide while it shows.
-  readonly property var standaloneCovers: Position.coveredByStandalone(root.windows.map(function(w) { return w.coverItem }))
-  function coveredByStandalone(copy) {
-    var list = root.windows
-    for (var i = 0; i < list.length; i++) if (list[i].copy === copy) return !!root.standaloneCovers[i]
-    return false
+  // Side by side, the corners and what a standalone card covers.
+  NotchLayout {
+    id: layout
+    windows: root.windows
   }
 
   // ------------------------------------------------------- reserved space

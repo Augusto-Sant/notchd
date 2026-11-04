@@ -319,6 +319,19 @@ function cornerInput(w, sides) {
   return side === sides ? w.cornerItem : { screen: w.windowScreenName, edge: w.edge }
 }
 
+// One window's `key` (packItem, coverItem, closedDepth) for the work on one
+// kind of edge (left/right when `sides`, top/bottom otherwise), else null,
+// which pack, rowDepths and coveredByStandalone pass over. The edge is
+// checked before the key is read, as in cornerInput: a side notch's place
+// comes from the corners, which come from how the top and bottom ones were
+// packed, so a packing that read every window's packItem fed back into
+// itself (~840 warnings when a notch was added on the top edge beside a
+// side one, and the new one drawn empty).
+function sideInput(w, sides, key) {
+  var side = w.edge === "left" || w.edge === "right"
+  return side === sides ? w[key] : null
+}
+
 function corners(items) {
   items = items || []
   function deepest(screen, edge, end) {

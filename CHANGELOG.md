@@ -4,6 +4,10 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Fixed
+
+- Omarchy: a notch added on the top or bottom edge of a screen that already has a notch on a side edge now draws at once; it showed only an empty shoulder until the shell restarted, with hundreds of binding-loop warnings in the log.
+
 ## [0.7.0] — 2026-11-04
 
 ### Changed

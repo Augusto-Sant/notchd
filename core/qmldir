@@ -10,6 +10,7 @@ Notch 1.0 Notch.qml
 NotchCopy 1.0 NotchCopy.qml
 DepthReport 1.0 DepthReport.qml
 NotchWindow 1.0 NotchWindow.qml
+NotchLayout 1.0 NotchLayout.qml
 KeepShown 1.0 KeepShown.qml
 DaemonDown 1.0 DaemonDown.qml
 DaemonDownRow 1.0 DaemonDownRow.qml
