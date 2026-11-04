@@ -74,7 +74,11 @@ To write your own, see [docs/modules.md](docs/modules.md).
 
 ## Your own modules
 
-A module is a folder in `~/.config/notchd/modules/<id>/` with a `module.json` and a program in any language that prints JSON lines for what the notch shows and reads the clicks, settings and provider data (CPU, media, screens, plan usage) notchd sends it. It reloads when you save, and a crash or a mistake shows in the notch with the log's path. Start from a [sample](docs/examples/modules/) (shell, Python, Node); the guide is [User modules](docs/modules.md#user-modules).
+A module is a folder in `~/.config/notchd/modules/<id>/` with a `module.json` and a program in any language that prints JSON lines for what the notch shows and reads the clicks, settings and provider data (CPU, media, screens, plan usage) notchd sends it. It reloads when you save, and a crash or a mistake shows in the notch with the log's path. Start from the [examples](docs/examples/modules/) (shell, Python, Node); the guide is [User modules](docs/modules.md#user-modules).
+
+### Showcase: Herdr
+
+The [Herdr example](docs/examples/modules/herdr/) reads a running session and shows agent states, workspaces and panes above a regular notchd terminal running Herdr. It peeks when an agent needs input or finishes, with optional desktop notifications. Copy the module folder into `~/.config/notchd/modules/`, then put `herdr` and a terminal running `herdr` in one notch with `tabs: false`. The [example README](docs/examples/modules/herdr/README.md) has the config and setup steps. It needs no built-in integration or daemon rebuild.
 
 ## Several notches
 
