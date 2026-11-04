@@ -18,5 +18,15 @@
       "url": "https://github.com/eryk-vieira/notchd/releases/download/v0.6.0/notchd-0.6.0-x86_64-unknown-linux-gnu.tar.gz",
       "sha256": "13d1ef3361bf723f0ed24caf835ce6835544ead0dd027bd97bb5e3eeafb07dfd"
     }
+  },
+  "0.7.0": {
+    "aarch64-unknown-linux-gnu": {
+      "url": "https://github.com/eryk-vieira/notchd/releases/download/v0.7.0/notchd-0.7.0-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "bca3f46bfaf4993e20b85e712535cb5ecc5f87834f9ce57b0197878b64eff534"
+    },
+    "x86_64-unknown-linux-gnu": {
+      "url": "https://github.com/eryk-vieira/notchd/releases/download/v0.7.0/notchd-0.7.0-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "ffb4a219628bd85f4c92e1e00eb9c1c84d4079507a39530207c33bdda2ccffbb"
+    }
   }
 }
