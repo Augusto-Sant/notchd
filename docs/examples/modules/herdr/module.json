@@ -1,0 +1,21 @@
+{
+  "title": "Herdr",
+  "command": ["python3", "run.py"],
+  "priority": 65,
+  "icon": "󰚩",
+  "expandedWidth": 760,
+  "permissions": ["exec", "files"],
+  "settings": [
+    { "key": "session", "type": "string", "label": "Session", "default": "",
+      "help": "Empty uses Herdr's default session. Enter a named local session to follow it instead." },
+    { "key": "interval", "type": "integer", "label": "Refresh every", "default": 2,
+      "min": 1, "max": 60, "unit": "s",
+      "help": "Reconciles the full state even if an event is missed." },
+    { "key": "blocked", "type": "boolean", "label": "Peek when blocked", "default": true },
+    { "key": "done", "type": "boolean", "label": "Peek when done", "default": true },
+    { "key": "peekMs", "type": "integer", "label": "Peek length", "default": 5000,
+      "min": 400, "max": 30000, "step": 100, "unit": "ms" },
+    { "key": "desktop", "type": "boolean", "label": "Desktop notifications", "default": false,
+      "help": "Also sends OS notifications. Herdr may already show its own, so this is off by default." }
+  ]
+}
