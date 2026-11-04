@@ -28,6 +28,15 @@ fn cli(env: &TestEnv, args: &[&str]) -> (Option<i32>, String, String) {
 }
 
 #[test]
+fn skill_prints_the_bundled_instructions_without_a_daemon() {
+    let env = TestEnv::new("skill");
+    let (code, stdout, stderr) = cli(&env, &["--skill"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout, include_str!("../../../skills/notchd/SKILL.md"));
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
 fn hello_gets_welcome_then_config() {
     let (_env, daemon) = start("welcome", Some(r#"{"hoverOpenDelay":200}"#));
     let mut ui = FakeUi::connect_hello(&daemon.socket);
@@ -152,6 +161,15 @@ fn ipc_with_an_unknown_method_prints_the_error_and_exits_non_zero() {
         stderr.contains("method") && stderr.contains("unknown method"),
         "{stderr}"
     );
+}
+
+#[test]
+fn skill_flag_in_an_ipc_argument_is_passed_to_the_daemon() {
+    let (env, _daemon) = start("skill-argument", None);
+    let (code, stdout, stderr) = cli(&env, &["ipc", "no-such-method", "--skill"]);
+    assert_eq!(code, Some(1));
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("unknown method"), "{stderr}");
 }
 
 #[test]

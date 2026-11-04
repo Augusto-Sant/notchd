@@ -8,7 +8,9 @@ Every host exposes the same methods on its `ipcTarget`. The CLI depends on the h
 | standalone | `qs -p <checkout> ipc call notchd <method> ...` |
 | the daemon (any host) | `notchd ipc <method> ...` |
 
-The daemon is what answers: `notchd ipc` talks to it directly and prints the method's own reply. A host's target (Quickshell's `IpcHandler`) cannot wait for a reply, so it sends the command to the daemon and answers what the shell already knows (`ok`, `no notch <id>`, `<id> module not loaded`); where a method's answer depends on a module (`no timer running`, the usage text, an agent's plan `usage` in `state`), only `notchd ipc` has it. The daemon's socket is `$XDG_RUNTIME_DIR/notchd/<instance>.sock`; `NOTCHD_INSTANCE`, `NOTCHD_SOCKET` and `NOTCHD_CONFIG` pick another daemon, as `make dev` does.
+The daemon is what answers: `notchd ipc` talks to it directly and prints the method's own reply. A host's target (Quickshell's `IpcHandler`) cannot wait for a reply, so it sends the command to the daemon and answers what the shell already knows (`ok`, `no notch <id>`, `<id> module not loaded`); where a method's answer depends on a module (`no timer running`, the usage text, an agent's plan `usage` in `state`), only `notchd ipc` has it. The daemon's socket is `$XDG_RUNTIME_DIR/notchd/<instance>.sock`; `NOTCHD_INSTANCE` or `NOTCHD_SOCKET` selects another daemon, while `NOTCHD_CONFIG` selects its config file, as `make dev` does.
+
+An agent or shell launched in a notchd terminal also receives `NOTCHD_BIN` (the daemon binary), `NOTCHD_SOCKET`, `NOTCHD_INSTANCE` and `NOTCHD_TERMINAL_ID`. Use `"$NOTCHD_BIN" ipc state` from that terminal to inspect its own instance even when `notchd` is not on `PATH`. The reusable [agent skill](../skills/notchd/SKILL.md) describes the supported control workflow; `notchd --skill` prints the copy built into the installed binary.
 
 | Method | |
 |---|---|

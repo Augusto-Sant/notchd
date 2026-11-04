@@ -22,6 +22,7 @@ use notchd_providers::pty::PtySpec;
 use notchd_providers::usage::{self as usage_provider, Curl, Http};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
@@ -82,6 +83,8 @@ pub struct CoreHost {
     ptys: PtyHost,
     notes: Option<Sender<Note>>,
     env: Env,
+    /// The daemon that owns terminal programs, independent of inherited CLI env.
+    terminal_instance: Option<(String, PathBuf, Option<PathBuf>)>,
     /// The sidecars written out of the binary (`assets`), on first use.
     embedded: std::sync::OnceLock<Option<String>>,
     http: Arc<dyn Http>,
@@ -115,6 +118,7 @@ impl CoreHost {
             ptys: PtyHost::default(),
             notes: None,
             env: Arc::new(|k| std::env::var(k).ok()),
+            terminal_instance: None,
             embedded: std::sync::OnceLock::new(),
             http: Arc::new(Curl),
             terminal_ui: false,
@@ -144,6 +148,18 @@ impl CoreHost {
     pub fn with_env(mut self, env: Env) -> CoreHost {
         self.env = env;
         self
+    }
+
+    /// Give hosted terminal programs a CLI path and the daemon's exact socket.
+    pub fn set_terminal_instance(&mut self, instance: &crate::instance::Instance) {
+        self.terminal_instance = Some((
+            instance.name.clone(),
+            instance
+                .socket
+                .canonicalize()
+                .unwrap_or_else(|_| instance.socket.clone()),
+            std::env::current_exe().ok(),
+        ));
     }
 
     /// What asks the network for the plan usage.
@@ -569,11 +585,25 @@ impl CoreHost {
         match cmd {
             PtyCmd::Start(s) => {
                 let home = (self.env)("HOME").unwrap_or_default();
+                let mut env = vec![("TERM".into(), "xterm-256color".into())];
+                if let Some((name, socket, bin)) = &self.terminal_instance {
+                    env.extend([
+                        ("NOTCHD_INSTANCE".into(), name.clone()),
+                        (
+                            "NOTCHD_SOCKET".into(),
+                            socket.to_string_lossy().into_owned(),
+                        ),
+                        ("NOTCHD_TERMINAL_ID".into(), id.into()),
+                    ]);
+                    if let Some(bin) = bin {
+                        env.push(("NOTCHD_BIN".into(), bin.to_string_lossy().into_owned()));
+                    }
+                }
                 let spec = PtySpec {
                     program: s.program,
                     args: s.args,
                     cwd: Some(notchd_core::terminal::expand_home(Some(&s.dir), &home)),
-                    env: vec![("TERM".into(), "xterm-256color".into())],
+                    env,
                     cols: 0,
                     rows: 0,
                 };

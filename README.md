@@ -155,6 +155,8 @@ Nothing heavy ships with notchd. What the voice modules need beyond the app (Loc
 
 Scripts drive the notch through the host's IPC (Quickshell's) or the daemon's own CLI, `notchd ipc <method>`: push an activity, open the notch, change a config key. See [docs/ipc.md](docs/ipc.md).
 
+Agents can use the same CLI through the [notchd skill](skills/notchd/SKILL.md). Install it with `npx skills add eryk-vieira/notchd --skill notchd -g`, or print the copy bundled with your binary using `notchd --skill`. An agent running in a notchd terminal inherits `NOTCHD_BIN`, `NOTCHD_SOCKET` and `NOTCHD_INSTANCE` so its commands reach that terminal's daemon, including a non-default development instance.
+
 ```sh
 omarchy-shell eryk.notchd push '{"id":"deploy","title":"Deploying api","progress":40,"sticky":true}'
 ```
