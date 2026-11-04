@@ -1,31 +1,23 @@
 // GNOME's look mapped onto the tokens of `welcome.tokens` (the same names
-// and derivations as core/Theme.qml): `color-scheme` picks dark or light,
-// `accent-color` (GNOME 47+) the accent. On GNOME 46 the accent is
-// Adwaita's default blue.
+// and derivations as core/Theme.qml, themeColors.js): the notch hangs from
+// the top bar, so it takes the bar's background and text colors, whatever
+// the Shell theme, read from the panel's theme node again when its style
+// changes. Over the overview and the lock screen the panel is see-through
+// and the notch keeps the colors it had; before the panel has any, it is
+// Adwaita's for `color-scheme`. `accent-color` (GNOME 47+) is the accent;
+// on GNOME 46 it is Adwaita's default blue.
 
 import Gio from 'gi://Gio';
 import St from 'gi://St';
+
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
+import {opaque, tones} from './themeColors.js';
 
 const ACCENTS = {
     blue: '#3584e4', teal: '#2190a4', green: '#3a944a', yellow: '#c88800',
     orange: '#ed5b00', red: '#e62d42', pink: '#d56199', purple: '#9141ac', slate: '#6f8396',
 };
-
-const DARK = {foreground: '#ffffff', background: '#1e1e1e', danger: '#ff7b63', success: '#8ff0a4'};
-const LIGHT = {foreground: '#1e1e1e', background: '#fafafa', danger: '#c01c28', success: '#26a269'};
-
-function parse(hex) {
-    const n = parseInt(hex.slice(1), 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
-function rgba(c, a) {
-    return {r: c[0] / 255, g: c[1] / 255, b: c[2] / 255, a};
-}
-
-function mix(a, b, t) {
-    return [0, 1, 2].map(i => a[i] + (b[i] - a[i]) * t);
-}
 
 export class Theme {
     constructor(onChanged) {
@@ -38,6 +30,13 @@ export class Theme {
             this._ids.push(this._settings.connect('changed::accent-color', () => this._update(onChanged)));
         this._themeContext = St.ThemeContext.get_for_stage(global.stage);
         this._scaleId = this._themeContext.connect('notify::scale-factor', () => this._update(onChanged));
+        // A Shell theme loaded, or the panel's style changed (it goes
+        // see-through over the overview): its colors again, a redraw only
+        // when they changed.
+        this._themeId = this._themeContext.connect('changed', () => this._panelChanged(onChanged));
+        this._panel = Main.panel;
+        this._panelStyleId = this._panel?.connect('style-changed', () => this._panelChanged(onChanged)) ?? 0;
+        this._panelColors = this._readPanel();
         this._update(null);
     }
 
@@ -45,28 +44,41 @@ export class Theme {
         for (const id of this._ids)
             this._settings.disconnect(id);
         this._themeContext.disconnect(this._scaleId);
+        this._themeContext.disconnect(this._themeId);
+        if (this._panelStyleId)
+            this._panel.disconnect(this._panelStyleId);
+    }
+
+    // The panel's {background, foreground} as [r, g, b], or null while it
+    // has none to give (see-through, or not styled yet). The text color is
+    // a panel button's (the clock's), as the panel's own is not set.
+    _readPanel() {
+        const node = this._panel?.peek_theme_node?.();
+        const background = node ? opaque(node.get_background_color()) : null;
+        if (!background)
+            return null;
+        const button = this._panel.statusArea?.dateMenu;
+        const buttonNode = button?.peek_theme_node?.() ?? null;
+        const foreground = opaque((buttonNode ?? node).get_foreground_color());
+        return {background, foreground};
+    }
+
+    _panelChanged(onChanged) {
+        const colors = this._readPanel();
+        if (!colors || JSON.stringify(colors) === JSON.stringify(this._panelColors))
+            return;
+        this._panelColors = colors;
+        this._update(onChanged);
     }
 
     _update(onChanged) {
         const scheme = this._settings.get_string('color-scheme');
-        this.dark = scheme !== 'prefer-light';
-        const base = this.dark ? DARK : LIGHT;
         const accentName = this._hasAccent ? this._settings.get_string('accent-color') : 'blue';
-        const fg = parse(base.foreground);
-        const bg = parse(base.background);
-        this.colors = {
-            foreground: rgba(fg, 1),
-            background: rgba(bg, 1),
-            accent: rgba(parse(ACCENTS[accentName] ?? ACCENTS.blue), 1),
-            danger: rgba(parse(base.danger), 1),
-            success: rgba(parse(base.success), 1),
-            muted: rgba(fg, 0.6),
-            faint: rgba(fg, 0.35),
-            line: rgba(fg, 0.14),
-            hover: rgba(fg, 0.06),
-            selected: rgba(fg, 0.10),
-            surface: rgba(mix(bg, fg, 0.035), 1),
-        };
+        const look = tones(this._panelColors, scheme !== 'prefer-light', ACCENTS[accentName] ?? ACCENTS.blue);
+        this.dark = look.dark;
+        this.colors = look.colors;
+        // What the panel gave, for the test hook.
+        this.panelColors = this._panelColors;
         // St lengths set from code are not scaled by the UI scale factor
         // (CSS lengths are), so design pixels go through space().
         this.scale = this._themeContext.scale_factor;

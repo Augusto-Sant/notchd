@@ -98,6 +98,8 @@ export default class NotchdExtension extends Extension {
                     navigateAction: this._navigateAction ?? 0,
                     preferencesOpened: this._preferencesOpened ?? 0,
                     settingsOpen: !!this._client?.store.state?.settingsOpen,
+                    theme: {background: this._theme?.css('background'), foreground: this._theme?.css('foreground'),
+                        panel: this._theme?.panelColors ?? null},
                 }));
             }).catch(e => console.warn(`notchd: no test hooks: ${e.message}`));
         }

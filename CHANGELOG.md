@@ -8,6 +8,7 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 
+- GNOME: the notch takes the top bar's colors (its background and text) instead of Adwaita's window colors, so it reads as part of the bar with the default Shell theme, the light color scheme and other Shell themes.
 - Omarchy: a notch added on the top or bottom edge of a screen that already has a notch on a side edge now draws at once; it showed only an empty shoulder until the shell restarted, with hundreds of binding-loop warnings in the log.
 
 ## [0.7.0] — 2026-11-04

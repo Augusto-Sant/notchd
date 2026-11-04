@@ -24,6 +24,7 @@ const IFACE = `
     <method name="Key"><arg type="u" direction="in" name="keyval"/></method>
     <method name="RunAction"><arg type="s" direction="in" name="name"/></method>
     <method name="KeybindingAction"><arg type="u" direction="in" name="keycode"/><arg type="u" direction="in" name="mask"/><arg type="u" direction="out" name="action"/></method>
+    <method name="PanelStyle"><arg type="s" direction="in" name="path"/></method>
     <method name="Screenshot"><arg type="s" direction="in" name="path"/><arg type="b" direction="out" name="ok"/></method>
   </interface>
 </node>`;
@@ -48,6 +49,7 @@ export class TestHook {
     }
 
     destroy() {
+        this.PanelStyle('');
         this._dock?.destroy();
         this._dock = null;
         this._impl.unexport();
@@ -66,7 +68,10 @@ export class TestHook {
             const r = global.workspace_manager.get_active_workspace().get_work_area_for_monitor(i);
             return {x: r.x, y: r.y, w: r.width, h: r.height};
         });
+        // The top bar's own background now, as its theme node has it.
+        const bar = Main.panel.peek_theme_node()?.get_background_color();
         return JSON.stringify({monitors, workArea, panel: Main.panel.height, modal: Main.modalCount,
+            panelBackground: bar ? [bar.red, bar.green, bar.blue, bar.alpha] : null,
             overview: Main.overview.visible,
             // The chrome actors the extension added (all named notchd-*).
             chrome: (Main.layoutManager._trackedActors ?? []).filter(a => a.actor.name?.startsWith('notchd-')).length,
@@ -131,6 +136,30 @@ export class TestHook {
     // mutter's keybindings in a headless shell, so a test asks this instead.
     KeybindingAction(keycode, mask) {
         return global.display.get_keybinding_action(keycode, mask);
+    }
+
+    // A stylesheet on top of the Shell theme (a CSS file's path), as a user
+    // theme would; "" takes the last one off again.
+    PanelStyle(path) {
+        // A new St.Theme, as the Shell loads one: setting it restyles every
+        // actor and emits the context's `changed`.
+        const context = St.ThemeContext.get_for_stage(global.stage);
+        this._shellTheme ??= context.get_theme();
+        const base = this._shellTheme;
+        if (!path) {
+            if (context.get_theme() !== base)
+                context.set_theme(base);
+            return;
+        }
+        const theme = new St.Theme({
+            application_stylesheet: base.application_stylesheet,
+            theme_stylesheet: base.theme_stylesheet,
+            default_stylesheet: base.default_stylesheet,
+        });
+        for (const sheet of base.get_custom_stylesheets())
+            theme.load_stylesheet(sheet);
+        theme.load_stylesheet(Gio.File.new_for_path(path));
+        context.set_theme(theme);
     }
 
     ScreenshotAsync(params, invocation) {
