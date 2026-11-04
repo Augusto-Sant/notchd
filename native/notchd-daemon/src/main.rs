@@ -10,6 +10,7 @@ usage: notchd [options] <command>
   notchd daemon [--ensure]        run the daemon (--ensure: start it detached unless one runs)
   notchd ipc <method> [args...]   send an IPC method to the daemon, print its reply
   notchd attach <ref>             a view of a terminal the daemon runs (term:claude), on this terminal
+  notchd --skill                  print the agent skill bundled with this binary
   notchd --version                its version
   notchd --help                   this text
 
@@ -26,6 +27,10 @@ fn die(message: &str, code: i32) -> ! {
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.len() == 1 && args[0] == "--skill" {
+        print!("{}", include_str!("../../../skills/notchd/SKILL.md"));
+        return;
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!("{USAGE}");
         return;

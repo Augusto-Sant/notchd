@@ -52,7 +52,7 @@ impl Server {
     /// a fake environment and network).
     pub fn bind_with(
         instance: Instance,
-        core: crate::corehost::CoreHost,
+        mut core: crate::corehost::CoreHost,
     ) -> Result<Server, String> {
         let path = &instance.socket;
         if let Some(dir) = path.parent() {
@@ -72,6 +72,7 @@ impl Server {
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("{}: {e}", path.display()))?;
         let ident = socket_ident(path);
+        core.set_terminal_instance(&instance);
         Ok(Server {
             ident,
             listener,
