@@ -351,7 +351,8 @@ class NotchCopy extends St.Widget {
         const mode = copy.mode;
         const parts = this._parts(copy, vertical);
         const tabs = this._tabs(copy);
-        const key = JSON.stringify([mode, vertical, parts, tabs]);
+        // A theme change (colors, text scaling) draws the view again too.
+        const key = JSON.stringify([mode, vertical, parts, tabs, this.theme.generation]);
         if (key !== this._viewKey) {
             this._viewKey = key;
             // The same parts, tabs and theme as last time: the parts' actors
@@ -1212,6 +1213,8 @@ class NotchCopy extends St.Widget {
             // where it is and reads what a picture shows).
             bars: this._viewActors(a => a._track).map(a => ({...this._boxOf(a._track), seek: !!a.reactive, shown: a._shownFraction ?? null})),
             texts: this._viewActors(a => a instanceof St.Label).map(a => a.text),
+            // Each text's size in pixels, as its style sets it.
+            textSizes: this._viewActors(a => a instanceof St.Label).map(a => Number(/font-size: ([\d.]+)px/.exec(a.style ?? '')?.[1] ?? 0)),
             canvases: this._viewActors(a => a._canvas).map(a => ({w: a.width, h: a.height, cmds: a._canvas.cmds.length})),
             images: this._viewActors(a => a._picture).map(a => ({...a._picture, ...this._boxOf(a)})),
             tabs: (this._tabButtons ?? []).filter(({button}) => button.mapped).map(({tab, button}) => {

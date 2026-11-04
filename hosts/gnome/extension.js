@@ -41,6 +41,7 @@ export default class NotchdExtension extends Extension {
         this._layoutId = 0;
         this._struts = [];
         this._theme = new Theme(() => {
+            this._terminals?.updateFonts();
             this._terminals?.recolor();
             this._redraw();
         });
@@ -99,7 +100,7 @@ export default class NotchdExtension extends Extension {
                     preferencesOpened: this._preferencesOpened ?? 0,
                     settingsOpen: !!this._client?.store.state?.settingsOpen,
                     theme: {background: this._theme?.css('background'), foreground: this._theme?.css('foreground'),
-                        panel: this._theme?.panelColors ?? null},
+                        panel: this._theme?.panelColors ?? null, fonts: this._theme?.fonts ?? null},
                 }));
             }).catch(e => console.warn(`notchd: no test hooks: ${e.message}`));
         }

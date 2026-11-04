@@ -62,3 +62,14 @@ export function tones(panel, dark, accent) {
         },
     };
 }
+
+// core/Theme.qml's five text sizes, in pixels, times the desktop's
+// `text-scaling-factor` (Settings, Accessibility, Large Text), so the notch's
+// text grows with the rest of the Shell's. A factor that is not a positive
+// number is 1.
+export const FONTS = {caption: 10, bodySmall: 11, body: 12, heading: 16, display: 24};
+
+export function fonts(factor) {
+    const k = Number.isFinite(factor) && factor > 0 ? factor : 1;
+    return Object.fromEntries(Object.entries(FONTS).map(([name, px]) => [name, Math.round(px * k)]));
+}

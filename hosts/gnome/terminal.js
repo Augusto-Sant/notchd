@@ -110,12 +110,14 @@ class TerminalSurface extends St.DrawingArea {
         const id = this._ref.replace(/^term:/, '');
         const configured = this._host.config()?.[id]?.font;
         const family = typeof configured === 'string' && configured.trim() ? configured.trim() : 'Monospace';
-        if (family === this._fontFamily)
+        const size = this._host.theme.fonts.body;
+        if (family === this._fontFamily && size === this._fontSize)
             return;
         this._fontFamily = family;
+        this._fontSize = size;
         this._font = Pango.FontDescription.from_string('Monospace 12');
         this._font.set_family(family);
-        this._font.set_absolute_size(this._host.theme.fonts.body * Pango.SCALE);
+        this._font.set_absolute_size(size * Pango.SCALE);
         this.queue_repaint();
     }
 
@@ -517,7 +519,7 @@ export class Terminals {
     describe() { return [...this._surfaces].map(s => ({ref: s._ref, run: s._run, actor: true,
         mapped: s.mapped, w: s.width, h: s.height, rows: s._rows.length, focused: s.focused,
         pictures: s._pictures.size, images: s._images.length,
-        font: s._fontFamily, title: s._title ?? '',
+        font: s._fontFamily, fontSize: s._fontSize, title: s._title ?? '',
         text: s._rows.map(row => row.runs.map(run => run.text).join('')).join('\n')})); }
     destroy() { for (const s of [...this._surfaces]) s.destroy(); this._surfaces.clear(); }
 }

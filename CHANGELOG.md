@@ -9,6 +9,10 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 - A [Herdr user module showcase](docs/examples/modules/herdr/) that puts agent metrics above a Herdr terminal and peeks on blocked or completed work. It installs from the example folder without a daemon rebuild.
 - A reusable notchd agent skill teaches coding agents to inspect and control a running daemon through `notchd ipc`. `notchd --skill` prints the copy bundled with the binary, and programs in notchd terminals inherit the exact binary, socket and instance to reach their own daemon.
 
+### Fixed
+
+- GNOME: the notch's text, the terminal's included, follows the desktop's text scaling (Settings, Accessibility, Large Text, or `text-scaling-factor`), at once when it changes; it stayed at its own fixed sizes and looked smaller than the rest of the Shell. A new accent color or color scheme also reaches the module views and tabs at once; they kept the old look until the notch's state changed.
+
 ## [0.7.1] — 2026-11-04
 
 ### Fixed

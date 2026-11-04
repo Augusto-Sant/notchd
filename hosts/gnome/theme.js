@@ -5,14 +5,15 @@
 // changes. Over the overview and the lock screen the panel is see-through
 // and the notch keeps the colors it had; before the panel has any, it is
 // Adwaita's for `color-scheme`. `accent-color` (GNOME 47+) is the accent;
-// on GNOME 46 it is Adwaita's default blue.
+// on GNOME 46 it is Adwaita's default blue. The text sizes follow
+// `text-scaling-factor`, as the Shell's own text does.
 
 import Gio from 'gi://Gio';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import {opaque, tones} from './themeColors.js';
+import {fonts, opaque, tones} from './themeColors.js';
 
 const ACCENTS = {
     blue: '#3584e4', teal: '#2190a4', green: '#3a944a', yellow: '#c88800',
@@ -25,6 +26,7 @@ export class Theme {
         this._hasAccent = this._settings.settings_schema.has_key('accent-color');
         this._ids = [
             this._settings.connect('changed::color-scheme', () => this._update(onChanged)),
+            this._settings.connect('changed::text-scaling-factor', () => this._update(onChanged)),
         ];
         if (this._hasAccent)
             this._ids.push(this._settings.connect('changed::accent-color', () => this._update(onChanged)));
@@ -82,7 +84,7 @@ export class Theme {
         // St lengths set from code are not scaled by the UI scale factor
         // (CSS lengths are), so design pixels go through space().
         this.scale = this._themeContext.scale_factor;
-        this.fonts = {caption: 10, bodySmall: 11, body: 12, heading: 16, display: 24};
+        this.fonts = fonts(this._settings.get_double('text-scaling-factor'));
         // core/Theme.qml's radii, in design pixels (CSS lengths).
         this.radiusSmall = 6;
         this.radius = 10;
