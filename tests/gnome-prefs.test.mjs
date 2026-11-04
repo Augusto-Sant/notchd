@@ -141,6 +141,7 @@ test('workspace chips: 1 to 10 and the picked ones, numbers first', () => {
   assert.deepEqual(chips.filter((c) => c.on).map((c) => c.value), [3, 'web']);
   assert.equal(chips[10].label, 'web');
   assert.equal(M.workspaceChips(field({ type: 'workspaces' }), [], Settings).filter((c) => c.on).length, 0);
+  assert.equal(M.workspaceChips(field({ type: 'workspaces' }), ['11'], Settings).at(-1).value, 11);
 });
 
 const state = { settingsOpen: false, settingsPage: 'general', notches: [
@@ -169,6 +170,9 @@ test('a module catalog part: status from the state, a page when the schema has o
   const cfg = { terminals: { btop: { command: 'btop' } } };
   assert.deepEqual(plain(M.catalogRows({ part: 'terminal' }, schema, state, cfg, Settings, Config)
     .map((r) => [r.id, r.removable])), [['btop', true]], 'the terminals come from the config');
+  const withTerminalPage = { ...schema, pages: [...schema.pages, { id: 'modules/btop', label: 'System', sub: true }] };
+  assert.equal(M.catalogRows({ part: 'terminal' }, withTerminalPage, state, cfg, Settings, Config)[0].page,
+    'modules/btop');
 });
 
 test('config edits are one set per top-level key that changed, null for a removal', () => {

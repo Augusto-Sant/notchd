@@ -24,18 +24,36 @@ import * as Config from './lib/Config.js';
 import * as Settings from './lib/Settings.js';
 import * as Model from './prefsModel.js';
 import {DaemonClient, socketPath} from './client.js';
+import {PREFS_BUS_NAME, PREFS_REQUEST_KEY, requestedPreferences} from './prefsPresence.js';
 
 // A spin row sends once it rests this long, so holding an arrow is one
 // write, not one per step.
 const SPIN_SETTLE_MS = 250;
 const KEYS_PAGE = 'gnome-keyboard';
+let preferenceWindows = 0;
+let preferenceNameId = 0;
 
 export default class NotchdPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         window.set_default_size(760, 680);
-        const ui = new SettingsUi(window, this.getSettings(), this.metadata['version-name'] ?? '0');
+        const settings = this.getSettings();
+        const requestedAt = settings.get_uint(PREFS_REQUEST_KEY);
+        if (requestedAt) {
+            settings.set_uint(PREFS_REQUEST_KEY, 0);
+            Gio.Settings.sync();
+        }
+        const fromDaemon = requestedPreferences(requestedAt, Math.floor(Date.now() / 1000));
+        if (!preferenceNameId)
+            preferenceNameId = Gio.bus_own_name_on_connection(Gio.DBus.session, PREFS_BUS_NAME,
+                Gio.BusNameOwnerFlags.NONE, null, null);
+        preferenceWindows++;
+        const ui = new SettingsUi(window, settings, this.metadata['version-name'] ?? '0', fromDaemon);
         window.connect('close-request', () => {
             ui.close();
+            if (--preferenceWindows === 0) {
+                Gio.bus_unown_name(preferenceNameId);
+                preferenceNameId = 0;
+            }
             return false;
         });
     }
@@ -58,7 +76,7 @@ function iconButton(icon, tooltip, onClick) {
 }
 
 class SettingsUi {
-    constructor(window, gsettings, version) {
+    constructor(window, gsettings, version, fromDaemon) {
         this._window = window;
         this._gsettings = gsettings;
         this._pages = new Map();
@@ -70,6 +88,7 @@ class SettingsUi {
         this._requestId = 0;
         this._following = false;
         this._started = false;
+        this._fromDaemon = fromDaemon;
 
         // Something must show before this returns (the dialog checks), so
         // the window starts on the status page and the keyboard page.
@@ -104,8 +123,7 @@ class SettingsUi {
         this._closed = true;
         // The window is gone: the daemon stops polling components for it,
         // and navigation's `s` opens it again.
-        this._client.sendNow({t: 'settings', open: false});
-        this._client.stop();
+        this._client.sendFinal({t: 'settings', open: false});
         this._window.disconnect(this._pageId);
         if (this._keysChangedId)
             this._gsettings.disconnect(this._keysChangedId);
@@ -142,6 +160,10 @@ class SettingsUi {
             // A new connection: the window starts on the daemon's page
             // (kept while the window was closed) and says it is open.
             this._started = true;
+            if (this._fromDaemon && !state.settingsOpen) {
+                this._window.close();
+                return;
+            }
             this._go(state.settingsPage || 'general');
             this._report(this._shown);
         } else if (key === 'state') {
@@ -327,7 +349,8 @@ class SettingsUi {
         this._shown = page;
         const now = Date.now();
         this._reports = this._reports.filter(r => now - r.at < 2000).concat([{page, at: now}]);
-        this._client.send({t: 'settings', open: true, page});
+        this._client.send(this._ctx?.state?.settingsOpen
+            ? {t: 'settings-page', page} : {t: 'settings', open: true, page});
     }
 
     // ---------------------------------------------------------- sending
@@ -654,9 +677,9 @@ class SettingsUi {
         return {
             update: f => {
                 group.visible = f.visible !== false;
-                // GNOME's own workspaces are the extension's to report; the
-                // window offers 1 to 10 and the picked ones.
-                const chips = Model.workspaceChips(f, [], Settings);
+                // The daemon puts the compositor's reported workspace ids
+                // in the schema for this separate preferences process.
+                const chips = Model.workspaceChips(f, f.options?.map(o => o.value) ?? [], Settings);
                 const text = JSON.stringify(chips);
                 if (text === shown)
                     return;

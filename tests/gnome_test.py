@@ -15,11 +15,13 @@ Not in `make check`: it needs gnome-shell installed. `make gnome-test`.
 
 import json
 import os
+import shlex
 import http.server
 import shutil
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -78,6 +80,7 @@ class Shell:
             ["timeout", "-k", "3", "300", DEV, "--headless", "--", "--virtual-monitor", SECOND_MONITOR],
             env=env, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True)
         self.bus = None
+        self._button_down = False
         try:
             self._connect()
         except BaseException:
@@ -143,10 +146,16 @@ class Shell:
         self.call("PointerMove", (float(x), float(y)), "(dd)")
 
     def button(self, pressed):
+        if self._button_down == pressed:
+            return
         self.call("PointerButton", (pressed,), "(b)")
+        self._button_down = pressed
 
     def click(self):
         self.call("PointerClick")
+
+    def scroll(self):
+        self.call("PointerScroll")
 
     def key(self, keyval):
         self.call("Key", (keyval,), "(u)")
@@ -159,6 +168,34 @@ class Shell:
         path = os.path.join(SHOTS, name + ".png")
         ok = self.call("Screenshot", (path,), "(s)")[0]
         return path if ok else None
+
+    def scale_monitors(self, scales, count=2):
+        """Apply supported logical scales to the two headless monitors."""
+        name = "org.gnome.Mutter.DisplayConfig"
+        path = "/org/gnome/Mutter/DisplayConfig"
+        state = self.bus.call_sync(name, path, name, "GetCurrentState", None, None,
+                                   Gio.DBusCallFlags.NONE, 5000, None).unpack()
+        logical = []
+        x = 0
+        for i, (info, modes, _) in enumerate(state[1]):
+            if i >= count:
+                break
+            mode = next((m for m in modes if m[-1].get("is-current")), modes[0])
+            scale = scales.get(i, 1.0)
+            supported = next((s for s in mode[5] if abs(s - scale) < 0.01), None)
+            if supported is None:
+                raise unittest.SkipTest("monitor %s does not support %s scale" % (info[0], scale))
+            logical.append((x, 0, supported, 0, i == 0, [(info[0], mode[0], {})]))
+            x += round(mode[1] / supported)
+        params = GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (state[0], 1, logical, {}))
+        self.bus.call_sync(name, path, name, "ApplyMonitorsConfig", params, None,
+                           Gio.DBusCallFlags.NONE, 5000, None)
+        # GNOME 46 keeps physical stage coordinates at 2x; newer Mutter
+        # reports the logical monitor width here. Accept either convention.
+        return self.until(lambda s: len(s.get("monitors", [])) == len(logical) and
+                          all(any(abs(s["monitors"][i]["w"] - expected) <= 1 for expected in
+                                  (state[1][i][1][0][1], round(state[1][i][1][0][1] / row[2])))
+                              for i, row in enumerate(logical)), 5, "scaled monitors")
 
     def ipc(self, *args):
         env = dict(os.environ, NOTCHD_SOCKET=os.path.join(self.scratch, "notchd.sock"))
@@ -266,6 +303,48 @@ class ShellCase(unittest.TestCase):
 
 
 class NotchOnGnome(ShellCase):
+    def test_fullscreen_hides_the_closed_notch_but_not_an_open_one(self):
+        sh = self.shell
+        env = dict(os.environ, WAYLAND_DISPLAY="wayland-notchd", GDK_BACKEND="wayland",
+                   XDG_RUNTIME_DIR=os.path.join(sh.scratch, "run"),
+                   DBUS_SESSION_BUS_ADDRESS=sh._address())
+        script = ("import gi; gi.require_version('Gtk', '3.0'); "
+                  "from gi.repository import Gtk; "
+                  "w = Gtk.Window(); w.set_title('notchd fullscreen test'); "
+                  "w.fullscreen(); w.show_all(); Gtk.main()")
+        app = subprocess.Popen([sys.executable, "-c", script], env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            sh.until(lambda s: not main_copy(s)["seen"], 8, "the closed notch to hide over fullscreen")
+            sh.ipc("open")
+            sh.until(lambda s: main_copy(s)["mode"] == "expanded" and main_copy(s)["seen"], 3,
+                     "the open notch to stay available over fullscreen")
+            sh.ipc("close")
+            sh.until(lambda s: not main_copy(s)["seen"], 3, "the closed notch to hide again")
+        finally:
+            app.terminate()
+            try:
+                app.wait(3)
+            except subprocess.TimeoutExpired:
+                app.kill()
+                app.wait()
+            output = app.stdout.read().decode(errors="replace")
+            app.stdout.close()
+            if app.returncode not in (0, -signal.SIGTERM):
+                self.fail("fullscreen test window failed: " + output)
+        sh.until(lambda s: main_copy(s)["seen"], 5, "the notch after leaving fullscreen")
+
+    def test_a_closed_notch_is_hidden_on_a_disallowed_workspace(self):
+        sh = self.shell
+        try:
+            sh.ipc("set", "workspaces", "[2]")
+            sh.until(lambda s: not main_copy(s)["seen"] and not s["struts"], 3,
+                     "the closed notch and its reserve to hide outside workspace 2")
+        finally:
+            sh.ipc("set", "workspaces", "")
+        sh.until(lambda s: main_copy(s)["seen"] and s["struts"], 3,
+                 "the closed notch and its reserve to return on every workspace")
+
     def test_reports_both_monitors_by_connector(self):
         s = self.shell.snapshot()
         self.assertEqual(len(s["monitors"]), 2)
@@ -421,6 +500,39 @@ class OtherEdges(ShellCase):
                 self.shell.screenshot("edge-" + edge)
 
 
+class PackedNotches(ShellCase):
+    config = {"reserveSpace": True, "notches": [
+        {"id": "main", "modules": ["resources"], "position": {"edge": "top", "offset": 0.49}},
+        {"id": "second", "modules": ["resources"], "position": {"edge": "top", "offset": 0.51}},
+    ]}
+
+    def test_nearby_notches_share_an_edge_without_overlapping(self):
+        s = self.shell.until(lambda s: len(s["copies"]) == 2 and
+                             sorted(c["card"]["endSide"] for c in s["copies"]).count("joined") == 1, 5,
+                             "the two notches to join")
+        left, right = sorted(s["copies"], key=lambda c: c["card"]["start"])
+        self.assertLessEqual(left["card"]["end"], right["card"]["start"] + 1)
+        self.assertEqual(left["card"]["endSide"], "joined")
+        self.assertEqual(right["card"]["startSide"], "joined")
+
+
+class CornerNotches(ShellCase):
+    config = {"reserveSpace": True, "notches": [
+        {"id": "main", "modules": ["resources"], "position": {"edge": "top", "offset": 0}},
+        {"id": "side", "modules": ["resources"], "position": {"edge": "left", "offset": 0}},
+    ]}
+
+    def test_a_side_notch_begins_after_the_top_corner(self):
+        s = self.shell.until(lambda s: len(s["copies"]) == 2 and
+                             all(c["card"]["startSide"] == "corner" for c in s["copies"]), 5,
+                             "the two corner outlines to meet")
+        top = next(c for c in s["copies"] if c["edge"] == "top")
+        side = next(c for c in s["copies"] if c["edge"] == "left")
+        self.assertEqual(top["card"]["startSide"], "corner")
+        self.assertEqual(side["card"]["startSide"], "corner")
+        self.assertGreaterEqual(side["card"]["start"], top["y"] + top["card"]["depth"] - 1)
+
+
 def c_monitor(s):
     return main_copy(s)["monitor"]
 
@@ -473,7 +585,7 @@ class Dock(ShellCase):
         self.dock("left")
         s = self.place("top", 0.0)
         c, m = main_copy(s), s["monitors"][0]
-        self.assertGreaterEqual(c["x"], m["x"] + self.DOCK)
+        self.assertGreaterEqual(c["card"]["start"], m["x"] + self.DOCK)
         self.assertEqual(c["y"], m["y"] + s["panel"])
 
 
@@ -573,22 +685,38 @@ class Canvas(ShellCase):
         self.shell.screenshot("canvas")
 
 
-def terminal_window(s):
+class Scroll(ShellCase):
+    config = {"modules": ["tall"]}
+    modules = os.path.join(ROOT, "tests", "gnome", "scroll-modules")
+
+    def test_expanded_content_taller_than_the_screen_has_a_scrollbar(self):
+        sh = self.shell
+        sh.ipc("open")
+        s = sh.until(lambda s: main_copy(s)["mode"] == "expanded" and
+                     (main_copy(s).get("scroll") or {}).get("upper", 0) >
+                     (main_copy(s).get("scroll") or {}).get("pageSize", 0) + 100,
+                     5, "the tall view to overflow its scroll area")
+        c = main_copy(s)
+        self.assertLessEqual(c["scroll"]["height"], s["monitors"][c["monitor"]]["h"] - 64)
+        self.assertIn("row 69", c["texts"])
+        sh.screenshot("expanded-scroll")
+        sh.move(*center(c))
+        sh.scroll()
+        sh.until(lambda s: (main_copy(s).get("scroll") or {}).get("value", 0) > 0,
+                 2, "the wheel to scroll the expanded view")
+
+
+def terminal_surface(s):
     return next(iter(s.get("terminals") or []), None)
 
 
 class Terminal(ShellCase):
-    """A terminal surface: its window (grid.js, GTK 4) kept in the open
-    notch's hole, with the keyboard, gone with the notch. Skipped where gjs
-    with GTK 4 is missing (the extension then draws a placeholder)."""
+    """The daemon's grid is rendered by a Shell actor inside the notch."""
 
     config = {"modules": ["timer", "shell"], "reserveSpace": True,
+              "shell": {"font": "DejaVu Sans Mono"},
               "terminals": {"shell": {"command": "exec sh", "title": "Shell"}}}
-
-    def setUp(self):
-        if self.shell.snapshot().get("terminals") is None:
-            self.skipTest("no gjs with GTK 4 here")
-        super().setUp()
+    env = {"NOTCHD_GNOME_FRACTIONAL": "1"}
 
     def tearDown(self):
         sh = self.shell
@@ -599,75 +727,131 @@ class Terminal(ShellCase):
     def open_terminal(self):
         sh = self.shell
         self.assertEqual(sh.ipc("terminal", "shell", "toggle"), "ok")
-        return sh.until(lambda s: main_copy(s)["terminal"] and main_copy(s)["terminal"]["hole"]
-                        and terminal_window(s) and terminal_window(s)["focused"], 6,
-                        "the terminal's window in the hole, with the keyboard")
+        return sh.until(lambda s: main_copy(s)["terminal"] and terminal_surface(s)
+                        and terminal_surface(s)["mapped"] and terminal_surface(s)["rows"] > 0,
+                        6, "the grid rendered inside the notch")
 
-    def assert_in_hole(self, s):
-        c, w = main_copy(s), terminal_window(s)
-        hole = c["terminal"]["hole"]
-        self.assertEqual((w["x"], w["y"], w["w"], w["h"]), (hole["x"], hole["y"], hole["w"], hole["h"]))
-        self.assertFalse(w["hidden"])
-        # Inside the card where it ends up.
-        self.assertGreaterEqual(hole["x"], c["x"])
-        self.assertGreaterEqual(hole["y"], c["y"])
-        self.assertLessEqual(hole["x"] + hole["w"], c["x"] + c["w"])
-        self.assertLessEqual(hole["y"] + hole["h"], c["y"] + c["h"])
-
-    def test_the_window_sits_in_the_hole_with_the_keyboard_and_stays(self):
+    def test_grid_draws_inside_the_notch_and_has_the_keyboard(self):
         sh = self.shell
         s = self.open_terminal()
-        self.assert_in_hole(s)
-        # The keyboard is the window's, not a grab's.
-        self.assertEqual(grabs(s), 0)
-        # A view update (the program's title) once took the keyboard away,
-        # and the daemon closed the notch.
-        time.sleep(2)
-        s = sh.snapshot()
-        self.assertEqual(main_copy(s)["mode"], "expanded")
-        self.assertTrue(terminal_window(s)["focused"])
+        c, terminal = main_copy(s), terminal_surface(s)
+        self.assertTrue(c["terminal"]["embedded"])
+        self.assertTrue(terminal["focused"])
+        self.assertEqual(terminal["font"], "DejaVu Sans Mono")
+        self.assertEqual(grabs(s), 1)
+        self.assertGreater(terminal["w"], 0)
+        self.assertGreater(terminal["h"], 0)
+        self.assertEqual([t for t in s["visibleWindows"] if t.startswith("notchd term:")], [])
         sh.screenshot("terminal")
 
-    def test_closing_hides_the_window_and_gives_up_the_keyboard(self):
+    def test_closing_destroys_the_actor_and_releases_the_keyboard(self):
         sh = self.shell
         self.open_terminal()
         sh.ipc("close")
-        s = sh.until(lambda s: main_copy(s)["mode"] == "compact" and terminal_window(s)["hidden"], 3,
-                     "the window gone with the notch")
-        self.assertFalse(terminal_window(s)["focused"])
+        s = sh.until(lambda s: main_copy(s)["mode"] == "compact" and not s["terminals"], 3,
+                     "the actor gone with the notch")
         self.assertIsNone(main_copy(s)["terminal"])
+        self.assertEqual(grabs(s), 0)
 
-    def test_restarts_never_open_the_hole_onto_the_desktop_nor_leave_a_window_about(self):
-        # A restart replaced the window: the hole stayed open over nothing,
-        # and a helper still starting mapped its window loose on the screen.
+    def test_keys_reach_the_pty_and_the_grid_shows_its_output(self):
         sh = self.shell
         self.open_terminal()
-        bad = []
-        for _ in range(3):
-            self.assertEqual(sh.ipc("terminal", "shell", "new"), "ok")
-            end = time.time() + 1.0
-            while time.time() < end:
-                s = sh.snapshot()
-                seen = [t for t in s["visibleWindows"] if t.startswith("notchd term:")]
-                term = main_copy(s)["terminal"]
-                if len(seen) > 1 or (term and term["hole"] and not seen):
-                    bad.append((round(time.time() - end + 1, 2), seen, term))
-                time.sleep(0.05)
-        self.assertEqual(bad, [])
-        s = self.shell.until(lambda s: main_copy(s)["terminal"] and main_copy(s)["terminal"]["hole"], 6,
-                             "the new run's window in the hole")
-        self.assert_in_hole(s)
-        time.sleep(1.5)  # past the old helpers' end
-        self.assertEqual([t for t in sh.snapshot()["visibleWindows"] if t.startswith("notchd term:")], ["notchd term:shell"])
+        for char in "echo notchd46":
+            sh.key(ord(char))
+        sh.key(0xFF0D)  # Return
+        sh.until(lambda s: terminal_surface(s) and terminal_surface(s)["text"].count("notchd46") >= 2,
+                 4, "the command and its output in the terminal grid")
 
-    def test_on_a_side_edge_with_reserve_the_window_still_sits_in_the_hole(self):
-        # GNOME kept a window out of the reserved strip: the window never
-        # reached the hole and stayed unseen.
+    def test_font_setting_updates_the_live_grid(self):
+        sh = self.shell
+        self.open_terminal()
+        try:
+            sh.ipc("set", "shell.font", json.dumps("Monospace"))
+            sh.until(lambda s: terminal_surface(s) and terminal_surface(s)["font"] == "Monospace",
+                     3, "the new terminal font")
+        finally:
+            sh.ipc("set", "shell.font", json.dumps("DejaVu Sans Mono"))
+
+    def test_fractional_scales_keep_the_terminal_inside_the_monitor(self):
+        sh = self.shell
+        try:
+            self.open_terminal()
+            for scale in (1.25, 4 / 3, 1.5, 5 / 3, 2.0):
+                with self.subTest(scale=scale):
+                    # GNOME 46 cannot place differently scaled virtual
+                    # monitors adjacent; test the scaled primary alone.
+                    sh.scale_monitors({0: scale}, count=1)
+                    s = sh.until(lambda s: terminal_surface(s) and terminal_surface(s)["mapped"] and
+                                 main_copy(s)["monitor"] == 0, 5)
+                    c, m, terminal = main_copy(s), s["monitors"][0], terminal_surface(s)
+                    self.assertGreaterEqual(c["x"], m["x"])
+                    self.assertLessEqual(c["x"] + c["w"], m["x"] + m["w"])
+                    self.assertGreater(terminal["w"], c["w"] * 0.8)
+
+            with self.subTest(scale=1.6666667):
+                sh.ipc("close")
+                sh.scale_monitors({1: 1.6666667})
+                sh.ipc("set", "position", json.dumps({"edge": "top", "offset": 0.5,
+                                                       "screen": sh.snapshot()["screens"][1]}))
+                sh.until(lambda s: main_copy(s)["monitor"] == 1, 5)
+                s = self.open_terminal()
+                c, m, terminal = main_copy(s), s["monitors"][1], terminal_surface(s)
+                self.assertGreaterEqual(c["x"], m["x"])
+                self.assertLessEqual(c["x"] + c["w"], m["x"] + m["w"])
+                self.assertGreater(terminal["w"], c["w"] * 0.8)
+                self.assertGreater(terminal["rows"], 0)
+                time.sleep(0.6)  # capture the card after its opening animation
+                sh.screenshot("terminal-fractional-scale")
+        finally:
+            sh.ipc("close")
+            sh.ipc("set", "position", "")
+            sh.scale_monitors({})
+
+    def test_restart_replaces_the_grid_without_a_window(self):
+        sh = self.shell
+        first = self.open_terminal()
+        previous_run = terminal_surface(first)["run"]
+        self.assertEqual(sh.ipc("terminal", "shell", "new"), "ok")
+        s = sh.until(lambda s: terminal_surface(s) and terminal_surface(s)["run"] != previous_run
+                     and terminal_surface(s)["rows"] > 0, 6, "the new run's grid")
+        self.assertEqual([t for t in s["visibleWindows"] if t.startswith("notchd term:")], [])
+
+    def test_closing_and_reopening_reattaches_to_the_same_session(self):
+        sh = self.shell
+        first = self.open_terminal()
+        run = terminal_surface(first)["run"]
+        for char in "echo kept46":
+            sh.key(ord(char))
+        sh.key(0xFF0D)
+        sh.until(lambda s: terminal_surface(s) and terminal_surface(s)["text"].count("kept46") >= 2, 4)
+        sh.ipc("close")
+        sh.until(lambda s: not s["terminals"], 3)
+        self.assertEqual(sh.ipc("terminal", "shell", "toggle"), "ok")
+        sh.until(lambda s: terminal_surface(s) and terminal_surface(s)["run"] == run
+                 and "kept46" in terminal_surface(s)["text"], 6,
+                 "the same PTY session replayed into a new actor")
+
+    def test_side_edge_with_reserve_keeps_the_grid_inside_the_notch(self):
         sh = self.shell
         sh.ipc("set", "position", json.dumps({"edge": "left", "offset": 0.5}))
-        sh.until(lambda s: main_copy(s)["edge"] == "left" and s["workArea"][main_copy(s)["monitor"]]["x"] > 0, 3,
-                 "the notch on the left edge, its strip reserved")
-        self.assert_in_hole(self.open_terminal())
+        sh.until(lambda s: main_copy(s)["edge"] == "left" and s["workArea"][main_copy(s)["monitor"]]["x"] > 0, 3)
+        s = self.open_terminal()
+        self.assertTrue(terminal_surface(s)["mapped"])
+        self.assertGreater(terminal_surface(s)["rows"], 0)
+
+
+class TerminalImage(ShellCase):
+    config = {"modules": ["image-term"], "terminals": {"image-term": {
+        "command": "python3 " + shlex.quote(os.path.join(ROOT, "tests", "gnome", "kitty_image.py")),
+        "title": "Image terminal"}}}
+
+    def test_a_kitty_png_is_decoded_and_placed_inside_the_terminal(self):
+        sh = self.shell
+        self.assertEqual(sh.ipc("terminal", "image-term", "toggle"), "ok")
+        s = sh.until(lambda s: terminal_surface(s) and terminal_surface(s)["pictures"] > 0
+                     and terminal_surface(s)["images"] > 0, 6, "the Kitty image in the terminal")
+        self.assertTrue(main_copy(s)["terminal"]["embedded"])
+        self.assertIsNotNone(sh.screenshot("terminal-image"))
 
 
 class EnableDisable(ShellCase):
@@ -699,20 +883,77 @@ class DaemonGoesAway(ShellCase):
         sh.until(lambda s: not s["connected"] and grabs(s) == 0, 3, "the grab to go with the daemon")
 
 class Preferences(ShellCase):
+    def test_a_quick_close_cannot_be_undone_by_the_preferences_startup(self):
+        sh = self.shell
+        opened = sh.snapshot()["preferencesOpened"]
+        sh.ipc("settings")
+        sh.until(lambda s: "notchd" in s["windows"], 20, "the preferences window")
+        sh.ipc("settings")
+        sh.until(lambda s: not s["settingsOpen"] and "notchd" not in s["windows"], 5,
+                 "the quickly closed preferences")
+        time.sleep(0.4)
+        s = sh.snapshot()
+        self.assertFalse(s["settingsOpen"])
+        self.assertNotIn("notchd", s["windows"])
+        self.assertEqual(s["preferencesOpened"], opened + 1)
+
+    def test_manual_preferences_open_uses_the_existing_window(self):
+        sh = self.shell
+        opened = sh.snapshot()["preferencesOpened"]
+        sh.extensions("prefs")
+        s = sh.until(lambda s: s["settingsOpen"] and "notchd" in s["windows"], 20,
+                     "the independently opened preferences")
+        self.assertEqual(s["preferencesOpened"], opened)
+        sh.ipc("settings")
+        sh.until(lambda s: not s["settingsOpen"] and "notchd" not in s["windows"], 5,
+                 "the manually opened preferences to close")
+
     def test_the_daemon_opening_settings_opens_the_preferences_and_closing_them_closes_it(self):
         # `ipc settings` toggles the daemon's settingsOpen, as navigation's
         # `s` opens it: the extension opens its preferences (prefs.js, a
         # process of its own), which connect to the daemon; toggled again,
         # the window goes.
         sh = self.shell
+        opened = sh.snapshot()["preferencesOpened"]
         sh.ipc("settings")
         s = sh.until(lambda s: "notchd" in s["windows"], 20, "the preferences window")
-        self.assertEqual(s["preferencesOpened"], 1)
+        self.assertEqual(s["preferencesOpened"], opened + 1)
         time.sleep(1)  # the window connects and draws the daemon's pages
         sh.screenshot("preferences")
         sh.ipc("settings")
         sh.until(lambda s: "notchd" not in s["windows"], 5, "the preferences window to close")
-        self.assertEqual(sh.snapshot()["preferencesOpened"], 1)
+        time.sleep(0.3)  # a queued page report must not reopen it
+        self.assertFalse(sh.snapshot()["settingsOpen"])
+        self.assertEqual(sh.snapshot()["preferencesOpened"], opened + 1)
+
+    def test_a_crashed_preferences_process_releases_settings_and_can_reopen(self):
+        sh = self.shell
+        sh.ipc("settings")
+        sh.until(lambda s: s.get("settingsOpen") and "notchd" in s["windows"], 20,
+                 "the preferences process to open")
+        bus = ("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus")
+        deadline = time.time() + 5
+        while True:
+            try:
+                pid = sh.bus.call_sync(*bus, "GetConnectionUnixProcessID",
+                                       GLib.Variant("(s)", ("org.notchd.GnomePreferences",)),
+                                       None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
+                break
+            except GLib.Error:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.05)
+        os.kill(pid, signal.SIGKILL)
+        sh.until(lambda s: not s.get("settingsOpen") and "notchd" not in s["windows"], 5,
+                 "the daemon to release settings after the preferences crash")
+        sh.ipc("settings")
+        sh.until(lambda s: s.get("settingsOpen") and "notchd" in s["windows"]
+                 and s["preferencesOpened"] >= 2, 20, "preferences to reopen")
+        sh.ipc("settings")
+        sh.until(lambda s: not s.get("settingsOpen") and "notchd" not in s["windows"], 5,
+                 "settings and preferences to close")
+        time.sleep(0.3)  # a late report from the closed process must not reopen them
+        self.assertFalse(sh.snapshot()["settingsOpen"])
 
 
 def solid_png(w, h, rgb):

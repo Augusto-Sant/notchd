@@ -27,6 +27,9 @@ pub struct Inputs<'a> {
     /// The screens' names.
     pub screens: &'a [String],
     pub supports_workspaces: bool,
+    /// Workspace ids reported by the compositor, for settings UIs that do
+    /// not have direct access to its workspace manager.
+    pub known_workspaces: &'a [String],
     /// `moduleCatalog`: `{ moduleId, title, settings, standalone }` per module.
     pub catalog: &'a [Value],
     pub default_modules: &'a [&'a str],
@@ -151,8 +154,14 @@ fn core_fields(i: &Inputs) -> Vec<Value> {
         "label": "Drag to move", "default": inherited("draggable", default_of("draggable")),
         "help": "Hold the notch for a moment, then drag it to any edge of the screen; it snaps to the nearest one, and to the middle when close to it. A quick click only pins it."}));
     if i.supports_workspaces {
+        let choices: Vec<Value> = i
+            .known_workspaces
+            .iter()
+            .map(|w| json!({"value": w, "label": w}))
+            .collect();
         out.push(json!({"page": own, "section": "Layout", "key": key("workspaces"), "type": "workspaces",
             "label": "Workspaces", "default": inherited("workspaces", Value::Null),
+            "options": choices,
             "help": "Where the closed notch shows; none picked means every workspace. Peeks and the open notch show on any."}));
     }
     out.push(
@@ -369,6 +378,7 @@ mod tests {
             settings_notch: 0,
             screens: &screens,
             supports_workspaces: false,
+            known_workspaces: &[],
             catalog,
             default_modules: &["media", "activities"],
             components: None,
@@ -380,6 +390,29 @@ mod tests {
             .iter()
             .find(|f| f.key.as_deref() == Some(key))
             .unwrap_or_else(|| panic!("no field {key}"))
+    }
+
+    #[test]
+    fn workspace_field_carries_the_compositors_current_choices() {
+        let cfg = json!({});
+        let notches = config::notches(&cfg, &["media"]);
+        let known = vec!["1".to_string(), "2".to_string(), "11".to_string()];
+        let schema = build(&Inputs {
+            config: &cfg,
+            notches: &notches,
+            settings_notch: 0,
+            screens: &[],
+            supports_workspaces: true,
+            known_workspaces: &known,
+            catalog: &[],
+            default_modules: &["media"],
+            components: None,
+        });
+        let choices = field(&schema, "workspaces").options.as_ref().unwrap();
+        assert_eq!(
+            choices.iter().map(|c| c.value.clone()).collect::<Vec<_>>(),
+            vec![json!("1"), json!("2"), json!("11")]
+        );
     }
 
     #[test]

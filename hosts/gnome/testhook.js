@@ -19,6 +19,7 @@ const IFACE = `
     <method name="PointerMove"><arg type="d" direction="in" name="x"/><arg type="d" direction="in" name="y"/></method>
     <method name="PointerClick"/>
     <method name="PointerButton"><arg type="b" direction="in" name="pressed"/></method>
+    <method name="PointerScroll"/>
     <method name="FakeDock"><arg type="s" direction="in" name="edge"/><arg type="u" direction="in" name="size"/></method>
     <method name="Key"><arg type="u" direction="in" name="keyval"/></method>
     <method name="RunAction"><arg type="s" direction="in" name="name"/></method>
@@ -109,6 +110,10 @@ export class TestHook {
     PointerButton(pressed) {
         this._pointer.notify_button(this._now(), Clutter.BUTTON_PRIMARY,
             pressed ? Clutter.ButtonState.PRESSED : Clutter.ButtonState.RELEASED);
+    }
+
+    PointerScroll() {
+        this._pointer.notify_discrete_scroll(this._now(), Clutter.ScrollDirection.DOWN, Clutter.ScrollSource.WHEEL);
     }
 
     Key(keyval) {

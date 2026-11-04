@@ -6,12 +6,14 @@
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import * as Protocol from './lib/Protocol.js';
+import * as Position from './lib/Position.js';
 import {DaemonClient, socketPath} from './client.js';
 import {NotchCopy, wireKey} from './notch.js';
 import {edgeInsets} from './insets.js';
@@ -19,6 +21,7 @@ import {Screens} from './screens.js';
 import * as Terminal from './terminal.js';
 import {Theme} from './theme.js';
 import {PRIMITIVES} from './view.js';
+import {PREFS_BUS_NAME, PREFS_REQUEST_KEY, preferencesGone} from './prefsPresence.js';
 
 export default class NotchdExtension extends Extension {
     enable() {
@@ -35,15 +38,19 @@ export default class NotchdExtension extends Extension {
             });
         }
         this._copies = new Map();
+        this._layoutId = 0;
         this._struts = [];
         this._theme = new Theme(() => {
             this._terminals?.recolor();
             this._redraw();
         });
-        this._screens = new Screens(msg => this._client?.send(msg), () => this._redraw());
+        this._screens = new Screens(msg => {
+            this._client?.send(msg);
+            this._redraw();
+        }, () => this._redraw());
         const version = this.metadata['version-name'] ?? '0';
         this._client = new DaemonClient({
-            // A terminal surface where its window can run (gjs and GTK 4).
+            // Terminal surfaces are Shell actors drawn inside the notch.
             hello: () => Protocol.hello('gnome-shell', version, 'default',
                 {primitives: PRIMITIVES, surfaces: this._terminals ? ['terminal'] : [], webview: false, canvas: true}),
             onConnected: welcome => {
@@ -64,11 +71,12 @@ export default class NotchdExtension extends Extension {
         });
         this._host = {
             theme: this._theme,
-            send: msg => this._client.send(msg),
+            send: msg => this._client?.send(msg),
             store: () => this._client.store,
             terminals: null,
             names: () => this._screens.names ?? [],
             insets: monitor => this._insetsOf(monitor),
+            requestLayout: () => this._queueLayout(),
             monitorFor: name => {
                 const i = this._screens.names?.indexOf(name) ?? -1;
                 return i >= 0 ? i : this._screens.focusedIndex();
@@ -89,25 +97,14 @@ export default class NotchdExtension extends Extension {
                     terminals: this._terminals?.describe() ?? null,
                     navigateAction: this._navigateAction ?? 0,
                     preferencesOpened: this._preferencesOpened ?? 0,
+                    settingsOpen: !!this._client?.store.state?.settingsOpen,
                 }));
             }).catch(e => console.warn(`notchd: no test hooks: ${e.message}`));
         }
-        // The client starts once it is known whether terminals can be
-        // drawn, which the hello says.
-        Terminal.probe(ok => {
-            if (!this._client)
-                return;
-            if (ok) {
-                this._terminals = new Terminal.Terminals({
-                    theme: this._theme, helper: `${this.path}/terminal/grid.js`,
-                    exe: () => this._exe || GLib.find_program_in_path('notchd') || '', socket: () => socketPath(),
-                });
-                this._host.terminals = this._terminals;
-            } else {
-                console.log('notchd: no gjs with GTK 4, terminals show a placeholder');
-            }
-            this._client.start();
-        });
+        this._terminals = new Terminal.Terminals({theme: this._theme, socket: () => socketPath(),
+            config: () => this._client.store.config?.cfg ?? {}});
+        this._host.terminals = this._terminals;
+        this._client.start();
         // The panel's and a dock's room, read again when the work area
         // changes (a dock moved, resized, shown or hidden): the notches
         // move with them.
@@ -118,6 +115,17 @@ export default class NotchdExtension extends Extension {
         // navigate`: it starts navigation, and leaves it while its grab
         // holds the keyboard (POPUP, the grab's action mode).
         this._settings = this.getSettings();
+        this._prefsSeen = false;
+        this._prefsWatch = Gio.bus_watch_name(Gio.BusType.SESSION, PREFS_BUS_NAME,
+            Gio.BusNameWatcherFlags.NONE,
+            () => { this._prefsSeen = true; },
+            () => {
+                const gone = preferencesGone(this._prefsSeen,
+                    !!this._client?.store.state?.settingsOpen);
+                this._prefsSeen = false;
+                if (gone)
+                    this._client.send({t: 'settings', open: false});
+            });
         // A held key repeats: without IGNORE_AUTOREPEAT each repeat toggled
         // navigation again.
         this._navigateAction = Main.wm.addKeybinding('navigate', this._settings, Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
@@ -148,6 +156,13 @@ export default class NotchdExtension extends Extension {
     }
 
     disable() {
+        if (this._layoutId)
+            GLib.source_remove(this._layoutId);
+        this._layoutId = 0;
+        if (this._prefsWatch)
+            Gio.bus_unwatch_name(this._prefsWatch);
+        this._prefsWatch = 0;
+        this._prefsSeen = false;
         if (this._workAreasId)
             global.display.disconnect(this._workAreasId);
         if (this._monitorsId)
@@ -188,6 +203,8 @@ export default class NotchdExtension extends Extension {
     }
 
     _apply(store, key) {
+        if (key === 'config')
+            this._terminals?.updateFonts();
         const state = store.state;
         if (!state || !this._copies || this._starting)
             return;
@@ -246,12 +263,52 @@ export default class NotchdExtension extends Extension {
                 this._copies.delete(id);
             }
         }
-        this._cover();
+        this._arrange();
         if (key === 'state') {
             this._reserve(state.reserve ?? []);
             this._navigation(!!state.navigation);
             this._followSettings(state);
         }
+    }
+
+    _queueLayout() {
+        if (this._layoutId || !this._copies)
+            return;
+        this._layoutId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._layoutId = 0;
+            this._arrange();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Pack ordinary notches on each screen edge. Top and bottom corners
+    // reserve their depth before side notches are placed; the side notches
+    // then tell the horizontal outlines where their hairline meets them.
+    _arrange() {
+        if (!this._copies)
+            return;
+        const copies = [...this._copies.values()].filter(c => !c.guest);
+        const pass = () => {
+            const packing = Position.pack(copies.map(c => c.packItem), this._theme.space(28));
+            copies.forEach((c, i) => c.planPacking(packing[i]));
+            return packing;
+        };
+        pass();
+        const initialCorners = Position.corners(copies.map(c => c.cornerItem));
+        copies.forEach((c, i) => {
+            if (Position.isVertical(c.place.edge))
+                c.setCornerInsets(initialCorners[i]);
+        });
+        const packing = pass();
+        const rowDepths = Position.rowDepths(packing, copies.map(c => c.closedDepth));
+        let changed = false;
+        copies.forEach((c, i) => { changed = c.setRowDepth(rowDepths[i]) || changed; });
+        if (changed)
+            return;
+        const spans = Position.corners(copies.map(c => c.cornerItem));
+        copies.forEach((c, i) => c.applyPacking(
+            copies[packing[i].joinStart] ?? null, copies[packing[i].joinEnd] ?? null, spans[i]));
+        this._cover();
     }
 
     // Navigation's `s` and `notchd ipc settings` open the settings window
@@ -261,12 +318,16 @@ export default class NotchdExtension extends Extension {
     // opens nothing.
     _followSettings(state) {
         const open = !!state.settingsOpen;
-        if (open && this._settingsOpen === false) {
+        if (open && this._settingsOpen === false && !this._prefsSeen) {
             this._preferencesOpened = (this._preferencesOpened ?? 0) + 1;
             try {
+                this._settings.set_uint(PREFS_REQUEST_KEY, Math.floor(Date.now() / 1000));
+                Gio.Settings.sync();
                 this.openPreferences();
             } catch (e) {
+                this._settings.set_uint(PREFS_REQUEST_KEY, 0);
                 console.warn(`notchd: no preferences window: ${e.message}`);
+                this._client.send({t: 'settings', open: false});
             }
         }
         this._settingsOpen = open;
@@ -291,7 +352,7 @@ export default class NotchdExtension extends Extension {
                 const [s2, e2] = vertical ? [b.y, b.y + b.h] : [b.x, b.x + b.w];
                 return s2 < e1 && s1 < e2;
             });
-            c.setCovered(covered);
+            c.setCovered(covered || !!c._packed?.covered);
         }
     }
 

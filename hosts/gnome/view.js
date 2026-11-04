@@ -1,6 +1,6 @@
 // A module's view tree (docs/architecture.md, "Primitive tree (v1)") drawn
 // with St. Every v1 primitive is drawn (a `canvas` with Cairo, a `surface`
-// is a frame a terminal window shows through); what is not is a visible placeholder,
+// contains its terminal actor); what is not is a visible placeholder,
 // never a blank (the hello's caps say which ones this UI has, so the daemon
 // knows too).
 //
@@ -903,11 +903,8 @@ function paintCanvas(area) {
 }
 
 // The free surface: a rectangle something else draws (docs/architecture.md,
-// "Free surface"). A `terminal` is a window of terminal.js's that the notch
-// keeps over this frame (NotchCopy leaves a hole in the card for it); the
-// actor is the frame only, and says which surface it is (`_surface`). Where
-// the terminal cannot be drawn (no gjs with GTK 4), and for any other kind,
-// a frame saying what is missing.
+// "Free surface"). A terminal actor lives inside the frame, which also
+// records its surface identity (`_surface`). Other kinds show a placeholder.
 function surface(node, ctx) {
     const theme = ctx.theme;
     const h = Number(node.h) > 0 ? Number(node.h) : 120;
@@ -917,11 +914,16 @@ function surface(node, ctx) {
     });
     if (node.kind === 'terminal' && ctx.terminals) {
         frame._surface = {ref: node.ref, run: typeof node.id === 'string' ? node.id : ''};
+        const terminal = ctx.terminals.create(frame._surface.ref, frame._surface.run, ctx.onTerminal);
+        terminal.x_expand = true;
+        terminal.y_expand = true;
+        frame.add_child(terminal);
+        frame._terminal = terminal;
         return frame;
     }
     frame.style += ` background-color: ${theme.css('surface')};`;
     const why = node.kind === 'terminal'
-        ? 'the terminal needs gjs and GTK 4 (Ubuntu: gir1.2-gtk-4.0, Fedora: gtk4)'
+        ? 'the terminal is unavailable'
         : `a ${node.kind} surface is not drawn here`;
     frame.add_child(new St.Label({
         text: why, style: `color: ${theme.css('muted')}; font-size: ${theme.fonts.caption}px; padding: 12px;`,

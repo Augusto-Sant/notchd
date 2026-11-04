@@ -21,8 +21,7 @@
 #                   ~/.local/share/gnome-shell/extensions, and enable it; it
 #                   loads at your next login. With no config yet it writes a
 #                   starter one (~/.config/notchd/config.json: reserveSpace on),
-#                   and says what to install for terminals in the notch (GTK 4
-#                   for gjs) when it is missing
+#                   terminals draw directly in the GNOME Shell extension
 #   --extension-zip FILE  the extension from this zip (make gnome-zip) instead
 #                   of the checkout; implies --extension
 #   --uninstall     stop and remove the unit, the binary and the extension this
@@ -312,11 +311,6 @@ if [ "$extension" = 1 ]; then
     say "enable it with: gnome-extensions enable $uuid"
   fi
   say "log out and back in to load it (GNOME loads a new extension at login)"
-  # Terminals in the notch draw in a GTK 4 window (gjs).
-  if ! python3 -I -c "import gi; gi.require_version('Gtk', '4.0')" >/dev/null 2>&1; then
-    say "for terminals in the notch, install GTK 4 for gjs:"
-    say "  Ubuntu/Debian: sudo apt install gir1.2-gtk-4.0    Fedora: sudo dnf install gtk4"
-  fi
   # A starter config, only when there is none: the notch keeps windows clear
   # of itself.
   config=${XDG_CONFIG_HOME:-$HOME/.config}/notchd/config.json

@@ -2062,6 +2062,17 @@ impl Store {
             .cloned()
             .collect();
         catalog.extend(self.module_defs.values().cloned());
+        // Config-defined terminals have no JSON manifest. Give each the
+        // settings descriptor that the QML host used to synthesize locally,
+        // so every UI receives its page through the daemon's schema.
+        for terminal in config::terminals(&self.config, config::TERMINAL_MODULE_IDS).list {
+            let info = settings::terminal_info(&json!({
+                "id": terminal.id, "title": terminal.title, "command": terminal.command,
+            }));
+            let mut def = json!(info);
+            def["moduleId"] = json!(terminal.id);
+            catalog.push(def);
+        }
         let screens: Vec<String> = self.screen_names();
         schema::build(&schema::Inputs {
             config: &self.config,
@@ -2069,6 +2080,7 @@ impl Store {
             settings_notch: self.settings_notch,
             screens: &screens,
             supports_workspaces: self.screens.as_ref().is_some_and(|s| s.supports_workspaces),
+            known_workspaces: self.screens.as_ref().map_or(&[], |s| s.known.as_slice()),
             catalog: &catalog,
             default_modules: &self.default_refs(),
             components: Some(schema::Components {

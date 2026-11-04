@@ -308,21 +308,30 @@ mod tests {
 
     #[test]
     fn dropping_it_stops_the_program_and_what_it_started() {
-        let dir = std::env::temp_dir().join(format!("notchd-pty-{}", std::process::id()));
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("notchd-pty-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let pids = dir.join("pids");
         let script = format!("sleep 300 & echo $$ $! > {}; wait", pids.display());
         let (pty, rx) = start(&sh(&script));
         let limit = Instant::now() + Duration::from_secs(10);
-        while !pids.exists() && Instant::now() < limit {
+        let pids: Vec<i32> = loop {
+            // The shell creates/truncates the file before `echo` writes its
+            // two PIDs, so existence alone races the write.
+            let text = std::fs::read_to_string(&pids).unwrap_or_default();
+            let found: Vec<i32> = text
+                .split_whitespace()
+                .filter_map(|p| p.parse().ok())
+                .collect();
+            if found.len() == 2 {
+                break found;
+            }
+            assert!(Instant::now() < limit, "the shell did not write its PIDs");
             thread::sleep(Duration::from_millis(20));
-        }
-        let text = std::fs::read_to_string(&pids).unwrap();
-        let pids: Vec<i32> = text
-            .split_whitespace()
-            .map(|p| p.parse().unwrap())
-            .collect();
-        assert_eq!(pids.len(), 2);
+        };
         drop(pty);
         assert!(exit_of(&rx).is_some(), "the program did not end");
         let limit = Instant::now() + Duration::from_secs(10);
@@ -342,18 +351,21 @@ mod tests {
         ));
         let limit = Instant::now() + Duration::from_secs(20);
         let mut n = 0usize;
-        let mut tail = String::new();
+        let mut tail = Vec::new();
         while Instant::now() < limit {
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(PtyEvent::Data(d)) => {
                     n += d.iter().filter(|b| **b == b'x').count();
-                    tail = String::from_utf8_lossy(&d).into_owned();
+                    tail.extend_from_slice(&d);
+                    if tail.len() > 16 {
+                        tail.drain(..tail.len() - 16);
+                    }
                 }
                 Ok(PtyEvent::Exit(_)) => break,
                 Err(_) => {}
             }
         }
         assert_eq!(n, 4_000_000);
-        assert!(tail.contains("end"), "{tail:?}");
+        assert!(tail.ends_with(b"end\r\n"), "{tail:?}");
     }
 }

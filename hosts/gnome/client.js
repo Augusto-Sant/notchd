@@ -72,18 +72,28 @@ export class DaemonClient {
         return true;
     }
 
-    // Sends one message before returning, for a process about to go (the
-    // settings window telling the daemon it closed): an asynchronous write
-    // would be cancelled by `stop()`. False when it could not be written.
-    sendNow(msg) {
-        if (!this._out || this._queue.length > 0)
-            return this.send(msg);
+    // A closing process must not leave its last message behind an async
+    // write cancelled by stop(). Drain that stream before writing the last
+    // fact on it, so page reports and the close keep their order.
+    sendFinal(msg) {
+        let expired = false;
+        const timeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            expired = true;
+            return GLib.SOURCE_REMOVE;
+        });
+        while (this._out && this._queue.length && !expired)
+            GLib.MainContext.default().iteration(true);
+        if (!expired)
+            GLib.source_remove(timeout);
+        let sent = false;
         try {
-            this._out.write_all(new TextEncoder().encode(Protocol.encode(msg)), null);
-            return true;
-        } catch (e) {
-            return false;
-        }
+            if (this._out && !this._queue.length) {
+                this._out.write_all(new TextEncoder().encode(Protocol.encode(msg)), null);
+                sent = true;
+            }
+        } catch { /* The daemon may already have gone. */ }
+        this.stop();
+        return sent;
     }
 
     // An `ipc` request (a method of docs/ipc.md). Its id is a number, as the

@@ -1,0 +1,10 @@
+{
+ "message": "settings-page",
+ "valid": [
+  {"t":"settings-page","page":"notch/1"}
+ ],
+ "invalid": [
+  {"why":"page missing","json":{"t":"settings-page"}},
+  {"why":"page is not a string","json":{"t":"settings-page","page":3}}
+ ]
+}

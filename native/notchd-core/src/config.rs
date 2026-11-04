@@ -493,6 +493,20 @@ pub fn with_workspace(list: Option<&[Value]>, ws: Option<&Value>) -> Option<Vec<
 
 // -------------------------------------------------------------- terminals
 
+/// Module ids a terminal entry cannot take. Keep the schema's terminal
+/// catalog and the daemon's terminal loader on the same validation rule.
+pub const TERMINAL_MODULE_IDS: &[&str] = &[
+    "media",
+    "claude",
+    "codex",
+    "codex-live",
+    "local-live",
+    "timer",
+    "activities",
+    "resources",
+    "osd",
+];
+
 /// `RESERVED_KEYS`: the ids a terminal can't take, being keys the config
 /// already has.
 pub fn reserved_keys() -> Vec<String> {

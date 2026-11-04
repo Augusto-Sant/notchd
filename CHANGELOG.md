@@ -4,6 +4,20 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-04
+
+### Changed
+
+- GNOME terminals now draw directly inside the notch using the daemon grid; they no longer open a separate GTK window. Their theme colors reach the emulator in the required hex format, their configured font is honored, and composed text goes through the Shell input method. Configured terminals now have settings pages in the daemon's schema, including their command, size and font. Workspace choices in GNOME preferences include the compositor's reported workspaces.
+- GNOME notches on one edge now pack beside each other, join their outlines and share the row's depth; side notches clear occupied corners. Closed notches respect workspace and fullscreen visibility. If the preferences process exits unexpectedly, its D-Bus presence disappears and the extension releases the daemon's settings state.
+- GNOME preferences now keep page reports separate from opening the window, so a late report cannot reopen settings after a quick close.
+- GNOME expanded views scroll when their content is taller than the screen, with a scrollbar and mouse wheel support.
+
+### Fixed
+
+- GNOME 51 terminals now send Enter through the input method's activation signal when its key event is consumed, while GNOME 46 keeps its existing key handling.
+- GNOME expanded notches now shrink to the monitor's available width at fractional or high display scales, keeping the terminal inside the card on narrow logical screens.
+
 ## [0.6.0] — 2026-11-03
 
 ### Changed
