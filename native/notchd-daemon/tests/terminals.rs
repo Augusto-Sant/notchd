@@ -487,6 +487,32 @@ fn a_terminal_of_your_own_runs_its_command_in_its_folder_and_has_a_pty() {
 }
 
 #[test]
+fn a_hosted_terminal_inherits_its_daemon_cli_context() {
+    let r = rig(
+        "terminal-context",
+        |r| {
+            let output = r.scratch.join("terminal-env");
+            json!({"modules": ["mine"],
+            "terminals": {"mine": {"command": format!(
+                "printf '%s\\n' \"$NOTCHD_INSTANCE\" \"$NOTCHD_SOCKET\" \"$NOTCHD_BIN\" \"$NOTCHD_TERMINAL_ID\" > {}; echo ready; exec cat",
+                output.display()
+            )}}})
+        },
+        true,
+    );
+    let _ui = r.ui();
+    let mut view = Client::connect(&r.socket(), "term:mine", 80, 24).unwrap();
+    read_until(&mut view, String::new(), |text| text.contains("ready"));
+    let output = std::fs::read_to_string(r.scratch.join("terminal-env")).unwrap();
+    let lines: Vec<_> = output.lines().collect();
+    assert_eq!(lines.len(), 4, "{output:?}");
+    assert_eq!(lines[0], "default");
+    assert_eq!(lines[1], r.socket().to_string_lossy());
+    assert_eq!(lines[2], std::env::current_exe().unwrap().to_string_lossy());
+    assert_eq!(lines[3], "mine");
+}
+
+#[test]
 fn a_surface_that_is_not_a_loaded_terminal_is_refused() {
     let r = rig("refuse", claude_cfg, true);
     let mut c = Client::connect(&r.socket(), "term:nope", 80, 24).unwrap();

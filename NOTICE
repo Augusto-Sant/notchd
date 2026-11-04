@@ -15,3 +15,8 @@ Third-party assets
 core/modules/claude.svg is the Claude logo, a trademark of Anthropic, shown
 to identify the claude module's integration with Claude Code. The file is
 the one Omarchy ships (shell/plugins/agents/assets/claude.svg).
+
+docs/examples/modules/herdr/herdr.svg adapts Herdr's ram logo from
+https://github.com/herdrdev/herdr/blob/v0.9.1/assets/logo.svg, distributed
+under the Apache License 2.0 (see docs/examples/modules/herdr/LICENSE-HERDR).
+It identifies the optional Herdr user module.

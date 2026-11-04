@@ -4,6 +4,11 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+
+- A [Herdr user module showcase](docs/examples/modules/herdr/) that puts agent metrics above a Herdr terminal and peeks on blocked or completed work. It installs from the example folder without a daemon rebuild.
+- A reusable notchd agent skill teaches coding agents to inspect and control a running daemon through `notchd ipc`. `notchd --skill` prints the copy bundled with the binary, and programs in notchd terminals inherit the exact binary, socket and instance to reach their own daemon.
+
 ## [0.7.1] — 2026-11-04
 
 ### Fixed
