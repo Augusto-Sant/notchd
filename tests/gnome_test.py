@@ -360,6 +360,29 @@ class NotchOnGnome(ShellCase):
         self.assertAlmostEqual(c["x"] + c["w"] / 2, m["x"] + m["w"] / 2, delta=1)
         self.assertTrue(c["hasContent"])
 
+    # Bug: the notch was Adwaita's #1e1e1e (or #fafafa with the light
+    # scheme) under a top bar of another color: it read as a patch stuck to
+    # the bar. It takes the bar's colors now, a Shell theme's too.
+    def test_the_notch_takes_the_top_bars_colors(self):
+        sh = self.shell
+
+        def same(s):
+            bar = s["panelBackground"]
+            return bar and bar[3] >= 128 and s["theme"]["background"] == "rgba(%d,%d,%d,1)" % tuple(bar[:3])
+        s = sh.until(same, 3, "the notch's background to be the bar's")
+        self.assertIsNotNone(s["theme"]["panel"], "no colors read from the bar")
+        css = os.path.join(sh.scratch, "bar.css")
+        with open(css, "w") as f:
+            f.write("#panel { background-color: #2a3b4c; } #panel .panel-button { color: #d0e0f0; }")
+        try:
+            sh.call("PanelStyle", (css,), "(s)")
+            s = sh.until(lambda x: x["theme"]["background"] == "rgba(42,59,76,1)", 3,
+                         "the notch to follow a Shell theme's bar")
+            self.assertEqual(s["theme"]["foreground"], "rgba(208,224,240,1)")
+        finally:
+            sh.call("PanelStyle", ("",), "(s)")
+        sh.until(same, 3, "the notch back on the default bar's background")
+
     def test_reserve_keeps_windows_below_the_compact_notch(self):
         s = self.shell.until(lambda x: x["struts"], 3, "a strut")
         c = main_copy(s)

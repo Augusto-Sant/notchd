@@ -167,6 +167,16 @@ test('cornerInput: the full item for the asked kind of edge, else only where it 
   assert.deepEqual(plain(Position.cornerInput(top, true)), { screen: 'A', edge: 'top' });
 });
 
+test('sideInput: the key for the asked kind of edge, else null, without reading it', () => {
+  const read = [];
+  const win = (edge) => ({ edge, get packItem() { read.push(edge); return { edge }; } });
+  assert.deepEqual(plain(Position.sideInput(win('top'), false, 'packItem')), { edge: 'top' });
+  assert.deepEqual(plain(Position.sideInput(win('right'), true, 'packItem')), { edge: 'right' });
+  assert.equal(Position.sideInput(win('left'), false, 'packItem'), null);
+  assert.equal(Position.sideInput(win('bottom'), true, 'packItem'), null);
+  assert.deepEqual(read, ['top', 'right']);
+});
+
 test('configValue keeps the home screen, even at top-center', () => {
   assert.deepEqual(plain(Position.configValue({ edge: 'top', offset: 0.5, screen: 'eDP-1' })), { screen: 'eDP-1' });
   assert.deepEqual(plain(Position.configValue({ edge: 'left', screen: 'DP-1' })), { edge: 'left', screen: 'DP-1' });

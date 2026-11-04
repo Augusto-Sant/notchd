@@ -210,6 +210,7 @@ ShellRoot {
       { name: "a module sets the width of its expanded view", run: root.expandedWidthFromModule },
       { name: "a notch in the list dropped on the top edge stays there", run: root.dropOnTopStays },
       { name: "corners: a side notch's place never feeds back into the insets it takes", run: root.cornersNoLoop },
+      { name: "layout: a notch added on the top edge beside a side one packs without a loop", run: root.layoutAddNoLoop },
       { name: "codex: on a UI that draws no terminal, ask says so and the notch still opens", run: root.codexMissing },
       { name: "codex: runs in the notch, keeps running closed, and its title says when it works", run: root.codexRuns },
       { name: "claude: runs in the notch, keeps running closed, and its title says when it works", run: root.claudeRuns },
@@ -2718,6 +2719,102 @@ ShellRoot {
     root.check(!!inset && inset.start > 0, "the side notch takes no inset from the top one: " + JSON.stringify(inset))
     root.check(cornerSide.cornerItem.atStart === false, "the side notch's place ignored its inset")
     cornerSurface.windows = []
+    root.done()
+  }
+
+  // Bug: a notch added on the top edge of a screen with a side notch there
+  // (and an open one in the middle) drew as an empty shoulder until the
+  // shell restarted, with ~840 binding-loop warnings. NotchSurface packed
+  // every edge in one binding: the side notch's packItem comes from its
+  // place, which starts below the corner's top notch (cornerInsets), whose
+  // cornerItem comes from how that one was packed. NotchLayout packs the
+  // top and bottom edges apart from the sides. Plain objects with the
+  // dependencies of NotchWindow's (PanelWindow can't load offscreen), made
+  // as Variants makes the windows; qml-test.sh fails on the warning a loop
+  // logs.
+  NotchLayout {
+    id: layoutUnderTest
+  }
+  Component {
+    id: layoutWindow
+    // NotchWindow's chain, its objects included: each is a new value every
+    // time it runs, so a change goes all the way round.
+    QtObject {
+      id: w
+      property var copy: null
+      property string edge: "top"
+      property real offset: 0.5
+      property real size: 200
+      property bool open: false
+      readonly property string windowScreenName: "A"
+      readonly property bool vertical: w.edge === "left" || w.edge === "right"
+      readonly property var packed: layoutUnderTest.packOf(w.copy)
+      readonly property real packShift: w.packed ? w.packed.shift : 0
+      readonly property bool covered: (!!w.packed && w.packed.covered) || layoutUnderTest.coveredByStandalone(w.copy)
+      readonly property real rowDepth: layoutUnderTest.rowDepthOf(w.copy)
+      readonly property var cornerInset: layoutUnderTest.cornerInsetOf(w.copy)
+      readonly property var cornerSpan: layoutUnderTest.cornerSpanOf(w.copy)
+      // A side notch's stretch starts below the corner's top notch.
+      readonly property var insets: ({ top: 0, bottom: 0, left: 0, right: 0 })
+      readonly property var edgeInsets: {
+        var i = w.insets
+        if (!w.vertical) return i
+        return { top: i.top + w.cornerInset.start, bottom: i.bottom + w.cornerInset.end, left: i.left, right: i.right }
+      }
+      readonly property var stretch: Position.stretch({ edge: w.edge, width: 2000, height: 1000, insets: w.edgeInsets })
+      readonly property real wishCenter: w.stretch.start + w.offset * (w.stretch.end - w.stretch.start)
+      readonly property real shownOffset: (w.wishCenter + w.packShift - w.stretch.start) / (w.stretch.end - w.stretch.start)
+      readonly property real closedDepth: w.vertical ? 24 : 30
+      readonly property real depth: Math.max(w.closedDepth, w.rowDepth) + (w.open ? 400 : 0)
+      readonly property var spot: Position.place({
+        edge: w.edge, offset: w.shownOffset, width: 2000, height: 1000,
+        cardWidth: w.vertical ? w.depth : w.size, cardHeight: w.vertical ? w.size : w.depth,
+        insets: w.edgeInsets, snap: 30
+      })
+      readonly property real center: w.vertical ? w.spot.y + w.size / 2 : w.spot.x + w.size / 2
+      readonly property var packItem: ({
+        group: "A|" + w.edge, center: w.wishCenter, size: w.size,
+        start: w.stretch.start, end: w.stretch.end, snap: 30, open: w.open, skip: false
+      })
+      readonly property var coverItem: ({
+        group: "A|" + w.edge, start: w.wishCenter + w.packShift - w.size / 2,
+        end: w.wishCenter + w.packShift + w.size / 2, cover: false, shown: false
+      })
+      readonly property var cornerItem: ({
+        screen: "A", edge: w.edge, atStart: !!w.spot.atStart, atEnd: !!w.spot.atEnd,
+        depth: w.depth, shown: !w.covered
+      })
+    }
+  }
+  function layoutAddNoLoop() {
+    var specs = {
+      open: { copy: { id: "open" }, edge: "top", offset: 0.5, size: 760, open: true },
+      side: { copy: { id: "side" }, edge: "left", offset: 0.027, size: 120 },
+      added: { copy: { id: "added" }, edge: "top", offset: 0.05, size: 220 }
+    }
+    // Made one after another as the copies come, in every order: which
+    // binding a loop shows in depends on which one runs first.
+    var orders = [["side", "open", "added"], ["side", "added", "open"], ["open", "side", "added"],
+                  ["open", "added", "side"], ["added", "side", "open"], ["added", "open", "side"]]
+    orders.forEach(function(order) {
+      var made = [], by = {}
+      order.forEach(function(name) {
+        var w = layoutWindow.createObject(root, specs[name])
+        made.push(w)
+        by[name] = w
+        layoutUnderTest.windows = made.slice()
+      })
+      var at = " (" + order.join(", ") + ")"
+      var added = by.added, side = by.side
+      root.check(!!added.packed, "the added notch has no packing" + at)
+      root.check(!added.covered, "the added notch is covered, far from the open one" + at)
+      root.check(added.cornerItem.atStart, "the added notch is not in the corner" + at)
+      root.check(Math.abs(added.center - 110) < 1, "the added notch sits at " + added.center + at)
+      root.check(side.cornerInset.start === 29, "the side notch starts " + side.cornerInset.start + " down, not below the added one" + at)
+      root.check(!side.covered && !by.open.covered, "a notch on another edge is covered" + at)
+      layoutUnderTest.windows = []
+      made.forEach(function(w) { w.destroy() })
+    })
     root.done()
   }
 
