@@ -37,6 +37,10 @@ pub fn route(store: &mut Store, msg: &ToDaemon, now: u64) -> Vec<ToUi> {
         ToDaemon::Key(k) => store.key(&k.key, &k.mods, now),
         ToDaemon::Tab(t) => store.tab(&t.notch, &t.screen, &t.module, now),
         ToDaemon::Settings(s) => store.settings(s.open, s.page.clone()),
+        ToDaemon::SettingsPage(s) => {
+            let open = store.settings_open;
+            store.settings(open, Some(s.page.clone()));
+        }
         ToDaemon::Catalog(c) => {
             store.set_ui_catalog(c.modules.clone(), c.default_modules.clone());
             store.set_core_dir(c.core_dir.clone());
@@ -315,6 +319,16 @@ mod tests {
         assert!(!s.settings_open);
         let json = result(route(&mut s, &ipc_msg("state", &[]), 0)).unwrap();
         assert!(serde_json::from_str::<Value>(&json).unwrap()["notches"].is_array());
+    }
+
+    #[test]
+    fn a_late_page_report_cannot_reopen_settings() {
+        let mut s = store();
+        let page =
+            notchd_proto::parse::<ToDaemon>(r#"{"t":"settings-page","page":"notch/1"}"#).unwrap();
+        route(&mut s, &page, 0);
+        assert!(!s.settings_open);
+        assert_eq!(s.settings_page, "notch/1");
     }
 
     #[test]

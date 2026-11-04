@@ -1139,6 +1139,28 @@ fn showing_a_notchs_page_picks_the_notch_the_schema_edits() {
     assert!(schema.pages.iter().any(|p| p.id == "notch/1"));
 }
 
+#[test]
+fn config_terminal_has_a_settings_page_in_the_daemons_schema() {
+    let s = store(json!({
+        "modules": ["btop"],
+        "terminals": {"btop": {"title": "System", "command": "btop"}},
+        "btop": {"font": "Mono"},
+    }));
+    let schema = s.compute_schema();
+    assert!(schema.pages.iter().any(|p| p.id == "modules/btop"));
+    let field = |key| schema.fields.iter().find(|f| f.key.as_deref() == Some(key));
+    assert!(field("terminals.btop.title").is_some());
+    assert!(field("terminals.btop.command").is_some());
+    assert_eq!(field("btop.font").unwrap().value, json!("Mono"));
+    assert!(
+        schema
+            .modules
+            .unwrap()
+            .iter()
+            .any(|m| { m["moduleId"] == "btop" && m["terminal"] == true })
+    );
+}
+
 // ---------------------------------------------------------------- 3.2: the
 // inputs the QML used to decide on its own.
 

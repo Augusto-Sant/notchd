@@ -119,6 +119,9 @@ env -u DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE -u DBUS_SESSION_BUS_ADDRESS \
     gsettings set org.gnome.shell enabled-extensions "[\"$0\"]"
     gsettings set org.gnome.shell disable-user-extensions false
     gsettings set org.gnome.shell welcome-dialog-last-shown-version "999"
+    if [ -n "${NOTCHD_GNOME_FRACTIONAL:-}" ]; then
+      gsettings set org.gnome.mutter experimental-features "[\"scale-monitor-framebuffer\"]"
+    fi
     if [ -n "${NOTCHD_GNOME_TEST:-}" ]; then
       gsettings set org.gnome.desktop.notifications show-banners false
       gsettings set org.gnome.desktop.interface enable-hot-corners false

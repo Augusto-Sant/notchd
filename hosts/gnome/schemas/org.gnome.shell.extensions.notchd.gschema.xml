@@ -9,5 +9,10 @@
       <summary>Navigate notches</summary>
       <description>Starts or leaves notch navigation, as `notchd ipc navigate` does.</description>
     </key>
+    <key name="daemon-preferences-request" type="u">
+      <default>0</default>
+      <summary>Pending preferences launch</summary>
+      <description>Time of a preferences window requested by the notchd daemon.</description>
+    </key>
   </schema>
 </schemalist>

@@ -14,7 +14,7 @@ notchd runs inside a *host*: the desktop-specific wiring around the generic UI c
 
 - **Omarchy**: the repository is an Omarchy shell plugin (`eryk.notchd`), with volume/brightness OSD and a button in the bar for the notches and the settings. See [hosts/omarchy](hosts/omarchy/README.md).
 - **Any other Wayland compositor with layer-shell**: the repository is also a standalone Quickshell config (`qs -p <checkout>`). See [docs/standalone.md](docs/standalone.md).
-- **GNOME** (Ubuntu's and Fedora's default desktop, GNOME 46 and later): a GNOME Shell extension, another UI for the same daemon (`hosts/gnome/`). From a checkout, `sh scripts/install.sh --extension` installs the daemon (a verified release and a systemd user service) and the extension, then log out and back in; terminals in the notch need nothing more than the GTK 4 a GNOME desktop has. On other distributions the daemon alone installs with `scripts/install.sh` (see [docs/hosts.md](docs/hosts.md#installing-the-daemon-on-other-distributions)). The optional voice components install with `pacman` and the AUR, so they are Arch-only for now.
+- **GNOME** (Ubuntu's and Fedora's default desktop, GNOME 46 and later): a GNOME Shell extension, another UI for the same daemon (`hosts/gnome/`). From a checkout, `sh scripts/install.sh --extension` installs the daemon (a verified release and a systemd user service) and the extension, then log out and back in; terminals render directly in the notch with GNOME Shell. On other distributions the daemon alone installs with `scripts/install.sh` (see [docs/hosts.md](docs/hosts.md#installing-the-daemon-on-other-distributions)). The optional voice components install with `pacman` and the AUR, so they are Arch-only for now.
 
 ## States
 
@@ -25,7 +25,7 @@ notchd runs inside a *host*: the desktop-specific wiring around the generic UI c
 | peek | a module calls `requestPeek()` | that module's `peek` view, for a few seconds |
 | expanded | hover (click pins it, click outside unpins) | the `expanded` view of one active module at a time, with a tab for each; with `tabs: false`, all of them, one above the other |
 
-Over a fullscreen app only peeks show.
+Over a fullscreen app the closed notch hides; peeks and an already open notch still show.
 
 The open notch is as large as what it shows, up to the screen less a margin; past that, the modules scroll: the mouse wheel (over a terminal it scrolls the terminal's own history) and a scrollbar beside them. A notch with several modules shows one at a time, with a tab for each; opening the notch from a module (a shortcut, `claude "ask ..."`) picks its tab, and closed it shows every active module side by side. An agent that finishes while you look at another tab gets a dot on its tab and on the closed notch, and its peek shows as the notch closes. `tabs: false` puts them back one above the other, the closed notch showing the highest-priority one.
 
@@ -37,7 +37,7 @@ The drop is stored as `position`, which you can also set by hand: `{"edge": "lef
 
 The notch covers the windows under it. `reserveSpace: true` keeps windows clear of it instead: the compositor reserves a strip as deep as the closed notch, along the whole of its edge on its home monitor, or on every monitor it may hang on while it follows focus (layer-shell can only reserve whole edges). At rest that is the thin lip; while a module is active, a compact notch's height. It grows at once and shrinks as soon as the notch has collapsed, so windows move when music starts or stops or an activity comes and goes, not for peeks: volume, brightness and the expanded notch open over windows.
 
-`workspaces` limits where the closed notch shows, e.g. `[1, 2, 3]` (ids or names). When the focused screen shows another workspace, the closed notch moves to a screen that shows one of them, or hides if none does. Peeks and the open notch still show, whatever the workspace, so the volume OSD never goes missing. Reserved space follows too: a screen showing a workspace without the notch reserves nothing, so switching a screen between the two moves its windows. It needs a compositor adapter that knows workspaces (Hyprland today).
+`workspaces` limits where the closed notch shows, e.g. `[1, 2, 3]` (ids or names). When the focused screen shows another workspace, the closed notch moves to a screen that shows one of them, or hides if none does. Peeks and the open notch still show, whatever the workspace, so the volume OSD never goes missing. Reserved space follows too: a screen showing a workspace without the notch reserves nothing, so switching a screen between the two moves its windows. It needs a compositor adapter that knows workspaces (Hyprland and GNOME).
 
 ## Modules
 

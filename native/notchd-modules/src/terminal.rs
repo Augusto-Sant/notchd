@@ -23,23 +23,10 @@ fn title_of(raw: &str) -> AgentTitle {
     }
 }
 
-/// The ids a terminal can't take: the modules the daemon and the UI ship.
-const TAKEN: &[&str] = &[
-    "media",
-    "claude",
-    "codex",
-    "codex-live",
-    "local-live",
-    "timer",
-    "activities",
-    "resources",
-    "osd",
-];
-
 /// The entries of the config that make a terminal (`Config.terminals`), and
 /// why the others do not.
 pub fn entries(cfg: &Value) -> config::Terminals {
-    config::terminals(cfg, TAKEN)
+    config::terminals(cfg, config::TERMINAL_MODULE_IDS)
 }
 
 /// The ids of the terminals of the config.

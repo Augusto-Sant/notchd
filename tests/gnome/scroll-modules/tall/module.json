@@ -1,0 +1,6 @@
+{
+  "title": "Tall view",
+  "command": ["python3", "run.py"],
+  "priority": 90,
+  "expandedWidth": 320
+}

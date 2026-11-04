@@ -106,6 +106,8 @@ pub enum ToDaemon {
     Tab(Tab),
     #[serde(rename = "settings")]
     Settings(SettingsOpen),
+    #[serde(rename = "settings-page")]
+    SettingsPage(SettingsPage),
     #[serde(rename = "catalog")]
     Catalog(Catalog),
     #[serde(rename = "reserve-applied")]
@@ -141,6 +143,7 @@ impl ToDaemon {
         "event",
         "tab",
         "settings",
+        "settings-page",
         "catalog",
         "reserve-applied",
         "measure",
@@ -478,6 +481,12 @@ pub struct SettingsOpen {
     pub open: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<String>,
+}
+
+/// Updates the page shown by an existing settings window without opening it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SettingsPage {
+    pub page: String,
 }
 
 /// The modules of the host that the daemon cannot know (the Omarchy `osd`,
