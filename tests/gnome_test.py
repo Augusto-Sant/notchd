@@ -390,6 +390,31 @@ class NotchOnGnome(ShellCase):
             sh.call("PanelStyle", ("",), "(s)")
         sh.until(same, 3, "the notch back on the default bar's background")
 
+    # Bug: under Large Text the open notch kept its module's width, so the
+    # larger labels no longer fit: at factor 2 the timer's last button read
+    # "Pom…".
+    def test_the_open_notch_widens_with_the_text_scaling(self):
+        sh = self.shell
+        x, y = center(main_copy(sh.snapshot()))
+        sh.move(x, y)
+        sh.until(lambda s: main_copy(s)["mode"] == "expanded", 2)
+        sh.click()
+        s = sh.until(lambda s: grabs(s) > 0 and main_copy(s)["texts"], 2, "the pinned notch")
+        width = main_copy(s)["w"]
+        try:
+            sh.gsettings("set", "org.gnome.desktop.interface", "text-scaling-factor", "2")
+            s = sh.until(lambda s: s["theme"]["fonts"]["body"] == 24 and main_copy(s)["w"] > width
+                         and main_copy(s)["textSizes"] and all(px >= 20 for px in main_copy(s)["textSizes"]),
+                         3, "the open notch with the larger text")
+            c = main_copy(s)
+            self.assertEqual(c["ellipsized"], [], c["texts"])
+            self.assertLessEqual(c["x"] + c["w"], 1920)
+        finally:
+            sh.gsettings("reset", "org.gnome.desktop.interface", "text-scaling-factor")
+            sh.key(KEY_ESCAPE)
+        sh.until(lambda s: s["theme"]["fonts"]["body"] == 12 and main_copy(s)["mode"] == "compact", 3,
+                 "the design sizes back, closed")
+
     def test_reserve_keeps_windows_below_the_compact_notch(self):
         s = self.shell.until(lambda x: x["struts"], 3, "a strut")
         c = main_copy(s)

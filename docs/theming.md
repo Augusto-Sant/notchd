@@ -16,7 +16,7 @@
 | `spacingScale` | 1 | multiplier behind `Theme.space()` |
 | `terminalPalette` | `[]` (the terminal's own) | the 16 ANSI colors (`#rrggbb`, color 0 first) of a terminal in the notch; the Omarchy host reads its theme's `ghostty.conf` |
 
-The Omarchy host maps its `Color`/`Style`; the standalone host reads the config's `theme` object. The GNOME extension takes the top bar's colors and scales the five text sizes by `text-scaling-factor`: Settings, Accessibility, Large Text makes the notch's text bigger with the rest of the Shell's.
+The Omarchy host maps its `Color`/`Style`; the standalone host reads the config's `theme` object. The GNOME extension takes the top bar's colors and scales the five text sizes, and the open notch's width, by `text-scaling-factor`: Settings, Accessibility, Large Text makes the notch's text bigger with the rest of the Shell's.
 
 The keys below and the derived tokens are the **token set** every UI implements: the daemon never sends a color, only a token name (a view's `tone`, a canvas's token fill) and the list the UI must know (`welcome.tokens`, [architecture.md](architecture.md#handshake-and-version)). A UI for another OS maps the same tokens to its own source. The theme is not part of the protocol.
 

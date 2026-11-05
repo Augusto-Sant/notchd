@@ -11,7 +11,7 @@ All user-visible changes. The format follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 
-- GNOME: the notch's text, the terminal's included, follows the desktop's text scaling (Settings, Accessibility, Large Text, or `text-scaling-factor`), at once when it changes; it stayed at its own fixed sizes and looked smaller than the rest of the Shell. A new accent color or color scheme also reaches the module views and tabs at once; they kept the old look until the notch's state changed.
+- GNOME: the notch's text, the terminal's included, follows the desktop's text scaling (Settings, Accessibility, Large Text, or `text-scaling-factor`), at once when it changes, and the open notch widens with it so the labels keep their room; it stayed at its own fixed sizes and looked smaller than the rest of the Shell. A new accent color or color scheme also reaches the module views and tabs at once; they kept the old look until the notch's state changed.
 
 ## [0.7.1] — 2026-11-04
 

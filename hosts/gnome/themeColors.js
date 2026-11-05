@@ -63,13 +63,24 @@ export function tones(panel, dark, accent) {
     };
 }
 
-// core/Theme.qml's five text sizes, in pixels, times the desktop's
-// `text-scaling-factor` (Settings, Accessibility, Large Text), so the notch's
-// text grows with the rest of the Shell's. A factor that is not a positive
-// number is 1.
+// The desktop's `text-scaling-factor` (Settings, Accessibility, Large
+// Text) as a multiplier: a factor that is not a positive number is 1.
+export function textScale(factor) {
+    return Number.isFinite(factor) && factor > 0 ? factor : 1;
+}
+
+// core/Theme.qml's five text sizes, in pixels, times the text scale, so the
+// notch's text grows with the rest of the Shell's.
 export const FONTS = {caption: 10, bodySmall: 11, body: 12, heading: 16, display: 24};
 
 export function fonts(factor) {
-    const k = Number.isFinite(factor) && factor > 0 ? factor : 1;
+    const k = textScale(factor);
     return Object.fromEntries(Object.entries(FONTS).map(([name, px]) => [name, Math.round(px * k)]));
+}
+
+// The open notch's width, in design pixels, for a module's `expandedWidth`:
+// a module laid out for its text at the design size gets the room its
+// larger text takes, so a row of buttons keeps its labels.
+export function expandedWidth(width, factor) {
+    return Math.round(width * Math.max(1, textScale(factor)));
 }

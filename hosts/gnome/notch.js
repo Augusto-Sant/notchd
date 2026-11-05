@@ -15,6 +15,7 @@ import * as Outline from './lib/Outline.js';
 import * as Position from './lib/Position.js';
 import * as Protocol from './lib/Protocol.js';
 import {placeCard} from './layout.js';
+import {expandedWidth} from './themeColors.js';
 import {render} from './view.js';
 
 // The card's motion, as core/NotchCard.qml: the length (x and width) springs
@@ -939,11 +940,12 @@ class NotchCopy extends St.Widget {
     }
 
     // The open notch is as wide as the widest module it shows asks for
-    // (`module.expandedWidth`, design pixels).
+    // (`module.expandedWidth`, design pixels), wider by the text scale
+    // (Large Text) so the larger text keeps its room.
     _expandedWidth() {
         const modules = this._host.store().modules;
         const widths = (this._copy?.shown ?? []).map(id => Number(modules[id]?.expandedWidth) || 0);
-        return Math.max(CARD.expandedWidth, ...widths);
+        return expandedWidth(Math.max(CARD.expandedWidth, ...widths), this.theme.textScale);
     }
 
     _pads() {
@@ -1215,6 +1217,9 @@ class NotchCopy extends St.Widget {
             texts: this._viewActors(a => a instanceof St.Label).map(a => a.text),
             // Each text's size in pixels, as its style sets it.
             textSizes: this._viewActors(a => a instanceof St.Label).map(a => Number(/font-size: ([\d.]+)px/.exec(a.style ?? '')?.[1] ?? 0)),
+            // The texts cut short with an ellipsis for want of room.
+            ellipsized: this._viewActors(a => a instanceof St.Label)
+                .filter(a => a.clutter_text.get_layout().is_ellipsized()).map(a => a.text),
             canvases: this._viewActors(a => a._canvas).map(a => ({w: a.width, h: a.height, cmds: a._canvas.cmds.length})),
             images: this._viewActors(a => a._picture).map(a => ({...a._picture, ...this._boxOf(a)})),
             tabs: (this._tabButtons ?? []).filter(({button}) => button.mapped).map(({tab, button}) => {

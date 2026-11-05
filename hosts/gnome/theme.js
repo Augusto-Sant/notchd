@@ -13,7 +13,7 @@ import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import {fonts, opaque, tones} from './themeColors.js';
+import {fonts, opaque, textScale, tones} from './themeColors.js';
 
 const ACCENTS = {
     blue: '#3584e4', teal: '#2190a4', green: '#3a944a', yellow: '#c88800',
@@ -84,7 +84,9 @@ export class Theme {
         // St lengths set from code are not scaled by the UI scale factor
         // (CSS lengths are), so design pixels go through space().
         this.scale = this._themeContext.scale_factor;
-        this.fonts = fonts(this._settings.get_double('text-scaling-factor'));
+        const factor = this._settings.get_double('text-scaling-factor');
+        this.fonts = fonts(factor);
+        this.textScale = textScale(factor);
         // core/Theme.qml's radii, in design pixels (CSS lengths).
         this.radiusSmall = 6;
         this.radius = 10;
